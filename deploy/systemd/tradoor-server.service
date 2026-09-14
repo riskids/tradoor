@@ -1,0 +1,23 @@
+[Unit]
+Description=tradoor server
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=tradoor
+Group=tradoor
+WorkingDirectory=/var/www/tradoor
+EnvironmentFile=/var/www/tradoor/.env
+Environment=TRADOOR_DATA_DIR=/var/www/tradoor/data
+ExecStart=/var/www/tradoor/bin/tradoor-server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/www/tradoor
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,159 @@
+# Every push and pull request: Rust tests, the WASM engine, and the web app's
+# type check, build and size budget. A push to main then ships: the image goes to
+# GitHub Container Registry tagged with the commit, and the server switches to it.
+name: CI and deploy
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a deploy halfway; superseded branch runs can go.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN: "0.2.128"
+  BINARYEN: version_132
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "2.9.6"
+
+      - name: Install wasm-bindgen and wasm-opt
+        run: |
+          curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WASM_BINDGEN}/wasm-bindgen-${WASM_BINDGEN}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin --strip-components=1 "wasm-bindgen-${WASM_BINDGEN}-x86_64-unknown-linux-musl/wasm-bindgen"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN}/binaryen-${BINARYEN}-x86_64-linux.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin --strip-components=2 "binaryen-${BINARYEN}/bin/wasm-opt"
+
+      - name: Rust tests
+        run: cargo test --workspace --exclude tradoor-wasm --locked
+
+      - name: Chart engine (WASM)
+        run: ./scripts/build-wasm.sh
+
+      - name: Web dependencies
+        working-directory: web
+        run: deno install
+
+      - name: Web type check
+        working-directory: web
+        run: deno task check
+
+      - name: Web build
+        working-directory: web
+        run: deno task build
+
+      - name: Bundle size budget
+        working-directory: web
+        run: deno task size
+
+  deploy:
+    name: Deploy
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Image name
+        # Registry paths must be lowercase.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SSH key
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Switch the server to this commit
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          target="$VPS_USER@$VPS_HOST"
+          opts=(-i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+
+          scp "${opts[@]}" -P "$VPS_PORT" deploy/compose.yml "$target:/var/www/tradoor/compose.yml"
+
+          # The job's token can pull only while the job runs, so no lasting
+          # registry credential is left on the server.
+          printf '%s' "$GHCR_TOKEN" | ssh "${opts[@]}" -p "$VPS_PORT" "$target" \
+            "docker login ghcr.io -u '$GHCR_USER' --password-stdin >/dev/null"
+
+          ssh "${opts[@]}" -p "$VPS_PORT" "$target" "IMAGE='$IMAGE' SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /var/www/tradoor
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+          # Pin the exact image, so a rollback is one line in .env.
+          sed -i '/^TRADOOR_IMAGE=/d' .env
+          echo "TRADOOR_IMAGE=$IMAGE:$SHA" >> .env
+
+          docker compose pull server
+          docker compose up -d --remove-orphans
+
+          port="$(sed -n 's/^TRADOOR_PORT=//p' .env)"
+          for _ in $(seq 60); do
+            if curl -fsS "http://127.0.0.1:${port:-8080}/api/health" >/dev/null; then
+              echo "healthy on $IMAGE:$SHA"
+              # Keep this image and the one before it; drop older tradoor images.
+              docker images "$IMAGE" --format '{{.Repository}}:{{.Tag}}' \
+                | grep -v -e ":$SHA\$" -e ':latest$' | tail -n +2 | xargs -r docker rmi >/dev/null || true
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --tail=80 server
+          exit 1
+          REMOTE

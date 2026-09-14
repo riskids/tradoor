@@ -1,0 +1,393 @@
+/**
+ * Candle history for one market at one interval, shared by every chart that
+ * reads it.
+ *
+ * Stored partitions come first: immutable files under /data that the browser
+ * caches for a year. The exchange's REST API then fills whatever is newer than
+ * the last stored period — and everything, for a market nobody archived. Only
+ * closed bars are held; the forming one comes from the stream.
+ */
+import { decode_partition } from '../wasm/pkg/tradoor_wasm.js';
+import { parseMarket, type MarketRef } from '../lib/markets';
+
+export interface Cols {
+  time: Float64Array;
+  open: Float64Array;
+  high: Float64Array;
+  low: Float64Array;
+  close: Float64Array;
+  volume: Float64Array;
+}
+
+const KEYS = ['time', 'open', 'high', 'low', 'close', 'volume'] as const;
+
+export function emptyCols(): Cols {
+  const e = () => new Float64Array(0);
+  return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e() };
+}
+
+export function concatCols(parts: readonly Cols[]): Cols {
+  if (parts.length === 1) return parts[0]!;
+  const n = parts.reduce((sum, p) => sum + p.time.length, 0);
+  const out = emptyCols();
+  for (const key of KEYS) {
+    const column = new Float64Array(n);
+    let offset = 0;
+    for (const p of parts) {
+      column.set(p[key], offset);
+      offset += p[key].length;
+    }
+    out[key] = column;
+  }
+  return out;
+}
+
+export function sliceCols(c: Cols, from: number, to: number = c.time.length): Cols {
+  const out = emptyCols();
+  for (const key of KEYS) out[key] = c[key].subarray(from, to);
+  return out;
+}
+
+/** First index whose time is at or after `t`. */
+export function lowerBound(times: Float64Array, t: number): number {
+  let lo = 0;
+  let hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (times[mid]! < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Older bars followed by newer ones; where they overlap the newer copy wins. */
+export function joinCols(older: Cols, newer: Cols): Cols {
+  if (newer.time.length === 0) return older;
+  if (older.time.length === 0) return newer;
+  return concatCols([sliceCols(older, 0, lowerBound(older.time, newer.time[0]!)), newer]);
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+const FIXED: Record<string, number> = {
+  '1m': MINUTE, '5m': 5 * MINUTE, '15m': 15 * MINUTE, '30m': 30 * MINUTE,
+  '1h': HOUR, '2h': 2 * HOUR, '4h': 4 * HOUR, '6h': 6 * HOUR, '12h': 12 * HOUR,
+  '1d': DAY, '1w': 7 * DAY,
+};
+
+/** When the bar that opened at `open` stops trading. Months read the calendar. */
+export function intervalEnd(interval: string, open: number): number {
+  const ms = FIXED[interval];
+  if (ms !== undefined) return open + ms;
+  const d = new Date(open);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+}
+
+const intervalMs = (interval: string): number => FIXED[interval] ?? 30 * DAY;
+
+// ---------------------------------------------------------------- exchange REST
+
+const BINANCE_SPOT = ['https://api.binance.com', 'https://data-api.binance.vision'];
+let binanceSpotHost = 0;
+
+const BYBIT_INTERVAL: Record<string, string> = {
+  '1m': '1', '5m': '5', '15m': '15', '30m': '30',
+  '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
+  '1d': 'D', '1w': 'W', '1M': 'M',
+};
+
+const pageLimit = (ref: MarketRef): number => (ref.venue === 'binance-perp' ? 1500 : 1000);
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function getJson(url: string): Promise<unknown> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(url);
+    if (res.ok) return res.json();
+    const retryable = res.status === 429 || res.status === 418 || res.status >= 500;
+    if (!retryable || attempt >= 3) throw new Error(`${new URL(url).host} answered ${res.status}`);
+    await sleep(1000 * 2 ** attempt);
+  }
+}
+
+/** api.binance.com is unreachable from some networks; its market-data mirror is not. */
+async function binanceSpot(query: string): Promise<unknown> {
+  for (let i = 0; ; i += 1) {
+    const index = (binanceSpotHost + i) % BINANCE_SPOT.length;
+    try {
+      const body = await getJson(BINANCE_SPOT[index]! + query);
+      binanceSpotHost = index;
+      return body;
+    } catch (e) {
+      if (!(e instanceof TypeError) || i >= BINANCE_SPOT.length - 1) throw e;
+    }
+  }
+}
+
+interface Page {
+  cols: Cols;
+  /** Rows the exchange sent, before the forming bar was dropped. */
+  raw: number;
+}
+
+/** Klines opening inside the range, oldest first, closed bars only. */
+async function klines(ref: MarketRef, interval: string, range: { start?: number; end?: number }): Promise<Page> {
+  const limit = pageLimit(ref);
+  let rows: number[][];
+  if (ref.venue.startsWith('binance')) {
+    const path = ref.venue === 'binance-perp' ? '/fapi/v1/klines' : '/api/v3/klines';
+    let query = `${path}?symbol=${ref.symbol}&interval=${interval}&limit=${limit}`;
+    if (range.start !== undefined) query += `&startTime=${range.start}`;
+    if (range.end !== undefined) query += `&endTime=${range.end}`;
+    const body = ref.venue === 'binance-perp' ? await getJson(`https://fapi.binance.com${query}`) : await binanceSpot(query);
+    if (!Array.isArray(body)) throw new Error('Binance sent an unexpected kline response');
+    rows = (body as unknown[][]).map((r) => [Number(r[0]), Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5])]);
+  } else {
+    const category = ref.venue === 'bybit-perp' ? 'linear' : 'spot';
+    let url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${ref.symbol}&interval=${BYBIT_INTERVAL[interval] ?? interval}&limit=${limit}`;
+    if (range.start !== undefined) url += `&start=${range.start}`;
+    if (range.end !== undefined) url += `&end=${range.end}`;
+    const body = (await getJson(url)) as { retCode?: number; retMsg?: string; result?: { list?: string[][] } };
+    if (body.retCode !== 0) throw new Error(body.retMsg || 'Bybit refused the kline request');
+    // Newest first on Bybit.
+    rows = (body.result?.list ?? []).map((r) => r.slice(0, 6).map(Number)).reverse();
+  }
+  const now = Date.now();
+  const closed = rows.filter((r) => Number.isFinite(r[4]) && intervalEnd(interval, r[0]!) <= now);
+  const cols = emptyCols();
+  for (const [i, key] of KEYS.entries()) cols[key] = Float64Array.from(closed, (r) => r[i]!);
+  return { cols, raw: rows.length };
+}
+
+// ---------------------------------------------------------------- stored partitions
+
+interface PartitionInfo {
+  period: string;
+  rows: number;
+  firstOpen: number;
+  lastOpen: number;
+}
+
+interface Manifest {
+  market: string;
+  updatedAt: number;
+  bases: Record<string, PartitionInfo[] | undefined>;
+}
+
+/** A manifest changes whenever the recorder writes a period; re-read it now and then. */
+const MANIFEST_TTL_MS = 10 * MINUTE;
+const manifests = new Map<string, { at: number; value: Promise<Manifest | null> }>();
+
+function manifest(ref: MarketRef): Promise<Manifest | null> {
+  const key = `${ref.venue}/${ref.symbol}`;
+  const hit = manifests.get(key);
+  if (hit && Date.now() - hit.at < MANIFEST_TTL_MS) return hit.value;
+  // Anything but a manifest — a 404, a proxy error, an HTML fallback page —
+  // means the market is not archived here, not that the chart is broken.
+  const value = fetch(`/data/${key}/manifest.json`, { cache: 'no-cache' })
+    .then((r) => (r.ok ? (r.json() as Promise<Manifest>) : null))
+    .catch(() => null);
+  manifests.set(key, { at: Date.now(), value });
+  return value;
+}
+
+async function fetchPartition(ref: MarketRef, base: string, period: string): Promise<Cols> {
+  const res = await fetch(`/data/${ref.venue}/${ref.symbol}/${base}/${period}.tdc.gz`);
+  if (!res.ok) throw new Error(`history file ${base}/${period} answered ${res.status}`);
+  let bytes = new Uint8Array(await res.arrayBuffer());
+  // Still gzip unless a server in between set Content-Encoding and the browser inflated it.
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    const inflated = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    bytes = new Uint8Array(await new Response(inflated).arrayBuffer());
+  }
+  return decode_partition(bytes) as unknown as Cols;
+}
+
+/** Oldest first, skipping any file that overlaps one before it. */
+function disjoint(list: readonly PartitionInfo[]): PartitionInfo[] {
+  const out: PartitionInfo[] = [];
+  for (const p of [...list].sort((a, b) => a.firstOpen - b.firstOpen)) {
+    if (out.length === 0 || p.firstOpen > out[out.length - 1]!.lastOpen) out.push(p);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- series
+
+export type SeriesSource = 'archive' | 'exchange';
+
+/** Base bars fetched per scroll past the oldest one held. */
+const OLDER_BARS = 5_000;
+const MAX_TAIL_PAGES = 12;
+const TAIL_THROTTLE_MS = 30_000;
+/** A series nobody reads is dropped after this long — a deep 1m history is large. */
+const EVICT_MS = 2 * MINUTE;
+
+const registry = new Map<string, Series>();
+
+export class Series {
+  cols: Cols = emptyCols();
+  exhausted = false;
+  private readonly listeners = new Set<() => void>();
+  private chain: Promise<unknown> = Promise.resolve();
+  private tailAt = 0;
+  private evictTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    private readonly key: string,
+    readonly ref: MarketRef,
+    readonly interval: string,
+    readonly source: SeriesSource,
+    /** Stored files not loaded yet, oldest first. */
+    private readonly partitions: PartitionInfo[],
+  ) {}
+
+  subscribe(listener: () => void): () => void {
+    clearTimeout(this.evictTimer);
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size > 0) return;
+      clearTimeout(this.evictTimer);
+      this.evictTimer = setTimeout(() => {
+        if (this.listeners.size === 0 && registry.get(this.key) === this) registry.delete(this.key);
+      }, EVICT_MS);
+    };
+  }
+
+  private emit(): void {
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  /** One load at a time, so two charts on one market cannot fetch a file twice. */
+  private run<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(task);
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  /** Hold at least `bars` of the newest bars, or all there are. */
+  ensure(bars: number): Promise<void> {
+    return this.run(async () => {
+      if (this.cols.time.length === 0 && this.source === 'archive') {
+        await this.loadPartitions(bars);
+        await this.tail();
+      }
+      while (this.cols.time.length < bars && !this.exhausted) {
+        if ((await this.olderChunk(bars - this.cols.time.length)) === 0) this.exhausted = true;
+      }
+    });
+  }
+
+  /** Load bars older than the oldest held. Resolves false once there are none. */
+  older(): Promise<boolean> {
+    return this.run(async () => {
+      if (this.exhausted) return false;
+      const added = await this.olderChunk(OLDER_BARS);
+      if (added === 0) this.exhausted = true;
+      else this.emit();
+      return added > 0;
+    });
+  }
+
+  /** Append bars that closed since the newest held. */
+  refreshTail(): Promise<void> {
+    if (Date.now() - this.tailAt < TAIL_THROTTLE_MS) return Promise.resolve();
+    this.tailAt = Date.now();
+    return this.run(async () => {
+      const before = this.cols.time.length;
+      await this.tail();
+      if (this.cols.time.length !== before) this.emit();
+    });
+  }
+
+  private async olderChunk(want: number): Promise<number> {
+    if (this.source === 'archive' && this.partitions.length > 0) return this.loadPartitions(want);
+    // Before the first stored file, or a market with none: page back through the exchange.
+    return this.pageBack(want);
+  }
+
+  private async loadPartitions(want: number): Promise<number> {
+    let take = 0;
+    let rows = 0;
+    while (take < this.partitions.length && (rows < want || take === 0)) {
+      rows += this.partitions[this.partitions.length - 1 - take]!.rows;
+      take += 1;
+    }
+    const chosen = this.partitions.slice(this.partitions.length - take);
+    const parts = await Promise.all(chosen.map((p) => fetchPartition(this.ref, this.interval, p.period)));
+    this.partitions.splice(this.partitions.length - take, take);
+    const loaded = concatCols(parts);
+    this.cols = joinCols(loaded, this.cols);
+    return loaded.time.length;
+  }
+
+  private async pageBack(want: number): Promise<number> {
+    const limit = pageLimit(this.ref);
+    const pages: Cols[] = [];
+    let added = 0;
+    let end = this.cols.time.length > 0 ? this.cols.time[0]! - 1 : Date.now();
+    while (added < want) {
+      const page = await klines(this.ref, this.interval, { end });
+      if (page.cols.time.length > 0) {
+        pages.unshift(page.cols);
+        added += page.cols.time.length;
+        end = page.cols.time[0]! - 1;
+      }
+      if (page.raw < limit) {
+        this.exhausted = true;
+        break;
+      }
+    }
+    if (pages.length > 0) this.cols = joinCols(concatCols(pages), this.cols);
+    return added;
+  }
+
+  private async tail(): Promise<void> {
+    this.tailAt = Date.now();
+    const times = this.cols.time;
+    if (times.length === 0) return;
+    const now = Date.now();
+    const from = intervalEnd(this.interval, times[times.length - 1]!);
+    if (intervalEnd(this.interval, from) > now) return; // the next bar has not closed yet
+    const limit = pageLimit(this.ref);
+    const pages: Cols[] = [];
+    if ((now - from) / intervalMs(this.interval) < limit - 1) {
+      pages.push((await klines(this.ref, this.interval, { start: from, end: now })).cols);
+    } else {
+      // A long gap — the recorder has not run for a while. Newest first, so the
+      // chart is current even if the pages run out before the gap is closed.
+      let end = now;
+      for (let i = 0; i < MAX_TAIL_PAGES; i += 1) {
+        const page = await klines(this.ref, this.interval, { end });
+        if (page.cols.time.length === 0) break;
+        pages.unshift(page.cols);
+        if (page.cols.time[0]! <= from || page.raw < limit) break;
+        end = page.cols.time[0]! - 1;
+      }
+    }
+    const tail = concatCols(pages);
+    this.cols = joinCols(this.cols, sliceCols(tail, lowerBound(tail.time, from)));
+  }
+}
+
+/**
+ * The series behind a chart: stored partitions at `base` when the market has
+ * them, the exchange at `interval` when it does not.
+ */
+export async function openSeries(market: string, base: string, interval: string): Promise<Series> {
+  const ref = parseMarket(market);
+  if (!ref) throw new Error(`not a market: ${market}`);
+  const stored = (await manifest(ref))?.bases[base] ?? [];
+  const source: SeriesSource = stored.length > 0 ? 'archive' : 'exchange';
+  const at = source === 'archive' ? base : interval;
+  const key = `${market}|${at}`;
+  let series = registry.get(key);
+  if (!series) {
+    series = new Series(key, ref, at, source, disjoint(stored));
+    registry.set(key, series);
+  }
+  return series;
+}

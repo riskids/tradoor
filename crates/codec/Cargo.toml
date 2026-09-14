@@ -1,0 +1,15 @@
+[package]
+name = "tradoor-codec"
+description = "The candle partition format: integer ticks, delta + varint columns. Decoding has no dependencies so it runs in the browser worker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+gzip = ["dep:flate2"]
+manifest = ["dep:serde"]
+
+[dependencies]
+tradoor-core.workspace = true
+flate2 = { version = "1.1.10", optional = true }
+serde = { version = "1.0.229", features = ["derive"], optional = true }

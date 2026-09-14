@@ -1,0 +1,9 @@
+[package]
+name = "tradoor-render"
+description = "The chart as a pure model: scales, layout, interaction, and a frame of triangles and text for any backend to draw."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tradoor-core.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "tradoor-ingest"
+description = "Fetch closed candles from exchange archives and REST, roll them up, keep them on disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tradoor-core.workspace = true
+tradoor-codec = { workspace = true, features = ["gzip", "manifest"] }
+tradoor-venues.workspace = true
+tradoor-store = { path = "../store" }
+reqwest = "0.13.5"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt", "time"] }
+tracing = "0.1.44"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

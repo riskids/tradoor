@@ -1,0 +1,36 @@
+import { For } from 'solid-js';
+import { setOverlay } from '../app/ui';
+import { Icon } from '../lib/icons';
+import { symbolOf, venueLabel } from '../lib/markets';
+import { TIMEFRAMES } from '../lib/timeframes';
+
+export function MarketButton(props: { panelId: string; market: string }) {
+  return (
+    <>
+      <button class="symbol" title="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: props.panelId, initial: '' })}>
+        {symbolOf(props.market)}
+        <Icon name="chevron" size={10} />
+      </button>
+      <span class="badge">{venueLabel(props.market)}</span>
+    </>
+  );
+}
+
+export function TimeframeSelect(props: { value: string; onChange(tf: string): void; allow?: (tf: string) => boolean }) {
+  return (
+    <select title="Timeframe" onChange={(e) => props.onChange(e.currentTarget.value)}>
+      <For each={TIMEFRAMES.filter((t) => props.allow?.(t.value) ?? true)}>
+        {(t) => (
+          <option value={t.value} selected={t.value === props.value}>
+            {t.label}
+          </option>
+        )}
+      </For>
+    </select>
+  );
+}
+
+/** Profiles describe intraday, daily and weekly sessions; months have none. */
+export const hasProfile = (tf: string): boolean => !tf.endsWith('M');
+
+export const SESSION_NAME: Record<string, string> = { '1d': 'daily', '1w': 'weekly', '1M': 'monthly' };

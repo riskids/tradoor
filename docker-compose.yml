@@ -1,0 +1,22 @@
+# Local Postgres for tradoor — its own container, separate from every other
+# project's database on this machine.
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: tradoor-postgres
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:5438:5432"
+    # Postgres 18 images keep data under /var/lib/postgresql/18/docker and expect
+    # the volume one level up.
+    volumes:
+      - tradoor_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tradoor_pgdata:

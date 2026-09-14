@@ -1,0 +1,23 @@
+[package]
+name = "tradoor-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tradoor-core.workspace = true
+tradoor-codec = { workspace = true, features = ["gzip", "manifest"] }
+tradoor-venues.workspace = true
+tradoor-store = { path = "../../crates/store" }
+anyhow = "1.0.104"
+axum = "0.8.9"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+deadpool-postgres = "0.14.2"
+reqwest = "0.13.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs"] }
+tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1"] }
+tower-http = { version = "0.7.1", features = ["compression-gzip", "fs", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"

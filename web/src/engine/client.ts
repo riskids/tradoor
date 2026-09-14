@@ -1,0 +1,97 @@
+/**
+ * The page's side of the engine worker. One worker serves every chart, so they
+ * share WASM memory, loaded history and exchange sockets.
+ */
+import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, Legend, StudyDefinition, StudyMeta, ToWorker } from './protocol';
+
+export interface SlotHandlers {
+  cursor(value: string): void;
+  legend(value: Legend): void;
+  studies(value: StudyMeta[]): void;
+  event(event: ChartEvent): void;
+  status(value: ChartStatus): void;
+  price(price: number, precision: number): void;
+}
+
+let worker: Worker | null = null;
+let failure: string | null = null;
+const failureListeners = new Set<(message: string) => void>();
+const slots = new Map<string, SlotHandlers>();
+const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+let nextRequest = 1;
+let nextSlot = 1;
+
+function fail(message: string): void {
+  failure = message;
+  for (const p of pending.values()) p.reject(new Error(message));
+  pending.clear();
+  for (const listener of failureListeners) listener(message);
+}
+
+function dispatch(msg: FromWorker): void {
+  switch (msg.t) {
+    case 'ready':
+      return;
+    case 'fatal':
+      fail(msg.message);
+      return;
+    case 'reply': {
+      const p = pending.get(msg.req);
+      if (!p) return;
+      pending.delete(msg.req);
+      if (msg.error !== undefined) p.reject(new Error(msg.error));
+      else p.resolve(msg.value);
+      return;
+    }
+    default: {
+      const h = slots.get(msg.id);
+      if (!h) return;
+      if (msg.t === 'cursor') h.cursor(msg.value);
+      else if (msg.t === 'legend') h.legend(msg.value);
+      else if (msg.t === 'studies') h.studies(msg.value);
+      else if (msg.t === 'event') h.event(msg.event);
+      else if (msg.t === 'status') h.status(msg.value);
+      else h.price(msg.price, msg.precision);
+    }
+  }
+}
+
+function engine(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'tradoor-engine' });
+  worker.onmessage = (e: MessageEvent<FromWorker>) => dispatch(e.data);
+  worker.onerror = (e) => fail(e.message || 'the chart engine stopped');
+  return worker;
+}
+
+export function send(msg: ToWorker, transfer: Transferable[] = []): void {
+  engine().postMessage(msg, transfer);
+}
+
+export function call<K extends CallName>(name: K, args: Calls[K]['args']): Promise<Calls[K]['result']> {
+  if (failure) return Promise.reject(new Error(failure));
+  const req = nextRequest++;
+  return new Promise((resolve, reject) => {
+    pending.set(req, { resolve: resolve as (value: unknown) => void, reject });
+    send({ t: 'call', req, name, args });
+  });
+}
+
+export function attachSlot(handlers: SlotHandlers): { id: string; detach(): void } {
+  const id = `chart-${nextSlot++}`;
+  slots.set(id, handlers);
+  return { id, detach: () => void slots.delete(id) };
+}
+
+export function onEngineFailure(listener: (message: string) => void): () => void {
+  failureListeners.add(listener);
+  if (failure) listener(failure);
+  return () => void failureListeners.delete(listener);
+}
+
+let catalog: Promise<StudyDefinition[]> | null = null;
+
+export function studyCatalog(): Promise<StudyDefinition[]> {
+  catalog ??= call('studyCatalog', {});
+  return catalog;
+}

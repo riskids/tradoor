@@ -1,0 +1,23 @@
+[Unit]
+Description=tradoor recorder — keeps tracked markets' history current
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=tradoor
+Group=tradoor
+WorkingDirectory=/var/www/tradoor
+EnvironmentFile=/var/www/tradoor/.env
+Environment=TRADOOR_DATA_DIR=/var/www/tradoor/data
+ExecStart=/var/www/tradoor/bin/tradoor-recorder
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/tradoor/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[package]
+name = "tradoor-core"
+description = "Candles, timeframes, indicators and studies with Pine Script semantics. No I/O and no dependencies: built natively for the server and to WASM for the browser."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]

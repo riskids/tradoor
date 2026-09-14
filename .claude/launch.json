@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tradoor-server",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "set -a && . ./.env && set +a && exec ./target/release/tradoor-server"],
+      "port": 8080
+    },
+    {
+      "name": "tradoor-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd web && exec deno task dev --port 5173 --strictPort --host 127.0.0.1"],
+      "port": 5173
+    }
+  ]
+}

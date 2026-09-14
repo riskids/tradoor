@@ -1,0 +1,29 @@
+[package]
+name = "tradoor-wasm"
+description = "The browser worker's engine: the chart drawn with WebGL2 and a 2D canvas for text, plus decoding, folding and live-bar folding."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tradoor-core.workspace = true
+tradoor-codec.workspace = true
+tradoor-render.workspace = true
+js-sys = "0.3.105"
+# Pinned exactly: the generated JS glue must match wasm-bindgen-cli 0.2.128.
+wasm-bindgen = "=0.2.128"
+web-sys = { version = "0.3.105", features = [
+  "console",
+  "OffscreenCanvas",
+  "OffscreenCanvasRenderingContext2d",
+  "TextMetrics",
+  "WebGl2RenderingContext",
+  "WebGlBuffer",
+  "WebGlProgram",
+  "WebGlShader",
+  "WebGlUniformLocation",
+  "WebGlVertexArrayObject",
+] }
