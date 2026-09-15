@@ -75,7 +75,7 @@ export function ValuesPanel(props: { panel: ValuesPanelState }) {
         </button>
         <span class="spacer" />
         <Show when={loading()}>
-          <span class="dim pulse">●</span>
+          <span class="caps pulse">updating</span>
         </Show>
       </div>
       <div class="scroll">

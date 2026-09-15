@@ -1,7 +1,8 @@
 import { For } from 'solid-js';
 import { setOverlay } from '../app/ui';
 import { Icon } from '../lib/icons';
-import { symbolOf, venueLabel } from '../lib/markets';
+import { VenueTag } from '../lib/exchanges';
+import { symbolOf } from '../lib/markets';
 import { TIMEFRAMES } from '../lib/timeframes';
 
 export function MarketButton(props: { panelId: string; market: string }) {
@@ -11,7 +12,7 @@ export function MarketButton(props: { panelId: string; market: string }) {
         {symbolOf(props.market)}
         <Icon name="chevron" size={10} />
       </button>
-      <span class="badge">{venueLabel(props.market)}</span>
+      <VenueTag market={props.market} name />
     </>
   );
 }

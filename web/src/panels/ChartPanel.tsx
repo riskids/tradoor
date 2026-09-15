@@ -11,6 +11,7 @@ import { api, errorText, type Drawing } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
 import { Icon, type IconName } from '../lib/icons';
+import { VenueTag } from '../lib/exchanges';
 import { symbolOf, venueLabel } from '../lib/markets';
 import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfName } from '../lib/timeframes';
 import type { ChartPanelState } from '../workspace/model';
@@ -299,7 +300,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           {symbolOf(market())}
           <Icon name="chevron" size={10} />
         </button>
-        <span class="badge">{venueLabel(market())}</span>
+        <VenueTag market={market()} name />
         <span class="sep" />
         <For each={FAVORITE_TIMEFRAMES}>
           {(tf) => (
@@ -622,10 +623,9 @@ function LiveBadge(props: { market: string; live: LiveStatus; price: { price: nu
   const state = () => LIVE[props.live];
   return (
     <span class="live" title={state().title}>
-      <span class={state().tone} classList={{ pulse: props.live === 'connecting' || props.live === 'retrying' }}>
-        ●
+      <span class={`state ${state().tone}`} classList={{ pulse: props.live === 'connecting' || props.live === 'retrying' }}>
+        {state().label}
       </span>
-      <span class={`label ${state().tone}`}>{state().label}</span>
       <span class="num" classList={{ bull: direction() > 0, bear: direction() < 0, muted: direction() === 0 }}>
         {text()}
       </span>

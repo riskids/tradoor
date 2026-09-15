@@ -6,14 +6,15 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, onMount, Show } from 'solid-js';
 import { catalog, errorText, type Product } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
-import { isMarket, VENUE_LABEL, type Venue } from '../lib/markets';
+import { ExchangeLogo, exchangeOfVenue, LIVE_EXCHANGES, type ExchangeId } from '../lib/exchanges';
+import { isMarket } from '../lib/markets';
 
 type Kind = 'all' | 'perp' | 'spot';
 
 /** Exact symbol, then base, then prefixes, then substrings; ties by 24h turnover.
  *  Words like "bybit" or "perp" in the query filter instead of matching. */
-function rank(products: readonly Product[], query: string, kindFilter: Kind): Product[] {
-  let exchange: string | null = null;
+function rank(products: readonly Product[], query: string, kindFilter: Kind, exchangeFilter: ExchangeId | null): Product[] {
+  let exchange: string | null = exchangeFilter;
   let kind = kindFilter;
   const terms: string[] = [];
   for (const word of query.toUpperCase().split(/[\s/:-]+/).filter(Boolean)) {
@@ -44,10 +45,11 @@ function rank(products: readonly Product[], query: string, kindFilter: Kind): Pr
 export function SymbolSearch(props: { initial: string; title?: string; current?: string; onSelect(market: string): void; onClose(): void }) {
   const [query, setQuery] = createSignal(props.initial);
   const [kind, setKind] = createSignal<Kind>('all');
+  const [exchange, setExchange] = createSignal<ExchangeId | null>(null);
   const [cursor, setCursor] = createSignal(0);
   const [markets] = createResource(() => catalog());
   const products = () => (markets.state === 'ready' ? markets()!.products : []);
-  const rows = createMemo(() => rank(products(), query(), kind()));
+  const rows = createMemo(() => rank(products(), query(), kind(), exchange()));
   const typed = () => {
     const q = query().trim();
     return isMarket(q) ? q : null;
@@ -60,7 +62,7 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
     // Caret at the end, never select-all: the next keystroke must extend the query.
     input.setSelectionRange(input.value.length, input.value.length);
   });
-  createEffect(on([query, kind], () => setCursor(0), { defer: true }));
+  createEffect(on([query, kind, exchange], () => setCursor(0), { defer: true }));
   createEffect(() => {
     cursor();
     list.querySelector('[data-cur]')?.scrollIntoView({ block: 'nearest' });
@@ -102,6 +104,14 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
             autocomplete="off"
           />
           <div class="chips">
+            <For each={LIVE_EXCHANGES}>
+              {(x) => (
+                <button class="xchip" classList={{ on: exchange() === x.id }} title={exchange() === x.id ? `Showing ${x.name} only — click for every exchange` : `${x.name} only`} onClick={() => setExchange((e) => (e === x.id ? null : x.id))}>
+                  <ExchangeLogo exchange={x} size={14} />
+                </button>
+              )}
+            </For>
+            <span class="sep-v" />
             <For each={['all', 'perp', 'spot'] as const}>
               {(k) => (
                 <button classList={{ on: kind() === k }} onClick={() => setKind(k)}>
@@ -128,7 +138,10 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
                           <span class="primary"> · on screen</span>
                         </Show>
                       </span>
-                      <span class="muted">{VENUE_LABEL[p.venue as Venue] ?? p.venue}</span>
+                      <span class="venue" style={{ 'min-width': '84px' }}>
+                        <ExchangeLogo exchange={exchangeOfVenue(p.venue)} size={13} />
+                        <span class="venue-name">{exchangeOfVenue(p.venue).name}</span>
+                      </span>
                       <span class="badge" classList={{ bull: p.kind === 'perp' }}>
                         {p.kind.toUpperCase()}
                       </span>

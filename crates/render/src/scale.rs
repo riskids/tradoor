@@ -15,11 +15,17 @@ pub struct TimeScale {
 }
 
 pub const MIN_BAR_SPACING: f64 = 0.5;
-pub const MAX_BAR_SPACING: f64 = 80.0;
+/// Zooming in may always reach at least this spacing, however narrow the plot.
+const ZOOM_FLOOR: f64 = 80.0;
 
 impl TimeScale {
     pub fn new() -> Self {
         Self { bar_spacing: 6.0, right_offset: 2.0, width: 0.0, bars: 0 }
+    }
+
+    /// The widest a bar may get: two bars across the plot.
+    pub fn max_spacing(&self) -> f64 {
+        (self.width / 2.0).max(ZOOM_FLOOR)
     }
 
     fn right_logical(&self) -> f64 {
@@ -47,7 +53,7 @@ impl TimeScale {
     /// Keep the bar under `x` under `x` while the spacing changes.
     pub fn zoom_at(&mut self, x: f64, factor: f64) {
         let anchor = self.logical(x);
-        self.bar_spacing = (self.bar_spacing * factor).clamp(MIN_BAR_SPACING, MAX_BAR_SPACING);
+        self.bar_spacing = (self.bar_spacing * factor).clamp(MIN_BAR_SPACING, self.max_spacing());
         let right = anchor + (self.width - x) / self.bar_spacing - 0.5;
         self.right_offset = right - (self.bars as f64 - 1.0);
         self.clamp();
@@ -66,7 +72,9 @@ impl TimeScale {
             return;
         }
         let visible = self.width / self.bar_spacing;
-        let keep = 3.0f64.min(self.bars as f64);
+        // Half the plot when fewer than six bars fit, or a close zoom would push
+        // the newest bars off screen to honour the three.
+        let keep = 3.0f64.min(self.bars as f64).min(visible / 2.0);
         let max = visible - keep;
         let min = -(self.bars as f64) + keep;
         self.right_offset = self.right_offset.clamp(min.min(max), max.max(min));
@@ -77,7 +85,7 @@ impl TimeScale {
         if self.width <= 0.0 {
             return;
         }
-        self.bar_spacing = (self.width / (count.max(1.0) + margin)).clamp(MIN_BAR_SPACING, MAX_BAR_SPACING);
+        self.bar_spacing = (self.width / (count.max(1.0) + margin)).clamp(MIN_BAR_SPACING, self.max_spacing());
         self.right_offset = margin;
         self.clamp();
     }
@@ -169,12 +177,14 @@ impl PriceScale {
         }
     }
 
-    /// Stretch or squeeze the range around its centre.
-    pub fn zoom(&mut self, factor: f64) {
+    /// Stretch or squeeze the range around its centre, keeping its span (in
+    /// transformed units) within `[min_span, max_span]`.
+    pub fn zoom(&mut self, factor: f64, min_span: f64, max_span: f64) {
         let (lo, hi) = self.range;
-        let (mid, half) = ((lo + hi) / 2.0, (hi - lo) / 2.0 * factor);
-        if half.is_finite() && half > 1e-12 {
-            self.range = (mid - half, mid + half);
+        let span = ((hi - lo) * factor).clamp(min_span, max_span.max(min_span));
+        let mid = (lo + hi) / 2.0;
+        if span.is_finite() && span > 0.0 {
+            self.range = (mid - span / 2.0, mid + span / 2.0);
         }
     }
 }
@@ -204,7 +214,17 @@ mod tests {
         t.zoom_at(400.0, 1.7);
         assert!((t.logical(400.0) - before).abs() < 1e-9);
         t.zoom_at(400.0, 1e9);
-        assert_eq!(t.bar_spacing, MAX_BAR_SPACING);
+        assert_eq!(t.bar_spacing, t.max_spacing());
+    }
+
+    #[test]
+    fn a_close_zoom_keeps_the_newest_bar_on_screen() {
+        let mut t = scale();
+        let x = t.x(499.0);
+        t.zoom_at(x, 1e9);
+        t.clamp();
+        assert_eq!(t.bar_spacing, 500.0, "two bars across a 1000px plot");
+        assert!((t.x(499.0) - x).abs() < 1e-9, "clamping did not push it away");
     }
 
     #[test]

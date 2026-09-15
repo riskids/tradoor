@@ -168,7 +168,9 @@ function Health() {
     })[state()];
   return (
     <span class="item" title={title()}>
-      <span classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }}>●</span>
+      <span class="health" classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }}>
+        <Icon name="server" size={12} />
+      </span>
       {state() === 'down' ? 'OFFLINE' : state() === 'db' ? 'NO DB' : 'SERVER'}
     </span>
   );

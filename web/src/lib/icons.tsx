@@ -28,6 +28,7 @@ const PATHS = {
   indicators: 'M3 17l5-6 4 3 8-9M3 21h18',
   reset: 'M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5',
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM7 7h4M7 17h4',
   up: 'M6 15l6-6 6 6',
   down: 'M6 9l6 6 6-6',
 } as const;

@@ -10,6 +10,7 @@ import { StreamHub } from '../engine/streams';
 import { catalog, type Catalog } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { Icon } from '../lib/icons';
+import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { isPerp, parseMarket, symbolOf, venueLabel } from '../lib/markets';
 import type { WatchlistPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart } from '../workspace/store';
@@ -88,7 +89,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
   const digits = (market: string, last: number) => products()?.byMarket.get(market)?.priceDecimals ?? priceDecimals(last);
 
   return (
-    <div class="panelcol">
+    <div class="panelcol wl">
       <div class="toolbar">
         <span class="caps" style={{ padding: '0 4px' }}>
           Watchlist
@@ -102,8 +103,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
       <div class="wl-head">
         <span>Symbol</span>
         <span class="r">Last</span>
-        <span class="r">Chg%</span>
-        <span />
+        <span class="r chg">Chg%</span>
       </div>
       <div class="scroll">
         <For each={props.panel.markets}>
@@ -132,14 +132,12 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                 }}
               >
                 <span class="sym">
-                  {symbolOf(market)}
-                  <Show when={isPerp(market)}>
-                    <span class="dim"> P</span>
-                  </Show>
-                  <span class="dim"> {parseMarket(market)?.venue.startsWith('bybit') ? 'BYB' : 'BIN'}</span>
+                  <ExchangeLogo exchange={exchangeOfVenue(parseMarket(market)?.venue ?? 'binance')} size={13} />
+                  <span class="name">{symbolOf(market)}</span>
+                  <span class="kind">{isPerp(market) ? 'PERP' : 'SPOT'}</span>
                 </span>
                 <span class="num r muted">{t() ? formatPrice(t()!.last, digits(market, t()!.last)) : '—'}</span>
-                <span class="num r" classList={{ bull: (t()?.changePct ?? 0) > 0, bear: (t()?.changePct ?? 0) < 0, dim: !t() }}>
+                <span class="num r chg" classList={{ bull: (t()?.changePct ?? 0) > 0, bear: (t()?.changePct ?? 0) < 0, dim: !t() }}>
                   {formatPct(t()?.changePct)}
                 </span>
                 <button

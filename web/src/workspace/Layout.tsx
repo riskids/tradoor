@@ -232,7 +232,7 @@ function Tab(props: { id: string; tabs: TabsNode }) {
             if (e.button === 1) update((d) => removePanel(d, props.id));
           }}
         >
-          <LinkDot panel={p()} />
+          <LinkButton panel={p()} />
           <span class="label">{panelTitle(p())}</span>
           <button
             class="close"
@@ -251,21 +251,24 @@ function Tab(props: { id: string; tabs: TabsNode }) {
 }
 
 /** Click to cycle through the link groups: panels in one group share a market. */
-function LinkDot(props: { panel: Panel }) {
+function LinkButton(props: { panel: Panel }) {
   const next = () => {
     const i = props.panel.link ? LINK_COLORS.indexOf(props.panel.link) : -1;
     return LINK_COLORS[i + 1] ?? null;
   };
   return (
     <button
-      class="linkdot"
-      style={props.panel.link ? { background: `var(--link-${props.panel.link})`, 'border-color': `var(--link-${props.panel.link})` } : undefined}
+      class="linkbtn"
+      classList={{ linked: props.panel.link !== null }}
+      style={props.panel.link ? { color: `var(--link-${props.panel.link})` } : undefined}
       title={props.panel.link ? `Linked to the ${props.panel.link} group — click for the next group` : 'Not linked — click to join a group that shares one market'}
       onClick={(e) => {
         e.stopPropagation();
         setPanelLink(props.panel.id, next());
       }}
-    />
+    >
+      <Icon name="link" size={11} stroke={2.2} />
+    </button>
   );
 }
 

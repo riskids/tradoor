@@ -33,8 +33,6 @@ const HIT_TOLERANCE: f32 = 6.0;
 const BRUSH_SAMPLE: f32 = 3.0;
 /// Ask for older history once fewer than this many bars remain off the left edge.
 const HISTORY_MARGIN_BARS: f64 = 80.0;
-const MARGIN_STEP: f64 = 0.04;
-const MAX_MARGIN: f64 = 0.45;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -695,10 +693,7 @@ impl Chart {
             }
         }
         let dpr = f.dpr;
-        let mut body_dev = (self.time.bar_spacing as f32 * dpr * 0.8).floor().max(1.0);
-        if body_dev >= 3.0 && (body_dev as i32) % 2 == 0 {
-            body_dev -= 1.0;
-        }
+        let (body_dev, wick) = candle_widths(self.time.bar_spacing, dpr);
         let body = body_dev / dpr;
         if !self.hidden.contains("volume") {
             let max_vol = (i0..=i1).filter_map(|i| self.bar(i)).map(|b| b.volume).fold(0.0, f64::max);
@@ -713,7 +708,6 @@ impl Chart {
                 }
             }
         }
-        let wick = (body_dev / 8.0).floor().max(1.0) / dpr;
         for i in i0..=i1 {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
@@ -815,10 +809,10 @@ impl Chart {
 
         // ---- crosshair
         let hover = self.crosshair.filter(|(x, y)| *x >= 0.0 && *x < plot_w && *y >= 0.0 && *y < avail && !matches!(self.drag, Drag::Separator { .. }));
-        let hover_bar = hover.and_then(|(x, _)| self.time.nearest_bar(f64::from(x)));
+        let hover_slot = hover.and_then(|(x, _)| self.slot_at(x));
         f.clip(None);
-        if let (Some((_, cy)), Some(bar)) = (hover, hover_bar) {
-            let x = f.snap(self.time.x(bar as f64) as f32);
+        if let (Some((_, cy)), Some(slot)) = (hover, hover_slot) {
+            let x = f.snap(self.time.x(slot as f64) as f32);
             f.dashed_line(x, 0.0, x, avail, 1.0, t.crosshair, 4.0, 4.0);
             if self.pane_at(cy).is_some() {
                 f.dashed_line(0.0, cy, plot_w, cy, 1.0, t.crosshair, 4.0, 4.0);
@@ -922,11 +916,11 @@ impl Chart {
 
         // ---- time labels
         let time_axis = Rect { x: 0.0, y: avail, w: plot_w, h: TIME_AXIS_HEIGHT };
-        let cross_label = hover_bar.and_then(|i| self.bar(i)).map(|b| {
+        let cross_label = hover_slot.and_then(|slot| Some((slot, self.slot_time(slot)?))).map(|(slot, time)| {
             let monthly = self.timeframe.source().interval == Interval::Mo1;
-            let text = ticks::crosshair_label(b.time, self.timeframe.source().interval.ms(), monthly);
+            let text = ticks::crosshair_label(time, self.timeframe.source().interval.ms(), monthly);
             let w = text.len() as f32 * self.char_width + 12.0;
-            (self.time.x(hover_bar.unwrap_or(0) as f64) as f32, text, w)
+            (self.time.x(slot as f64) as f32, text, w)
         });
         let mut candidates = Vec::new();
         for i in i0..=i1 {
@@ -1158,8 +1152,8 @@ impl Chart {
                 self.drag = Drag::PriceAxis { pane, last_y: y };
             }
             Drag::TimeAxis { last_x } => {
-                let right = self.time.width;
-                self.time.zoom_at(right, (f64::from(x - last_x) * 0.01).exp());
+                let at = self.zoom_anchor(self.plot_width());
+                self.time.zoom_at(at, (f64::from(x - last_x) * 0.01).exp());
                 self.drag = Drag::TimeAxis { last_x: x };
             }
             Drag::Separator { upper, last_y } => {
@@ -1311,21 +1305,17 @@ impl Chart {
         }
         let used = match self.zone(x, y) {
             Zone::PriceAxis(p) => {
-                let group = self.panes[p].group;
-                let state = self.pane_state.entry(group).or_insert_with(|| PaneState::default_for(group));
-                let step = if dy > 0.0 { MARGIN_STEP } else { -MARGIN_STEP };
-                state.margins = ((state.margins.0 + step).clamp(0.0, MAX_MARGIN), (state.margins.1 + step).clamp(0.0, MAX_MARGIN));
+                // The same scaling as dragging the axis, without a limit: scrolling
+                // up narrows the range, down widens it. Autoscale turns off.
+                self.zoom_price(p, (f64::from(dy) * 0.002).exp());
                 true
             }
             Zone::Plot(_) | Zone::TimeAxis => {
                 if dx.abs() > dy.abs() {
                     self.time.pan(f64::from(-dx));
                 } else {
-                    // With the newest bar on screen the right edge holds still, so
-                    // zooming out brings in history rather than empty space after
-                    // the last bar. Scrolled back, the bar under the pointer holds.
-                    let at = if self.time.right_offset >= 0.0 { self.plot_width() } else { x.min(self.plot_width()) };
-                    self.time.zoom_at(f64::from(at), (-f64::from(dy) * 0.002).exp());
+                    let at = self.zoom_anchor(x);
+                    self.time.zoom_at(at, (-f64::from(dy) * 0.002).exp());
                 }
                 true
             }
@@ -1411,8 +1401,69 @@ impl Chart {
         self.touch();
     }
 
+    /// Where a zoom holds still: the newest bar while it is on screen, so zooming
+    /// out brings in history and zooming in keeps the space after it the same
+    /// width; scrolled back, the pointer.
+    fn zoom_anchor(&self, pointer_x: f32) -> f64 {
+        let plot_w = f64::from(self.plot_width());
+        let newest = self.time.x(self.time.bars.saturating_sub(1) as f64);
+        if self.time.bars > 0 && (0.0..=plot_w).contains(&newest) { newest } else { f64::from(pointer_x).clamp(0.0, plot_w) }
+    }
+
+    /// The bar slot under `x` — past either end of the data too, so the crosshair
+    /// follows the pointer into the space after the newest bar. Always one whose
+    /// centre is on the plot.
+    fn slot_at(&self, x: f32) -> Option<i64> {
+        if self.time.bars == 0 {
+            return None;
+        }
+        let mut slot = self.time.logical(f64::from(x)).round() as i64;
+        if self.time.x(slot as f64) >= f64::from(self.plot_width()) {
+            slot -= 1;
+        }
+        if self.time.x(slot as f64) < 0.0 {
+            slot += 1;
+        }
+        Some(slot)
+    }
+
+    /// A slot's open time: the bar's own, or projected along the calendar past the data.
+    fn slot_time(&self, slot: i64) -> Option<i64> {
+        let n = self.total_bars() as i64;
+        if n == 0 {
+            return None;
+        }
+        if (0..n).contains(&slot) {
+            return self.bar(slot as usize).map(|b| b.time);
+        }
+        if slot >= n {
+            let mut t = self.bar((n - 1) as usize)?.time;
+            for _ in 0..(slot - n + 1).min(100_000) {
+                t = self.timeframe.end(t);
+            }
+            return Some(t);
+        }
+        let first = self.bar(0)?.time;
+        let step = self.bar(1).map_or(self.timeframe.end(first) - first, |b| b.time - first);
+        Some(self.timeframe.align(first + slot * step))
+    }
+
     fn zoom_price(&mut self, pane: usize, factor: f64) {
-        self.set_manual(pane, |scale| scale.zoom(factor));
+        let Some(group) = self.panes.get(pane).map(|v| v.group) else { return };
+        // Never narrower than a few price steps — past that the axis runs out of
+        // float precision and every candle becomes a full-height stripe — and
+        // never wider than a thousand times the prices on it.
+        let decimals = if group == Group::Price { self.precision() } else { 2 };
+        let unit = 10f64.powi(-(decimals as i32));
+        self.set_manual(pane, |scale| {
+            let (lo, hi) = scale.range;
+            let mid = scale.untransform((lo + hi) / 2.0).abs();
+            let (min_span, max_span) = match scale.mode {
+                ScaleMode::Normal => (unit * 4.0, (mid + (hi - lo)).max(unit) * 1000.0),
+                ScaleMode::Log => (unit * 4.0 / mid.max(unit), 20.0),
+            };
+            scale.zoom(factor, min_span, max_span);
+        });
     }
 
     fn pan_price(&mut self, pane: usize, dy: f32) {
@@ -1435,6 +1486,17 @@ impl Chart {
         self.panes[upper + 1].plot.h = hb;
         self.touch();
     }
+}
+
+/// A candle body in device pixels, odd once it is wide enough so the wick sits on
+/// its centre, and the wick in CSS pixels: one pixel at any zoom, as on
+/// TradingView — a wick that thickens with the body reads as a second body.
+fn candle_widths(bar_spacing: f64, dpr: f32) -> (f32, f32) {
+    let mut body = (bar_spacing as f32 * dpr * 0.8).floor().max(1.0);
+    if body >= 3.0 && (body as i32) % 2 == 0 {
+        body -= 1.0;
+    }
+    (body, dpr.floor().max(1.0) / dpr)
 }
 
 #[cfg(test)]
@@ -1465,6 +1527,17 @@ mod tests {
     }
 
     #[test]
+    fn wicks_stay_one_pixel_at_any_zoom() {
+        for dpr in [1.0, 1.5, 2.0, 3.0] {
+            let (_, thin) = candle_widths(2.0, dpr);
+            let (body, wide) = candle_widths(2000.0, dpr);
+            assert_eq!(thin, wide, "dpr {dpr}");
+            assert!((wide * dpr - dpr.floor().max(1.0)).abs() < 1e-6, "one CSS pixel on dpr {dpr}");
+            assert!(body > 40.0 && body as i32 % 2 == 1);
+        }
+    }
+
+    #[test]
     fn empty_chart_says_so() {
         let mut c = Chart::new(ChartTimeframe::D1);
         c.resize(800.0, 400.0, 2.0);
@@ -1490,15 +1563,89 @@ mod tests {
     #[test]
     fn wheel_zoom_holds_the_newest_bar_or_else_the_bar_under_the_pointer() {
         let mut c = chart();
-        let offset = c.time.right_offset;
+        let newest = (c.time.bars - 1) as f64;
+        let x = c.time.x(newest);
         assert!(c.wheel(400.0, 200.0, 0.0, 240.0));
-        assert!((c.time.right_offset - offset).abs() < 1e-9, "zooming out keeps the last bar at the right edge");
+        assert!((c.time.x(newest) - x).abs() < 1e-6, "zooming out keeps the newest bar where it was");
 
         c.time.pan(100.0 * c.time.bar_spacing);
         assert!(c.time.right_offset < 0.0);
         let before = c.time.logical(400.0);
         assert!(c.wheel(400.0, 200.0, 0.0, -120.0));
         assert!((c.time.logical(400.0) - before).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zooming_in_goes_on_until_two_bars_fill_the_plot() {
+        let mut c = chart();
+        let newest = (c.time.bars - 1) as f64;
+        let x = c.time.x(newest);
+        for _ in 0..40 {
+            c.wheel(300.0, 200.0, 0.0, -240.0);
+            c.render(1_800_000_000_000);
+        }
+        assert!((c.time.bar_spacing - c.time.max_spacing()).abs() < 1e-6);
+        assert!(c.time.bar_spacing > 400.0, "well past the old 80px stop");
+        assert!((c.time.x(newest) - x).abs() < 1e-3, "the newest bar holds still");
+    }
+
+    #[test]
+    fn wheel_on_the_price_axis_zooms_price_without_a_limit() {
+        let mut c = chart();
+        let (lo, hi) = c.panes[0].scale.range;
+        let axis_x = c.plot_width() + 10.0;
+        for _ in 0..40 {
+            assert!(c.wheel(axis_x, 200.0, 0.0, -240.0));
+            c.render(1_800_000_000_000);
+        }
+        let (a, b) = c.panes[0].scale.range;
+        assert!((b - a) < (hi - lo) * 0.01, "scrolled in to under a hundredth of the range");
+        assert!(!c.auto_scale());
+        for _ in 0..80 {
+            c.wheel(axis_x, 200.0, 0.0, 240.0);
+            c.render(1_800_000_000_000);
+        }
+        let (a, b) = c.panes[0].scale.range;
+        assert!((b - a) > (hi - lo) * 10.0, "and out past ten times it");
+    }
+
+    #[test]
+    fn price_zoom_stops_before_the_axis_loses_precision() {
+        let mut c = chart();
+        let axis_x = c.plot_width() + 10.0;
+        for _ in 0..2000 {
+            c.wheel(axis_x, 200.0, 0.0, -2400.0);
+        }
+        let texts = c.render(1_800_000_000_000).texts.clone();
+        let (price, plot_w) = (c.panes[0], c.plot_width());
+        let (lo, hi) = price.scale.range;
+        let unit = 10f64.powi(-(c.precision() as i32));
+        assert!(hi - lo >= unit * 4.0 * (1.0 - 1e-9), "span {} below four price steps", hi - lo);
+        let labels = texts.iter().filter(|t| t.x > plot_w && t.y > price.plot.y && t.y < price.plot.bottom()).count();
+        assert!(labels >= 3, "price labels still drawn, found {labels}");
+        assert!(c.frame.positions.iter().all(|v| v.is_finite()));
+
+        for _ in 0..2000 {
+            c.wheel(axis_x, 200.0, 0.0, 2400.0);
+        }
+        c.render(1_800_000_000_000);
+        let (lo, hi) = c.panes[0].scale.range;
+        assert!(lo.is_finite() && hi.is_finite() && hi > lo);
+        assert!(c.frame.positions.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn the_crosshair_follows_the_pointer_past_the_newest_bar() {
+        let mut c = chart();
+        let newest = c.time.bars - 1;
+        let px = (c.time.x(newest as f64) + 2.0 * c.time.bar_spacing) as f32;
+        c.pointer_move(px, 200.0);
+        assert_eq!(c.slot_at(px), Some(newest as i64 + 2));
+        let projected = c.candles().last().unwrap().open_time + 2 * HOUR;
+        assert_eq!(c.slot_time(newest as i64 + 2), Some(projected));
+        let label = ticks::crosshair_label(projected, Some(HOUR), false);
+        assert!(c.render(1_800_000_000_000).texts.iter().any(|t| t.text == label), "the time label shows the projected slot");
+        assert_eq!(c.legend().index, Some(newest), "the legend keeps the newest bar");
     }
 
     #[test]

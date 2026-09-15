@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from 'solid-js';
 import { API_TOKEN_PREF } from '../lib/api';
+import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { readPref, writePref } from '../lib/prefs';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
@@ -86,6 +87,19 @@ export function Settings(props: { onClose(): void }) {
           <h3 class="caps">Page colours</h3>
           <div class="swatches">
             <For each={UI_THEME}>{(t) => <Swatch name={t.name} label={t.label} fallback={t.value} />}</For>
+          </div>
+
+          <h3 class="caps">Exchanges</h3>
+          <div class="swatches">
+            <For each={ALL_EXCHANGES}>
+              {(x) => (
+                <span class="swatch">
+                  <ExchangeLogo exchange={x} size={16} />
+                  <span class="name">{x.name}</span>
+                  <span class={x.live ? 'bull' : 'dim'}>{x.live ? 'live' : 'coming later'}</span>
+                </span>
+              )}
+            </For>
           </div>
 
           <h3 class="caps">Server</h3>

@@ -269,7 +269,7 @@ export function TpoPanel(props: { panel: TpoPanelState }) {
           )}
         </Show>
         <Show when={loading()}>
-          <span class="dim pulse">&nbsp;●</span>
+          <span class="caps pulse">&nbsp;updating</span>
         </Show>
       </div>
       <Show when={(data()?.sessions.length ?? 0) > 0 && data()} fallback={<div class="empty" classList={{ warn: !!error() || (!!data() && !loading()) }}>{emptyText()}</div>}>
