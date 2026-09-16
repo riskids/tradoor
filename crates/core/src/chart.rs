@@ -2,7 +2,6 @@
 //! and its crosses, EMA 200, the prior-session market profile, and TPO sessions.
 
 use crate::indicators::profile::{profile_by_session, session_start_back, ProfileBasis, ProfileOptions};
-use crate::indicators::tpo::{suggest_row_size, tpo_by_session, TpoOptions, TpoSession};
 use crate::indicators::{cross_over, cross_under, ema, Series};
 use crate::{Candle, ChartTimeframe, Interval};
 
@@ -88,56 +87,9 @@ pub fn profile_overlay(candles: &[Candle], source: &[Candle], spec: ProfileSpec,
     out
 }
 
-/// Rows a TPO profile is divided into; fixes the pane's height regardless of
-/// whether the instrument trades at 0.0001 or 100000.
-pub const TPO_TARGET_ROWS: usize = 46;
-
-pub struct TpoChartData {
-    pub spec: ProfileSpec,
-    pub row_size: f64,
-    pub grid_low: f64,
-    pub sessions: Vec<TpoSession>,
-    /// Why nothing could be drawn, when nothing could.
-    pub reason: Option<String>,
-}
-
-/// TPO sessions for the letter chart. The window is taken by SESSION (a half
-/// session profiles cleanly and describes something that never happened), then
-/// the grid is rebuilt over the kept sessions' own range so recent sessions are
-/// not squashed by years of price.
-pub fn compute_tpo(source: &[Candle], spec: ProfileSpec, max_sessions: usize) -> TpoChartData {
-    let empty = |reason: &str| TpoChartData { spec, row_size: 0.0, grid_low: 0.0, sessions: Vec::new(), reason: Some(reason.to_string()) };
-    if source.is_empty() {
-        return empty("no candles to build sessions from");
-    }
-    let probe = suggest_row_size(source, TPO_TARGET_ROWS);
-    if !(probe > 0.0) {
-        return empty("every candle sits at one price, so there is no distribution to draw");
-    }
-    let grid_low = source.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
-    let all = tpo_by_session(source, spec.session, &TpoOptions::new(probe, grid_low));
-    let Some(first_kept) = all.len().checked_sub(max_sessions.max(1)).map_or(all.first(), |skip| all.get(skip)) else {
-        return empty("no complete session could be built from these candles");
-    };
-    let windowed: Vec<Candle> = source.iter().filter(|c| c.open_time >= first_kept.session_start).copied().collect();
-    let row_size = suggest_row_size(&windowed, TPO_TARGET_ROWS);
-    if !(row_size > 0.0) {
-        return empty("the visible window has no price range to divide into rows");
-    }
-    let low = windowed.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
-    TpoChartData {
-        spec,
-        row_size,
-        grid_low: low,
-        sessions: tpo_by_session(&windowed, spec.session, &TpoOptions::new(row_size, low)),
-        reason: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time::{parse_iso, DAY};
 
     #[test]
     fn crosses_are_found_by_index() {
@@ -150,22 +102,5 @@ mod tests {
             assert_eq!(c.bull, f > sl);
         }
         assert_eq!(crate::fixtures::warmup_length(&s.ema200), 120);
-    }
-
-    #[test]
-    fn tpo_keeps_the_newest_sessions() {
-        let start = parse_iso("2026-08-03").unwrap();
-        let candles: Vec<Candle> = (0..60)
-            .map(|i| {
-                let p = 100.0 + (i as f64 / 5.0).sin() * 5.0;
-                Candle { open_time: start + i * DAY, open: p, high: p + 2.0, low: p - 2.0, close: p, volume: 1.0, quote_volume: None }
-            })
-            .collect();
-        let tpo = compute_tpo(&candles, profile_spec_for(ChartTimeframe::D1).unwrap(), 4);
-        assert!(tpo.reason.is_none());
-        assert_eq!(tpo.sessions.len(), 4);
-        for s in &tpo.sessions {
-            assert!(s.val <= s.poc && s.poc <= s.vah);
-        }
     }
 }

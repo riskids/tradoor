@@ -12,6 +12,8 @@ pub struct TimeScale {
     /// Plot width in pixels.
     pub width: f64,
     pub bars: usize,
+    /// The narrowest a bar may get: zooming out stops here.
+    pub min_spacing: f64,
 }
 
 pub const MIN_BAR_SPACING: f64 = 0.5;
@@ -20,7 +22,7 @@ const ZOOM_FLOOR: f64 = 80.0;
 
 impl TimeScale {
     pub fn new() -> Self {
-        Self { bar_spacing: 6.0, right_offset: 2.0, width: 0.0, bars: 0 }
+        Self { bar_spacing: 6.0, right_offset: 2.0, width: 0.0, bars: 0, min_spacing: MIN_BAR_SPACING }
     }
 
     /// The widest a bar may get: two bars across the plot.
@@ -53,7 +55,7 @@ impl TimeScale {
     /// Keep the bar under `x` under `x` while the spacing changes.
     pub fn zoom_at(&mut self, x: f64, factor: f64) {
         let anchor = self.logical(x);
-        self.bar_spacing = (self.bar_spacing * factor).clamp(MIN_BAR_SPACING, self.max_spacing());
+        self.bar_spacing = (self.bar_spacing * factor).clamp(self.min_spacing, self.max_spacing());
         let right = anchor + (self.width - x) / self.bar_spacing - 0.5;
         self.right_offset = right - (self.bars as f64 - 1.0);
         self.clamp();
@@ -85,7 +87,7 @@ impl TimeScale {
         if self.width <= 0.0 {
             return;
         }
-        self.bar_spacing = (self.width / (count.max(1.0) + margin)).clamp(MIN_BAR_SPACING, self.max_spacing());
+        self.bar_spacing = (self.width / (count.max(1.0) + margin)).clamp(self.min_spacing, self.max_spacing());
         self.right_offset = margin;
         self.clamp();
     }
@@ -194,7 +196,7 @@ mod tests {
     use super::*;
 
     fn scale() -> TimeScale {
-        TimeScale { bar_spacing: 10.0, right_offset: 2.0, width: 1000.0, bars: 500 }
+        TimeScale { bar_spacing: 10.0, right_offset: 2.0, width: 1000.0, bars: 500, min_spacing: MIN_BAR_SPACING }
     }
 
     #[test]

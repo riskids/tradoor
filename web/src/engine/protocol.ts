@@ -79,36 +79,6 @@ export interface ChartStatus {
   exhausted: boolean;
 }
 
-export interface TpoRow {
-  index: number;
-  /** Indices into the session's periods, chronological. */
-  periods: Uint32Array;
-}
-
-export interface TpoSession {
-  start: number;
-  end: number;
-  periods: number;
-  high: number;
-  low: number;
-  poc: number;
-  vah: number;
-  val: number;
-  singlePrints: number[];
-  ib: [number, number] | null;
-  rows: TpoRow[];
-}
-
-export interface TpoData {
-  session: string;
-  from: string;
-  rowSize: number;
-  gridLow: number;
-  reason: string | null;
-  sessions: TpoSession[];
-  precision: number;
-}
-
 export interface ProfileLevels {
   session: string;
   from: string;
@@ -139,7 +109,6 @@ export type ProfileBasis = 'volume' | 'tpo';
 export interface Calls {
   studyCatalog: { args: Record<string, never>; result: StudyDefinition[] };
   key: { args: { id: string; key: string }; result: boolean };
-  tpo: { args: { market: string; timeframe: string; sessions: number }; result: TpoData | null };
   values: { args: { market: string; timeframe: string; basis: ProfileBasis }; result: IndicatorValues | null };
 }
 
@@ -150,11 +119,18 @@ export type PointerKind = 'move' | 'down' | 'up' | 'leave' | 'dblclick';
 export type ToWorker =
   | { t: 'create'; id: string; gl: OffscreenCanvas; text: OffscreenCanvas; width: number; height: number; dpr: number }
   | { t: 'destroy'; id: string }
+  /** Off screen (a tab not shown): not drawn, its bars and streams kept. */
+  | { t: 'visible'; id: string; value: boolean }
   | { t: 'resize'; id: string; width: number; height: number; dpr: number }
-  | { t: 'market'; id: string; market: string; timeframe: string }
+  /** `bars`: how many bars of `timeframe` to open with, when not the usual screenful. */
+  | { t: 'market'; id: string; market: string; timeframe: string; bars?: number }
   | { t: 'studies'; id: string; value: string }
   | { t: 'hidden'; id: string; value: string }
   | { t: 'log'; id: string; value: boolean }
+  /** A timeframe: each of its candles as a TPO profile of the loaded bars. Empty: candles. */
+  | { t: 'tpo'; id: string; value: string }
+  /** TPO options, `key=value;key=value`. */
+  | { t: 'tpoSettings'; id: string; value: string }
   | { t: 'paneWeights'; id: string; value: string }
   | { t: 'tool'; id: string; value: string }
   | { t: 'drawings'; id: string; list: DrawingShape[] }
@@ -165,8 +141,12 @@ export type ToWorker =
   | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
+  /** The reader's time zone, minutes east of UTC, for every chart. */
+  | { t: 'timeZone'; offsetMinutes: number }
   /** Development only: fake liquidations, so the ping design can be judged. */
   | { t: 'demoLiquidations'; id: string; perMinute: number }
+  /** The ticker's perpetual on each exchange that lists it, for the liquidation feed. */
+  | { t: 'liquidationMarkets'; id: string; markets: string[] }
   | { t: 'call'; req: number; name: CallName; args: unknown };
 
 export type FromWorker =

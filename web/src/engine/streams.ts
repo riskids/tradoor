@@ -214,6 +214,12 @@ class Connection {
   private ws: WebSocket | null = null;
   private current: SocketState = 'connecting';
   private readonly topics = new Map<string, Set<StreamListener>>();
+  /**
+   * Topics that push only when something happens — liquidations. A socket that
+   * carries nothing else is rightly silent for minutes, so for it any frame at
+   * all, a subscribe answer or a pong, proves the exchange is there.
+   */
+  private readonly quiet = new Set<string>();
   /** Topics the exchange has refused; re-sending them would refuse the frame again. */
   private readonly dead = new Set<string>();
   private readonly pending = { subscribe: new Set<string>(), unsubscribe: new Set<string>() };
@@ -232,12 +238,13 @@ class Connection {
     return this.proto.topic(spec);
   }
 
-  add(topic: string, listener: StreamListener): () => void {
+  add(topic: string, listener: StreamListener, quiet = false): () => void {
     clearTimeout(this.lingerTimer);
     let set = this.topics.get(topic);
     if (!set) {
       set = new Set();
       this.topics.set(topic, set);
+      if (quiet) this.quiet.add(topic);
       this.queue('subscribe', topic);
     }
     set.add(listener);
@@ -250,6 +257,7 @@ class Connection {
     const set = this.topics.get(topic);
     if (!set || !set.delete(listener) || set.size > 0) return;
     this.topics.delete(topic);
+    this.quiet.delete(topic);
     this.queue('unsubscribe', topic);
     if (this.topics.size === 0) this.lingerTimer = setTimeout(() => this.shutdown(), LINGER_MS);
   }
@@ -289,6 +297,12 @@ class Connection {
     if (bad !== '') this.dead.add(bad);
     if (batch.length <= 1) return;
     for (const topic of batch) if (topic !== bad && this.topics.has(topic)) this.sendFrames(ws, 'subscribe', [topic]);
+  }
+
+  private hear(): void {
+    this.heard = true;
+    this.attempt = 0;
+    this.setState('live');
   }
 
   private setState(state: SocketState): void {
@@ -335,12 +349,9 @@ class Connection {
         this.retryWithout(ws, refused.bad, refused.batch);
         return;
       }
+      if (!this.heard && this.quiet.size === this.topics.size) this.hear();
       this.proto.read(msg as Json, (topic, m) => {
-        if (!this.heard) {
-          this.heard = true;
-          this.attempt = 0;
-          this.setState('live');
-        }
+        if (!this.heard) this.hear();
         const set = this.topics.get(topic);
         if (set) for (const listener of set) listener.message(m);
       });
@@ -395,6 +406,6 @@ export class StreamHub {
       conn = new Connection(PROTOCOLS[venue]());
       this.connections.set(venue, conn);
     }
-    return conn.add(conn.topic(spec), listener);
+    return conn.add(conn.topic(spec), listener, spec.kind === 'liquidations');
   }
 }

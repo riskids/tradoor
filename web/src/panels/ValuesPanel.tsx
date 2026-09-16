@@ -7,7 +7,8 @@ import { batch, createEffect, createSignal, For, on, onCleanup, Show } from 'sol
 import { call } from '../engine/client';
 import type { IndicatorValues } from '../engine/protocol';
 import { errorText } from '../lib/api';
-import { formatPrice, formatUtc } from '../lib/format';
+import { formatPrice } from '../lib/format';
+import { formatDateTime } from '../lib/timezone';
 import { tfName } from '../lib/timeframes';
 import type { ValuesPanelState } from '../workspace/model';
 import { marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
@@ -85,7 +86,7 @@ export function ValuesPanel(props: { panel: ValuesPanelState }) {
               <div class="subhead">
                 <span class="caps">Last closed bar</span>
                 <span class="dim num">
-                  {tfName(timeframe())} · {formatUtc(v().time)}
+                  {tfName(timeframe())} · {formatDateTime(v().time)}
                 </span>
               </div>
               <table class="grid">

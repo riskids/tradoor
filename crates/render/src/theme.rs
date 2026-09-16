@@ -32,6 +32,9 @@ pub struct Theme {
     pub risk_fill: Color,
     pub reward: Color,
     pub reward_fill: Color,
+    /// TPO blocks: early brackets faint, late ones strong.
+    pub tpo: Color,
+    pub tpo_poc: Color,
     pub font_px: f32,
 }
 
@@ -62,6 +65,8 @@ impl Default for Theme {
             risk_fill: Color::hex(0xd97161).with_alpha(36),
             reward: Color::hex(0xa4c588),
             reward_fill: Color::hex(0xa4c588).with_alpha(36),
+            tpo: Color::hex(0xd9dcd9),
+            tpo_poc: Color::hex(0xf07a2a),
             font_px: 11.0,
         }
     }
@@ -97,6 +102,8 @@ impl Theme {
             "labelBackground" => &mut self.label_background,
             "drawing" => &mut self.drawing,
             "drawingSelected" => &mut self.drawing_selected,
+            "tpo" => &mut self.tpo,
+            "tpoPoc" => &mut self.tpo_poc,
             _ => return false,
         };
         *slot = color;

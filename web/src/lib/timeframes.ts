@@ -46,6 +46,14 @@ export const tfLabel = (tf: string): string => BY_VALUE.get(tf)?.label ?? tf;
 
 export const tfName = (tf: string): string => BY_VALUE.get(tf)?.name ?? tf;
 
+/** Is `a` longer than `b`? The list runs shortest first. */
+export const tfLonger = (a: string, b: string): boolean => TIMEFRAMES.findIndex((t) => t.value === a) > TIMEFRAMES.findIndex((t) => t.value === b);
+
+const APPROX_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000, M: 2_592_000_000 };
+
+/** Roughly how long one bar is; a month counts as thirty days. */
+export const tfMs = (tf: string): number => (Number.parseInt(tf, 10) || 1) * (APPROX_MS[tf.slice(-1)] ?? 60_000);
+
 /** One step shorter or longer, stopping at either end. */
 export function stepTimeframe(tf: string, delta: number): string {
   const i = TIMEFRAMES.findIndex((t) => t.value === tf);

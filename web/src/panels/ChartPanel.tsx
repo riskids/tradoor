@@ -5,18 +5,21 @@
  */
 import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { chartControllers, setOverlay } from '../app/ui';
-import { attachSlot, call, send } from '../engine/client';
+import { call, holdChart, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
-import { api, errorText, type Drawing } from '../lib/api';
+import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
 import { demoRate } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
 import { Icon, type IconName } from '../lib/icons';
 import { VenueTag } from '../lib/exchanges';
+import { liquidationVenues } from '../lib/liquidation-venues';
+import { zoneLabel } from '../lib/timezone';
+import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { symbolOf, venueLabel } from '../lib/markets';
-import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfName } from '../lib/timeframes';
-import type { ChartPanelState } from '../workspace/model';
-import { marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
+import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
+import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
+import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: '', icon: 'pointer', title: 'Select and pan — click a drawing to select it, then Delete to remove it' },
@@ -49,10 +52,10 @@ const TOOL_STEPS: Record<string, string> = {
 };
 
 const LAYERS = [
-  { id: 'ribbon', label: 'EMA 12/25 ribbon' },
-  { id: 'ema200', label: 'EMA 200' },
-  { id: 'volume', label: 'Volume' },
-  { id: 'liquidations', label: 'Liquidations' },
+  { id: 'ribbon', label: 'EMA 12/25 ribbon', candles: true },
+  { id: 'ema200', label: 'EMA 200', candles: true },
+  { id: 'volume', label: 'Volume', candles: true },
+  { id: 'liquidations', label: 'Liquidations', candles: false },
 ];
 
 const RANGES: { label: string; days: number | 'ytd' | null }[] = [
@@ -84,6 +87,10 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const id = props.panel.id;
   const market = () => marketOf(props.panel);
   const timeframe = () => timeframeOf(props.panel);
+  /** Profiles in place of candles: chosen, and a session longer than these bars. */
+  /** The TPO split drawn now: chosen, and longer than the candles it stacks. */
+  const split = () => (props.panel.tpo && tfLonger(props.panel.tpo, timeframe()) ? props.panel.tpo : null);
+  const tpoShown = () => split() !== null;
 
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
@@ -98,14 +105,17 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [drawError, setDrawError] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [tfMenu, setTfMenu] = createSignal<number | null>(null);
+  /** The TPO quick access menu, open at this x in the toolbar. */
+  const [tpoMenu, setTpoMenu] = createSignal<number | null>(null);
+  useDismiss(tpoMenu, () => setTpoMenu(null));
   useDismiss(menu, () => setMenu(null));
   useDismiss(tfMenu, () => setTfMenu(null));
 
   let box!: HTMLDivElement;
-  let glCanvas!: HTMLCanvasElement;
-  let textCanvas!: HTMLCanvasElement;
+  let tpoButton!: HTMLButtonElement;
 
-  const slot = attachSlot({
+  // The panel's canvases and engine slot outlive this mount: see holdChart.
+  const chart = holdChart(id, {
     cursor: setCursor,
     legend: setLegend,
     studies: setStudies,
@@ -113,7 +123,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     price: (p, precision) => setPrice({ price: p, precision }),
     event: (e) => onEvent(e),
   });
-  const sid = slot.id;
+  const sid = chart.id;
 
   const local = (e: MouseEvent) => {
     const r = box.getBoundingClientRect();
@@ -125,13 +135,20 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   };
 
   onMount(() => {
+    box.prepend(chart.gl, chart.text);
     const rect = box.getBoundingClientRect();
-    try {
-      const gl = glCanvas.transferControlToOffscreen();
-      const text = textCanvas.transferControlToOffscreen();
-      send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio }, [gl, text]);
-    } catch (e) {
-      setStatus((s) => ({ ...s, loading: false, error: `this browser cannot draw off the main thread (${errorText(e)})` }));
+    if (chart.created) {
+      send({ t: 'visible', id: sid, value: true });
+      send({ t: 'resize', id: sid, width: rect.width, height: rect.height, dpr: devicePixelRatio });
+    } else {
+      try {
+        const gl = chart.gl.transferControlToOffscreen();
+        const text = chart.text.transferControlToOffscreen();
+        send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio }, [gl, text]);
+        chart.created = true;
+      } catch (e) {
+        setStatus((s) => ({ ...s, loading: false, error: `this browser cannot draw off the main thread (${errorText(e)})` }));
+      }
     }
     const observer = new ResizeObserver(() => {
       const r = box.getBoundingClientRect();
@@ -156,15 +173,40 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       observer.disconnect();
       box.removeEventListener('wheel', onWheel);
       chartControllers.delete(id);
-      send({ t: 'destroy', id: sid });
-      slot.detach();
+      // A tab switched away keeps its chart; a closed panel frees it.
+      releaseChart(id, id in doc.panels);
     });
   });
 
-  createEffect(() => send({ t: 'market', id: sid, market: market(), timeframe: timeframe() }));
+  // The candles are the TPO brackets. A weekly split of 15-minute brackets is
+  // 672 a profile, so a TPO chart opens with enough for a run of profiles.
+  createEffect(() => {
+    const s = split();
+    const perProfile = s ? Math.round(tfMs(s) / tfMs(timeframe())) : 0;
+    send({ t: 'market', id: sid, market: market(), timeframe: timeframe(), bars: s ? Math.min(Math.max(perProfile * 8, 1_500), 6_000) : undefined });
+  });
+  // The liquidation feed follows this ticker on every exchange that lists it.
+  createEffect(() => {
+    const m = market();
+    let current = true;
+    onCleanup(() => {
+      current = false;
+    });
+    const post = (products: readonly Product[] | null) => {
+      if (current) send({ t: 'liquidationMarkets', id: sid, markets: liquidationVenues(m, products).flatMap((v) => (v.market ? [v.market] : [])) });
+    };
+    catalog().then(
+      (c) => post(c.products),
+      () => post(null),
+    );
+  });
   createEffect(() => send({ t: 'studies', id: sid, value: props.panel.studies }));
   createEffect(() => send({ t: 'hidden', id: sid, value: props.panel.hidden }));
   createEffect(() => send({ t: 'log', id: sid, value: props.panel.log }));
+  createEffect(() => send({ t: 'tpo', id: sid, value: split() ?? '' }));
+  createEffect(() => send({ t: 'tpoSettings', id: sid, value: serializeTpo(props.panel.tpoSettings) }));
+  const tpoSet = (key: string, value: string) => patchPanel(id, { tpoSettings: withTpoValue(props.panel.tpoSettings, key, value) });
+  const tpoOn = (key: string) => tpoValue(props.panel.tpoSettings, key) === '1';
   createEffect(() => send({ t: 'paneWeights', id: sid, value: props.panel.paneWeights }));
   createEffect(() => send({ t: 'tool', id: sid, value: tool() }));
   createEffect(() => send({ t: 'selected', id: sid, value: selected() }));
@@ -362,9 +404,86 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             <span class="dim">{studyCount()}</span>
           </Show>
         </button>
+        <span class="sep" />
+        <select title="Candles, or TPO profiles — the candles are the brackets, the split is how long a profile runs" onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value })}>
+          <option value="" selected={!split()}>
+            Candles
+          </option>
+          <For each={TPO_SPLITS.filter((s) => tfLonger(s.value, timeframe()))}>
+            {(s) => (
+              <option value={s.value} selected={split() === s.value}>
+                TPO · {s.label}
+              </option>
+            )}
+          </For>
+        </select>
+        <Show when={tpoShown()}>
+          <button
+            ref={tpoButton}
+            class="tb"
+            title="TPO quick settings"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setTpoMenu((v) => (v === null ? tpoButton.offsetLeft : null))}
+          >
+            <Icon name="chevron" size={11} />
+          </button>
+        </Show>
         <span class="spacer" />
         <LiveBadge market={market()} live={status().live} price={price()} />
       </div>
+
+      <Show when={tpoMenu()} keyed>
+        {(left) => (
+          <div class="menu" style={{ left: `${Math.max(0, Math.min(left - 170, box.clientWidth - 200))}px`, top: '25px', 'min-width': '220px' }} onPointerDown={(e) => e.stopPropagation()}>
+            {/* Exocharts' quick access menu, in its order; kept inside the panel. */}
+            <For
+              each={[
+                { value: 'mono', label: 'TPO Mono Color' },
+                { value: 'heatmap', label: 'TPO HeatMap' },
+                { value: 'candle', label: 'TPO Candle Up/Down' },
+              ]}
+            >
+              {(mode) => (
+                <button classList={{ cur: tpoValue(props.panel.tpoSettings, 'colorMode') === mode.value }} onClick={() => tpoSet('colorMode', mode.value)}>
+                  {mode.label}
+                </button>
+              )}
+            </For>
+            <hr />
+            <For
+              each={[
+                { key: 'expand', label: 'Expand clusters' },
+                { key: 'letters', label: 'Show TPO letters' },
+                { key: 'ib', label: 'Initial balance' },
+                { key: 'sellTail', label: 'Sell tail' },
+                { key: 'buyTail', label: 'Buy tail' },
+                { key: 'singlePrints', label: 'Single prints' },
+                { key: 'pocRay', label: 'POC ray' },
+              ]}
+            >
+              {(item) => (
+                <button onClick={() => tpoSet(item.key, tpoOn(item.key) ? '0' : '1')}>
+                  {item.label}
+                  <span class={tpoOn(item.key) ? 'bull' : 'dim'}>{tpoOn(item.key) ? 'on' : 'off'}</span>
+                </button>
+              )}
+            </For>
+            <button onClick={() => tpoSet('fading', tpoValue(props.panel.tpoSettings, 'fading') === 'off' ? 'time' : 'off')}>
+              Add cluster fading
+              <span class={tpoValue(props.panel.tpoSettings, 'fading') !== 'off' ? 'bull' : 'dim'}>{tpoValue(props.panel.tpoSettings, 'fading') !== 'off' ? 'on' : 'off'}</span>
+            </button>
+            <hr />
+            <button
+              onClick={() => {
+                setTpoMenu(null);
+                setOverlay({ kind: 'tpoSettings', panelId: id });
+              }}
+            >
+              TPO settings…
+            </button>
+          </div>
+        )}
+      </Show>
 
       <Show when={tfMenu()} keyed>
         {(left) => (
@@ -450,8 +569,6 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 120)) });
           }}
         >
-          <canvas ref={glCanvas} />
-          <canvas ref={textCanvas} />
           <Show when={tool() !== '' || selected() !== null || drawError()}>
             <div class="hint">
               {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · Delete removes it, esc deselects' : ''}
@@ -462,7 +579,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             <div class="line">
               <span class="title">{symbolOf(market())}</span>
               <span class="dim">
-                {tfLabel(timeframe())} · {venueLabel(market())}
+                {tfLabel(timeframe())}
+                {split() ? ` · TPO split by ${TPO_SPLITS.find((t) => t.value === split())?.label.toLowerCase()}` : ''} · {venueLabel(market())}
               </span>
               <Show when={legend()}>
                 {(l) => (
@@ -476,7 +594,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                 )}
               </Show>
             </div>
-            <For each={LAYERS}>{(layer) => <LayerRow label={layer.label} off={hidden().has(layer.id)} onToggle={() => toggleLayer(layer.id)} />}</For>
+            <For each={LAYERS.filter((layer) => !(tpoShown() && layer.candles))}>{(layer) => <LayerRow label={layer.label} off={hidden().has(layer.id)} onToggle={() => toggleLayer(layer.id)} />}</For>
             <For each={studies()}>
               {(s) => (
                 <LayerRow
@@ -555,7 +673,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <Show when={status().error}>{(err) => <span class="warn" title={err()}>▲ {err()} · </span>}</Show>
         <span class="dim num" title={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : 'Candles from the exchange; this market is not archived here'}>
           {status().loading ? 'loading… · ' : ''}
-          {status().bars.toLocaleString('en-US')} bars{status().source ? ` · ${status().source}` : ''} · UTC
+          {status().bars.toLocaleString('en-US')} bars{status().source ? ` · ${status().source}` : ''} · {zoneLabel()}
         </span>
         <span class="sep" />
         <button

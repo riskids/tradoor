@@ -10,7 +10,6 @@ import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
 import { LiquidationsPanel } from '../panels/LiquidationsPanel';
-import { TpoPanel } from '../panels/TpoPanel';
 import { ValuesPanel } from '../panels/ValuesPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
 import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
@@ -22,7 +21,8 @@ const MIN_CELL = 90;
 export function panelTitle(p: Panel): string {
   if (p.type === 'watchlist') return 'Watchlist';
   const label = `${symbolOf(marketOf(p))} ${tfLabel(timeframeOf(p))}`;
-  return p.type === 'chart' ? label : `${PANEL_TITLE[p.type]} · ${label}`;
+  if (p.type === 'chart') return p.tpo ? `TPO · ${label}` : label;
+  return `${PANEL_TITLE[p.type]} · ${label}`;
 }
 
 export function Layout() {
@@ -280,8 +280,6 @@ function PanelView(props: { panel: Panel }) {
       return <ChartPanel panel={p} />;
     case 'watchlist':
       return <WatchlistPanel panel={p} />;
-    case 'tpo':
-      return <TpoPanel panel={p} />;
     case 'values':
       return <ValuesPanel panel={p} />;
     case 'liquidations':

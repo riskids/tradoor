@@ -69,6 +69,8 @@ pub struct IconCmd {
     pub y: f32,
     pub size: f32,
     pub alpha: u8,
+    /// Which mark: the platform numbers them, the engine only passes it on.
+    pub mark: u8,
     pub clip: Option<Rect>,
 }
 
@@ -239,11 +241,11 @@ impl Frame {
         self.texts.push(TextCmd { x, y, text: text.into(), color, align, baseline, size, background, clip });
     }
 
-    pub fn icon(&mut self, x: f32, y: f32, size: f32, alpha: u8, clip: Option<Rect>) {
+    pub fn icon(&mut self, x: f32, y: f32, size: f32, alpha: u8, mark: u8, clip: Option<Rect>) {
         if alpha == 0 || size <= 0.0 {
             return;
         }
-        self.icons.push(IconCmd { x, y, size, alpha, clip });
+        self.icons.push(IconCmd { x, y, size, alpha, mark, clip });
     }
 }
 

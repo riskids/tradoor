@@ -2,6 +2,7 @@ import { createSignal, For, Show } from 'solid-js';
 import { API_TOKEN_PREF } from '../lib/api';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { readPref, writePref } from '../lib/prefs';
+import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
 
@@ -26,6 +27,20 @@ function Swatch(props: { name: string; label: string; fallback: string }) {
       </Show>
     </label>
   );
+}
+
+/** Local first — the default — then UTC, then every named zone with its offset now. */
+function zoneChoices(): { value: string; label: string }[] {
+  const now = Date.now();
+  const named = (typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [])
+    .filter((z) => z !== 'UTC')
+    .map((z) => ({ zone: z, offset: offsetMinutes(z, now) }))
+    .sort((a, b) => a.offset - b.offset || a.zone.localeCompare(b.zone));
+  return [
+    { value: LOCAL_ZONE, label: `Local — ${deviceZone()} (${offsetLabel(offsetMinutes(LOCAL_ZONE, now))})` },
+    { value: 'UTC', label: 'UTC' },
+    ...named.map((z) => ({ value: z.zone, label: `${z.zone.replaceAll('_', ' ')} (${offsetLabel(z.offset)})` })),
+  ];
 }
 
 export function Settings(props: { onClose(): void }) {
@@ -63,6 +78,24 @@ export function Settings(props: { onClose(): void }) {
                 if (name) update((d) => void (d.name = name));
               }}
             />
+          </label>
+
+          <h3 class="caps">Time</h3>
+          <label class="swatch">
+            <span class="name">Time zone</span>
+            <select
+              class="box wide"
+              title="Every time on the page — axis, crosshair, tape, clock. Daily and longer candles keep their exchange (UTC) dates."
+              onChange={(e) => setThemeValue(TIME_ZONE_KEY, e.currentTarget.value === LOCAL_ZONE ? null : e.currentTarget.value)}
+            >
+              <For each={zoneChoices()}>
+                {(z) => (
+                  <option value={z.value} selected={timeZone() === z.value}>
+                    {z.label}
+                  </option>
+                )}
+              </For>
+            </select>
           </label>
 
           <h3 class="caps">Chart colours</h3>

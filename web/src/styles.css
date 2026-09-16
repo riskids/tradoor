@@ -151,6 +151,9 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .btn.on { background: var(--primary); border-color: var(--primary); color: var(--bg); }
 .btn.danger:hover:not(:disabled) { border-color: var(--bear); color: var(--bear); }
 .form { padding: 8px; overflow-y: auto; }
+.tabs-row { display: flex; flex-wrap: wrap; gap: 1px; padding: 3px 6px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.tpo-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px 16px; }
+.tpo-fields .swatch .name { flex: 1; }
 .form h3 { margin: 10px 0 6px; font-weight: 400; }
 .form h3:first-child { margin-top: 0; }
 .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; }
@@ -244,5 +247,33 @@ table.tape td:first-child, table.tape td:nth-child(2) { font-size: 11px; letter-
 table.tape td:nth-child(2) { display: flex; align-items: center; gap: 5px; font-size: 9px; letter-spacing: 0.1em; }
 table.tape td:nth-child(3), table.tape td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 table.tape tr.big td { font-weight: 700; background: color-mix(in oklab, currentColor 8%, transparent); }
+
+/* The server's day of liquidations, in four windows. */
+.liq-totals { flex: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.liq-totals .win { display: flex; flex-direction: column; gap: 1px; min-width: 0; padding: 4px 6px 5px; border-left: 1px solid var(--border); font-size: 10px; white-space: nowrap; overflow: hidden; }
+.liq-totals .win:first-child { border-left: 0; }
+.liq-totals .caps { font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
+.liq-totals .sum { font-size: 13px; font-weight: 700; color: var(--text); }
+.liq-totals .split { display: block; height: 2px; margin-top: 3px; background: var(--bull); }
+.liq-totals .split .long { display: block; height: 100%; background: var(--bear); }
+
+/* Each exchange behind the tape and whether its socket is up: logos in the
+   toolbar, the table on hover. */
+.liq { position: relative; }
+.liq-venues { gap: 3px; }
+.liq-venues > span { display: inline-flex; }
+.liq-venues > span.down { opacity: 0.35; filter: grayscale(1); }
+.liq-venues-pop { position: absolute; top: 26px; left: 4px; right: 4px; z-index: 30; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 28px #000a; }
+table.venues { flex: none; }
+table.venues td:first-child { display: flex; align-items: center; gap: 6px; }
+table.venues td:nth-child(2) { display: table-cell; text-align: left; }
+table.venues td:last-child { text-align: right; white-space: nowrap; }
+table.venues thead th:nth-child(2) { text-align: left; }
+table.venues tr.off td { color: var(--dim); }
+.conn { font-size: 9px; letter-spacing: 0.12em; line-height: 14px; padding: 0 5px; text-transform: uppercase; border: 1px solid color-mix(in oklab, currentColor 45%, transparent); background: color-mix(in oklab, currentColor 10%, transparent); color: var(--dim); }
+.conn.live { color: var(--bull); }
+.conn.connecting { color: var(--warn); }
+.conn.stalled, .conn.retrying { color: var(--bear); }
+.conn.unlisted { border-style: dashed; }
 .subhead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 12px; padding: 3px 8px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .note { padding: 5px 8px; font-size: 10px; line-height: 1.5; color: var(--dim); }

@@ -71,13 +71,13 @@ impl ChartEngine {
     }
 
     /// One liquidation to ping beside the candles: `at` is when it reached us.
-    pub fn push_liquidation(&mut self, time: f64, price: f64, usd: f64, long: bool, at: f64) {
-        self.chart.push_liquidation(time, price, usd, long, at as i64);
+    pub fn push_liquidation(&mut self, usd: f64, long: bool, mark: u8, at: f64) {
+        self.chart.push_liquidation(usd, long, mark, at as i64);
     }
 
-    /// The venue's mark, drawn beside each liquidation ping.
-    pub fn set_logo(&mut self, box_size: f32, spec: &str) {
-        self.text.set_mark(box_size, spec);
+    /// Exchange `index`'s mark, drawn on the feed rows of hits from there.
+    pub fn set_mark(&mut self, index: u8, box_size: f32, spec: &str) {
+        self.text.set_mark(index, box_size, spec);
         self.chart.touch();
     }
 
@@ -91,6 +91,21 @@ impl ChartEngine {
 
     pub fn set_hidden(&mut self, raw: &str) {
         self.chart.set_hidden(raw);
+    }
+
+    /// TPO options as `key=value;key=value`, named as Exocharts names them.
+    pub fn set_tpo_settings(&mut self, raw: &str) {
+        self.chart.set_tpo_settings(raw);
+    }
+
+    /// The reader's time zone, as minutes east of UTC.
+    pub fn set_utc_offset(&mut self, minutes: i32) {
+        self.chart.set_utc_offset(minutes);
+    }
+
+    /// `1d`, `1w` or `1M` draws that session as TPO profiles; empty, candles.
+    pub fn set_tpo(&mut self, raw: &str) {
+        self.chart.set_tpo(raw);
     }
 
     pub fn set_log_scale(&mut self, log: bool) {
@@ -454,51 +469,6 @@ pub fn profile_spec(tf: &str) -> Result<JsValue, JsValue> {
             o.into()
         }
     })
-}
-
-/// TPO sessions from candles at the profile's source interval.
-#[wasm_bindgen]
-pub fn tpo(tf: &str, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], max_sessions: u32) -> Result<JsValue, JsValue> {
-    let Some(spec) = profile_spec_for(timeframe(tf)?) else { return Ok(JsValue::NULL) };
-    let data = tradoor_core::chart::compute_tpo(&candles(time, open, high, low, close, volume), spec, max_sessions as usize);
-    let o = obj();
-    set(&o, "session", spec.session.as_str());
-    set(&o, "from", spec.from.as_str());
-    set(&o, "rowSize", data.row_size);
-    set(&o, "gridLow", data.grid_low);
-    set(&o, "reason", data.reason.map_or(JsValue::NULL, JsValue::from));
-    let sessions: Array = data
-        .sessions
-        .iter()
-        .map(|s| {
-            let so = obj();
-            set(&so, "start", s.session_start as f64);
-            set(&so, "end", s.session_end as f64);
-            set(&so, "periods", s.periods.len() as u32);
-            set(&so, "high", s.high);
-            set(&so, "low", s.low);
-            set(&so, "poc", s.poc);
-            set(&so, "vah", s.vah);
-            set(&so, "val", s.val);
-            let singles: Array = s.single_prints.iter().map(|i| JsValue::from_f64(*i as f64)).collect();
-            set(&so, "singlePrints", singles);
-            set(&so, "ib", s.initial_balance.map_or(JsValue::NULL, |(h, l)| Array::of2(&h.into(), &l.into()).into()));
-            let rows: Array = s
-                .rows
-                .iter()
-                .map(|r| {
-                    let ro = obj();
-                    set(&ro, "index", r.index as f64);
-                    set(&ro, "periods", js_sys::Uint32Array::from(r.periods.iter().map(|p| *p as u32).collect::<Vec<_>>().as_slice()));
-                    JsValue::from(ro)
-                })
-                .collect();
-            set(&so, "rows", rows);
-            JsValue::from(so)
-        })
-        .collect();
-    set(&o, "sessions", sessions);
-    Ok(o.into())
 }
 
 /// Indicator values on the last closed bar, and the prior session's profile

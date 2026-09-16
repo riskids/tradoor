@@ -143,3 +143,35 @@ test('one unknown Bybit symbol does not take the rest of the frame with it', asy
   socket.onmessage?.({ data: JSON.stringify({ success: false, ret_msg: 'error:handler not found,topic:allLiquidation.BTCUSDT', req_id: 'allLiquidation.BTCUSDT', op: 'subscribe' }) });
   assertEquals(socket.sent.length, 2, 'a frame of one is not retried');
 });
+
+test('a socket of liquidations only is live on the exchange\'s answer, not on a hit', async () => {
+  const states: string[] = [];
+  FakeSocket.opened = [];
+  (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeSocket;
+  const stop = new StreamHub().subscribe('binance-perp', { kind: 'liquidations', symbol: 'BTCUSDT' }, { message: () => {}, state: (st) => states.push(st) });
+  await tick();
+  const socket = FakeSocket.opened.at(-1);
+  assert(socket, 'the hub opened no socket');
+
+  // BTCUSDT may go minutes without a liquidation; the subscribe answer is enough.
+  socket.onmessage?.({ data: JSON.stringify({ result: null, id: 1 }) });
+  assertEquals(states.at(-1), 'live', 'answered, so connected');
+  stop();
+});
+
+test('a candle socket still needs data before it counts as live', async () => {
+  const states: string[] = [];
+  FakeSocket.opened = [];
+  (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeSocket;
+  const stop = new StreamHub().subscribe('binance-perp', { kind: 'kline', symbol: 'BTCUSDT', interval: '1m' }, { message: () => {}, state: (st) => states.push(st) });
+  await tick();
+  const socket = FakeSocket.opened.at(-1);
+  assert(socket, 'the hub opened no socket');
+
+  // Some networks answer the handshake and the subscribe, then push nothing.
+  socket.onmessage?.({ data: JSON.stringify({ result: null, id: 1 }) });
+  assert(!states.includes('live'), 'an answer alone does not make candles live');
+  socket.onmessage?.({ data: JSON.stringify({ e: 'kline', s: 'BTCUSDT', k: { t: 1, i: '1m', o: '1', h: '1', l: '1', c: '1', v: '1', L: 1, x: false } }) });
+  assertEquals(states.at(-1), 'live', 'the first candle does');
+  stop();
+});

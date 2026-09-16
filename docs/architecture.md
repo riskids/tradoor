@@ -32,25 +32,36 @@ page never drops a frame of the chart.
 4. The kline stream (plus aggregate trades on Binance) feeds `LiveFeedEngine`,
    which never lets a stale kline rewind trades already folded. When the bar
    rolls over, the finished bar is kept as closed until REST confirms it.
-5. On a perpetual the venue's liquidation stream is subscribed too. Each hit is
-   pushed into the engine at the price it filled at and joins a feed above the
-   volume: the newest lands at the foot, pushes the stack up as it arrives, and
-   fades out five seconds later. A row carries the venue's mark and what the hit
-   cost. Nothing is stored — the Liquidations panel keeps its own tape of the
-   same stream in the tab, and a reload starts it empty.
-6. `ChartEngine` (tradoor-render) turns candles, studies, drawings and the view
+5. Liquidations follow the ticker, not the venue: the page matches the chart's
+   coin and quote against the catalogue on every perpetual exchange — Binance's
+   `1000SHIBUSDT` is Bybit's `SHIB1000USDT` — and the worker subscribes to each.
+   Every hit joins a feed at the foot of the price pane: the newest lands at the
+   bottom, pushes the stack up, and fades out five seconds later, marked with its
+   exchange's logo, side and size. The Liquidations panel keeps a tape of the
+   same streams for the page — switching tabs keeps it, a reload does not — with
+   each exchange's connection beside it.
+6. For a few tickers (`TRADOOR_LIQUIDATIONS`, BTCUSDT, ETHUSDT and SOLUSDT by
+   default) the server holds its own socket to every perpetual exchange, writes
+   each hit to the `liquidation` table in one-second batches and deletes rows
+   older than 24 hours every minute. `GET /api/liquidations/{ticker}` sums the
+   last 1H, 4H, 12H and 24H across exchanges and returns the latest hits, which
+   seed the panel's tape. A day of three tickers is at most a few hundred
+   thousand rows, on a crash day.
+7. `ChartEngine` (tradoor-render) turns candles, studies, drawings and the view
    into a `Frame`: one vertex buffer of triangles in draw order with clip
    batches, and a list of text commands. The worker uploads it in two buffer
    writes and replays the text on the 2D canvas. Nothing is drawn unless
    something changed or the countdown needs its next second.
-7. Panning near the oldest bar held emits `needHistory`; the series loads the
+8. Panning near the oldest bar held emits `needHistory`; the series loads the
    next older partition, or pages REST back, and every chart on it refolds.
 
 Series nobody reads are dropped after two minutes, so a deep 1-minute history
 does not outlive its chart.
 
 Every chart and watchlist row shares one socket per venue, each topic subscribed
-once and reference counted. Bybit refuses a whole subscribe frame when one topic
+once and reference counted. A socket that carries only liquidations is live as
+soon as the exchange answers it: those topics are silent until someone is closed
+out, and treating that silence as a stall would reconnect it forever. Bybit refuses a whole subscribe frame when one topic
 in it is unknown — `error:handler not found` — so a refused frame drops the topic
 it names and re-sends the rest one at a time, and the named topic is not tried
 again on that socket.
@@ -100,7 +111,37 @@ instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
-Panels: chart, watchlist, TPO, and indicator values.
+Panels: chart, watchlist, indicator values and liquidations. TPO is a way of
+drawing a chart rather than a panel of its own: each candle of the chosen
+timeframe becomes a profile. The chart loads a smaller timeframe for its
+brackets — 1m under 15m, 5m under 4h, 30m under a day or a week — and the engine
+stacks them into their candle's profile, pushed left against the candle's open
+on the same time and price axes, so drawings, zoom and the crosshair work on it
+as on candles. Rows are one grid across profiles; blocks share one width, the
+widest that keeps the fullest profile inside its own candle, so profiles
+compare by size.
+
+TPO options follow Exocharts' settings — Main, Colors, POC & VA, IB & Stats,
+Single prints & Tails — under its names and defaults. A chart stores only what
+differs from the defaults, and the engine is sent them as `key=value;…`.
+Everything a profile is read by is built once per bar change in
+`tradoor-render::tpo`: rows, volume per row (a bracket's volume spread over the
+rows it spans), value area by time or volume, initial balance over the first N
+brackets, single prints and tails as runs of one-bracket rows, and for each level
+the first later bar that traded back to it, which is where a naked level ends.
+Delta colouring and overlays are not offered: candles carry no taker side.
+
+Times are written in the reader's zone — their device's by default, or UTC or any
+named zone from Settings, kept with the workspace. The page resolves the zone to
+an offset (again every minute, for daylight saving) and the engine shifts
+intraday axis and crosshair labels by it; daily and longer bars keep their
+exchange's UTC dates, as a daily candle is a UTC day.
+
+A chart panel's canvases and engine slot live as long as the panel, not as long
+as its tab is shown: a browser allows a page about sixteen WebGL contexts and
+frees a dropped one lazily, so a context per mount blanks charts after a few tab
+switches. A hidden chart is not drawn but keeps its bars and streams, and shows
+again at once.
 
 ## Why these choices
 

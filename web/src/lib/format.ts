@@ -73,16 +73,3 @@ export function formatAge(ms: number, now: number = Date.now()): string {
   const months = Math.floor(days / 30);
   return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`;
 }
-
-const pad = (n: number): string => String(n).padStart(2, '0');
-
-/** Candles are stored and drawn in UTC, so times are shown in UTC too. */
-export function formatUtc(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
-}
-
-export function formatClock(ms: number): string {
-  const d = new Date(ms);
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-}

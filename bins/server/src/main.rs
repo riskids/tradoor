@@ -9,6 +9,7 @@ mod api;
 mod catalog;
 mod drawings;
 mod import;
+mod liquidations;
 mod workspaces;
 
 use std::net::SocketAddr;
@@ -39,6 +40,10 @@ struct Cli {
     api_token: Option<String>,
     #[arg(long, env = "BINANCE_SPOT_REST", default_value = binance::SPOT_REST)]
     binance_spot_rest: String,
+    /// Tickers whose liquidations are kept for 24 hours, gathered from every
+    /// perpetual exchange. An empty list turns the collection off.
+    #[arg(long, env = "TRADOOR_LIQUIDATIONS", default_value = "BTCUSDT,ETHUSDT,SOLUSDT", value_delimiter = ',')]
+    liquidations: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -67,7 +72,12 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve) {
         Command::ImportDrawings { file } => import::run(&pool, &file).await,
         Command::Serve => {
+            let tickers: Vec<String> = cli.liquidations.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+            if let Some(bad) = tickers.iter().find(|t| !liquidations::is_ticker(t)) {
+                anyhow::bail!("TRADOOR_LIQUIDATIONS: {bad:?} is not a ticker — write them like BTCUSDT,ETHUSDT");
+            }
             let state = api::AppState {
+                liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers)),
                 pool,
                 data: DataDir::new(&cli.data_dir),
                 catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone())?),

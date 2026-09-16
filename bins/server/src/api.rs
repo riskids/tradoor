@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch};
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde_json::json;
 use tower_http::compression::CompressionLayer;
@@ -14,7 +14,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{catalog::Catalog, drawings, workspaces};
+use crate::{catalog::Catalog, drawings, liquidations, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,6 +22,8 @@ pub struct AppState {
     pub data: DataDir,
     pub catalog: Arc<Catalog>,
     pub api_token: Option<String>,
+    /// Absent when no ticker's liquidations are being kept.
+    pub liquidations: Option<Arc<liquidations::Collector>>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -69,6 +71,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/drawings", get(drawings::list).post(drawings::create).delete(drawings::clear))
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
+        .route("/liquidations/{ticker}", get(liquidations::stats))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(CompressionLayer::new())
         .with_state(state);

@@ -4,6 +4,7 @@ import { createSignal } from 'solid-js';
 export type Overlay =
   | { kind: 'symbol'; panelId: string | null; initial: string }
   | { kind: 'indicators'; panelId: string }
+  | { kind: 'tpoSettings'; panelId: string }
   | { kind: 'palette' }
   | { kind: 'settings' }
   | { kind: 'help' }

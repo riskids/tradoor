@@ -55,8 +55,11 @@ export const MARKS: Partial<Record<ExchangeId, ExchangeMark>> = {
   },
 };
 
-/** The mark for `binance-perp`, `bybit-spot` and the like. */
-export const markOfVenue = (venue: string): ExchangeMark | undefined => MARKS[venue.split('-')[0] as ExchangeId];
+/** The order the engine numbers marks in: a liquidation names its exchange by index. */
+export const MARK_ORDER = Object.keys(MARKS) as ExchangeId[];
+
+/** The engine's number for the exchange behind `binance-perp` and the like. */
+export const markIndex = (venue: string): number => Math.max(0, MARK_ORDER.indexOf(venue.split('-')[0] as ExchangeId));
 
 /**
  * The mark as the engine takes it: one path a line, `tx|ty|scale|fill|d`.

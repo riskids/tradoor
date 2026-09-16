@@ -9,7 +9,7 @@ first.
 | Chart engine | Rust compiled to WebAssembly (115 KB gzip after wasm-opt), run in a Web Worker. Candles are drawn with WebGL2 on an OffscreenCanvas and text on a 2D layer, so the page thread never touches a candle. |
 | History | Immutable columnar partition files, about 16 bytes per 1-minute bar: five years of BTCUSDT perpetual minutes is 42 MB. Served from disk or a CDN and cached by the browser for a year. |
 | Live | Exchange WebSockets straight to the browser: trades folded into the forming bar between kline updates, and liquidations feeding a ticker above the volume and a tape of their own as they land. |
-| Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces. |
+| Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, and a day of liquidations for a few tickers. |
 | Database | PostgreSQL 18, for metadata only. Candles never enter it. |
 | UI | SolidJS (35 KB gzip): splits, tabs, docking by drag, link groups, command palette, theme. |
 

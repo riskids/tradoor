@@ -2,7 +2,7 @@
 
 use tradoor_render::Frame;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{OffscreenCanvas, WebGl2RenderingContext as GL, WebGlBuffer, WebGlProgram, WebGlShader, WebGlUniformLocation, WebGlVertexArrayObject};
+use web_sys::{OffscreenCanvas, WebGl2RenderingContext as GL, WebGlBuffer, WebGlProgram, WebGlShader, WebGlUniformLocation, WebGlVertexArrayObject, WebglLoseContext};
 
 const VERTEX: &str = "#version 300 es
 layout(location = 0) in vec2 a_pos;
@@ -30,6 +30,18 @@ pub struct Gl {
     colors: WebGlBuffer,
     u_size: Option<WebGlUniformLocation>,
     capacity: usize,
+}
+
+/// A browser allows a page about sixteen live WebGL contexts and quietly kills the
+/// oldest past that. A context otherwise lives until the collector finds its
+/// canvas, long after its chart is gone — so a few tab switches blank a chart.
+/// Giving it back the moment the chart goes keeps the count to the charts shown.
+impl Drop for Gl {
+    fn drop(&mut self) {
+        if let Ok(Some(ext)) = self.gl.get_extension("WEBGL_lose_context") {
+            ext.unchecked_into::<WebglLoseContext>().lose_context();
+        }
+    }
 }
 
 fn compile(gl: &GL, kind: u32, source: &str) -> Result<WebGlShader, JsValue> {

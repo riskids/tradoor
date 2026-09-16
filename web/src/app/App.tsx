@@ -2,21 +2,19 @@
  * The shell: a command bar, the workspace, a status line, and the dialogs.
  * Keyboard shortcuts go to the focused panel.
  */
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createSignal, For, lazy, onCleanup, onMount, Show } from 'solid-js';
 import { CommandPalette, type Command } from '../components/CommandPalette';
-import { Help } from '../components/Help';
 import { IndicatorPicker } from '../components/IndicatorPicker';
 import { NoteInput } from '../components/NoteInput';
-import { Settings } from '../components/Settings';
 import { SymbolSearch } from '../components/SymbolSearch';
 import { onEngineFailure, send } from '../engine/client';
 import { api } from '../lib/api';
-import { formatClock } from '../lib/format';
+import { deviceZone, formatClock, LOCAL_ZONE, offsetMinutes, timeZone, zoneLabel } from '../lib/timezone';
 import { Icon } from '../lib/icons';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { Layout, panelTitle } from '../workspace/Layout';
-import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, type DropZone, type PanelType } from '../workspace/model';
+import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type PanelType } from '../workspace/model';
 import {
   doc,
   focusedPanel,
@@ -34,6 +32,11 @@ import {
   update,
 } from '../workspace/store';
 import { chartControllers, closeOverlay, isTypingTarget, overlay, setOverlay } from './ui';
+
+// Dialogs opened now and then load when first opened: nobody needs them to see a chart.
+const Help = lazy(() => import('../components/Help').then((m) => ({ default: m.Help })));
+const Settings = lazy(() => import('../components/Settings').then((m) => ({ default: m.Settings })));
+const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
 
 const splitList = (s: string): string[] => s.split(',').filter(Boolean);
 
@@ -69,6 +72,9 @@ function commands(): Command[] {
       { group: 'Chart', label: chart.log ? 'Linear price scale' : 'Logarithmic price scale', run: () => patchPanel(chart.id, { log: !chart.log }) },
       { group: 'Chart', label: 'Reset chart view', run: () => chartControllers.get(chart.id)?.resetView() },
       { group: 'Chart', label: 'Show all loaded history', run: () => chartControllers.get(chart.id)?.showRange(null) },
+      { group: 'Chart style', label: 'Candles', run: () => patchPanel(chart.id, { tpo: '' }) },
+      { group: 'Chart style', label: 'TPO settings…', run: () => setOverlay({ kind: 'tpoSettings', panelId: chart.id }) },
+      ...TPO_SPLITS.map((split) => ({ group: 'Chart style', label: `TPO — split by ${split.label.toLowerCase()}`, run: () => patchPanel(chart.id, { tpo: split.value }) })),
     );
   }
   const zones: [DropZone, string][] = [
@@ -135,6 +141,14 @@ function onKeyDown(e: KeyboardEvent): void {
 
 function applyTheme(): void {
   for (const t of CHART_THEME) createEffect(() => send({ t: 'theme', key: t.name, value: doc.theme[t.name] ?? t.value }));
+  // The zone's offset, again every minute: daylight saving moves it under a running page.
+  createEffect(() => {
+    const zone = timeZone();
+    const push = () => send({ t: 'timeZone', offsetMinutes: offsetMinutes(zone) });
+    push();
+    const timer = setInterval(push, 60_000);
+    onCleanup(() => clearInterval(timer));
+  });
   createEffect(() => send({ t: 'theme', key: FONT_PX.name, value: doc.theme[FONT_PX.name] ?? FONT_PX.value }));
   for (const t of UI_THEME) {
     createEffect(() => {
@@ -181,8 +195,8 @@ function Clock() {
   const timer = setInterval(() => setNow(Date.now()), 1000);
   onCleanup(() => clearInterval(timer));
   return (
-    <span class="item num" title="Candles are stored and drawn in UTC">
-      <span class="dim">UTC</span>
+    <span class="item num" title={`Times are shown in ${timeZone() === LOCAL_ZONE ? `your local time (${deviceZone()})` : timeZone()} — change it in Settings`}>
+      <span class="dim">{zoneLabel()}</span>
       {formatClock(now())}
     </span>
   );
@@ -255,6 +269,10 @@ function Overlays() {
                 }}
               />
             );
+          }
+          case 'tpoSettings': {
+            const panel = doc.panels[o.panelId];
+            return panel?.type === 'chart' ? <TpoSettings panel={panel} onClose={closeOverlay} /> : null;
           }
           case 'palette':
             return <CommandPalette commands={commands()} onClose={closeOverlay} />;

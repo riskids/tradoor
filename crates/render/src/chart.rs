@@ -13,7 +13,8 @@ use crate::color::Color;
 use crate::drawings::{self, Anchor, DrawingKind, DrawingShape, Placed, FIB_LEVELS, MAX_POINTS};
 use crate::geometry::{distance_to_drawing, logical_to_time, ribbon_runs, time_to_logical, visible_slice, RibbonRun};
 use crate::paint::{Align, Baseline, Frame, Rect};
-use crate::scale::{PriceScale, ScaleMode, TimeScale};
+use crate::scale::{PriceScale, ScaleMode, TimeScale, MIN_BAR_SPACING};
+use crate::tpo;
 use crate::theme::Theme;
 use crate::ticks;
 
@@ -169,14 +170,21 @@ enum Zone {
 /// A position closed out by the exchange, drawn as a ping beside the candles.
 #[derive(Clone, Copy, Debug)]
 struct Liquidation {
-    time: f64,
-    price: f64,
     usd: f64,
     /// A long was liquidated — someone was sold out of the market.
     long: bool,
+    /// Which exchange's mark the row carries, as the text layer numbers them.
+    mark: u8,
     /// When it reached us, for the fade.
     at: i64,
 }
+
+/// Sessions a TPO chart opens on — the current one and the ones before it, to
+/// be read against one another.
+const TPO_OPENING_SESSIONS: usize = 8;
+/// A TPO chart zooms out much further than candles: a week of 15-minute
+/// brackets is 672 bars, and a profile is read by its shape, not its bars.
+const TPO_MIN_SPACING: f64 = 0.05;
 
 #[derive(Clone, Copy, Debug)]
 struct Bar {
@@ -200,6 +208,12 @@ pub struct Chart {
     times: Vec<f64>,
     live: Option<LiveBar>,
     liquidations: Vec<Liquidation>,
+    /// Added to a time before it is written on the axis: the reader's time zone.
+    utc_offset: i64,
+    /// `Some(split)` draws TPO profiles, split by it, in place of candles.
+    tpo: Option<ChartTimeframe>,
+    tpo_settings: tpo::Settings,
+    tpo_profiles: Option<tpo::Profiles>,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -242,6 +256,10 @@ impl Chart {
             times: Vec::new(),
             live: None,
             liquidations: Vec::new(),
+            utc_offset: 0,
+            tpo: None,
+            tpo_settings: tpo::Settings::default(),
+            tpo_profiles: None,
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -365,15 +383,18 @@ impl Chart {
     }
 
     /// One liquidation, to ping beside the candles until it fades.
-    pub fn push_liquidation(&mut self, time: f64, price: f64, usd: f64, long: bool, at: i64) {
-        if !(time.is_finite() && price.is_finite() && usd.is_finite()) {
+    /// A hit for the feed: what it cost, which side was closed out, and which
+    /// exchange it happened on. Where and when it traded do not place it — the
+    /// feed stacks hits in the order they arrive.
+    pub fn push_liquidation(&mut self, usd: f64, long: bool, mark: u8, at: i64) {
+        if !(usd.is_finite() && usd > 0.0) {
             return;
         }
         self.liquidations.retain(|l| at - l.at < LIQUIDATION_TTL);
         if self.liquidations.len() >= MAX_LIQUIDATIONS {
             self.liquidations.remove(0);
         }
-        self.liquidations.push(Liquidation { time, price, usd, long, at });
+        self.liquidations.push(Liquidation { usd, long, mark, at });
         self.touch();
     }
 
@@ -396,6 +417,51 @@ impl Chart {
     pub fn set_hidden(&mut self, raw: &str) {
         self.hidden = raw.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
         self.touch();
+    }
+
+    /// The reader's time zone, as minutes east of UTC. Only intraday times move:
+    /// a daily bar is the exchange's UTC day, and naming it by a local date would
+    /// put it on the wrong day for half the world.
+    pub fn set_utc_offset(&mut self, minutes: i32) {
+        let offset = i64::from(minutes.clamp(-14 * 60, 14 * 60)) * 60_000;
+        if offset != self.utc_offset {
+            self.utc_offset = offset;
+            self.touch();
+        }
+    }
+
+    /// `t` as the axis writes it.
+    fn shown_time(&self, t: i64) -> i64 {
+        if self.timeframe.source().interval.ms().is_some_and(|ms| ms < DAY) { t + self.utc_offset } else { t }
+    }
+
+    /// Draws each `raw` session — `1d`, `1w`, `1M` — as a TPO profile of the
+    /// chart's own bars in place of candles; empty draws candles again. The
+    /// choice is kept across timeframes, but only takes effect while the session
+    /// is longer than the bars: a 1D chart has no brackets to stack into a day.
+    pub fn set_tpo(&mut self, raw: &str) {
+        let session = ChartTimeframe::parse(raw);
+        if session != self.tpo {
+            self.tpo = session;
+            self.tpo_profiles = None;
+            // Profiles and candles are read at different distances: open each afresh.
+            self.view_ready = false;
+            self.touch();
+        }
+    }
+
+    /// The split profiles are drawn by now, if any.
+    pub fn tpo(&self) -> Option<ChartTimeframe> {
+        self.tpo.filter(|s| *s > self.timeframe)
+    }
+
+    /// TPO options as `key=value;key=value`, over Exocharts' defaults.
+    pub fn set_tpo_settings(&mut self, raw: &str) {
+        let settings = tpo::Settings::parse(raw);
+        if settings != self.tpo_settings {
+            self.tpo_settings = settings;
+            self.touch();
+        }
     }
 
     pub fn set_log_scale(&mut self, log: bool) {
@@ -585,8 +651,10 @@ impl Chart {
 
         self.time.width = f64::from(plot_w);
         self.time.bars = self.total_bars();
+        self.time.min_spacing = if self.tpo().is_some() { TPO_MIN_SPACING } else { MIN_BAR_SPACING };
         if !self.view_ready && self.time.bars > 0 {
-            self.time.show_last(DEFAULT_VISIBLE_BARS, RIGHT_MARGIN_BARS);
+            let (bars, margin) = self.opening_bars();
+            self.time.show_last(bars, margin);
             self.view_ready = true;
             // New bars or a reset view: a price range set by hand for the old
             // view would leave the new candles off screen.
@@ -682,12 +750,48 @@ impl Chart {
                 let message = self.message.clone().unwrap_or_else(|| "Loading…".to_string());
                 frame.text(self.width / 2.0, self.height / 2.0, message, self.theme.text, Align::Center, Baseline::Middle, self.theme.font_px, None, None);
             } else {
+                self.refresh_tpo();
                 self.paint(&mut frame, now);
                 self.request_history_if_near_start();
             }
         }
         self.frame = frame;
         &self.frame
+    }
+
+    /// Bars the chart opens on, and the room right of the last: a screenful of
+    /// candles, or the last few TPO sessions with space for the current one to grow.
+    fn opening_bars(&self) -> (f64, f64) {
+        let n = self.total_bars();
+        let (Some(session), Some(last)) = (self.tpo(), n.checked_sub(1).and_then(|i| self.bar(i))) else { return (DEFAULT_VISIBLE_BARS, RIGHT_MARGIN_BARS) };
+        let current = session.align(last.time);
+        let mut start = current;
+        for _ in 1..TPO_OPENING_SESSIONS {
+            start = session.align(start - 1);
+        }
+        let bars = (0..n).rev().take_while(|i| self.bar(*i).is_some_and(|b| b.time >= start)).count().max(1) as f64;
+        let bar_ms = self.timeframe.source().interval.ms().map_or(1.0, |ms| (ms * i64::from(self.timeframe.source().group)) as f64);
+        // Half a session beyond the last bar, as a TPO chart is usually held.
+        (bars, ((session.end(current) - current) as f64 / bar_ms * 0.5).max(RIGHT_MARGIN_BARS))
+    }
+
+    /// Profiles for every split in the loaded bars, rebuilt only when a bar or
+    /// an option they are built from changes.
+    fn refresh_tpo(&mut self) {
+        let Some(split) = self.tpo() else {
+            self.tpo_profiles = None;
+            return;
+        };
+        let bars: Vec<Candle> = (0..self.total_bars())
+            .filter_map(|i| self.bar(i))
+            .map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None })
+            .collect();
+        if self.tpo_profiles.as_ref().is_some_and(|p| p.fresh(split, &bars, &self.tpo_settings)) {
+            return;
+        }
+        let tick = 10f64.powi(-(self.precision() as i32));
+        let bar_ms = self.timeframe.source().interval.ms().map_or(1.0, |ms| (ms * i64::from(self.timeframe.source().group)) as f64);
+        self.tpo_profiles = tpo::build(&bars, split, tick, bar_ms, &self.tpo_settings);
     }
 
     /// The tradoor mark and name, bottom left of the price pane. Part of the frame
@@ -739,7 +843,15 @@ impl Chart {
         // the ribbon under the candles, volume at the foot
         f.clip(Some(price.plot));
         self.paint_watermark(f, price.plot);
-        if !self.hidden.contains("ribbon") {
+        let tpo = self.tpo().is_some() && self.tpo_profiles.is_some();
+        if let (true, Some(profiles)) = (tpo, self.tpo_profiles.as_ref()) {
+            let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None }).collect();
+            let x = |l: f64| self.time.x(l) as f32;
+            let y = |p: f64| price.scale.y(p) as f32;
+            let view = tpo::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, precision: self.precision(), x: &x, y: &y, bars: &bars };
+            tpo::paint(f, &view, profiles, &self.tpo_settings);
+        }
+        if !tpo && !self.hidden.contains("ribbon") {
             for run in &self.ribbon {
                 let pts = visible_slice(&run.points, from - 1.0, to + 1.0);
                 if pts.len() < 2 {
@@ -754,7 +866,7 @@ impl Chart {
         let dpr = f.dpr;
         let (body_dev, wick) = candle_widths(self.time.bar_spacing, dpr);
         let body = body_dev / dpr;
-        if !self.hidden.contains("volume") {
+        if !tpo && !self.hidden.contains("volume") {
             let max_vol = (i0..=i1).filter_map(|i| self.bar(i)).map(|b| b.volume).fold(0.0, f64::max);
             if max_vol > 0.0 {
                 let (top, h) = (price.plot.y + price.plot.h * 0.82, price.plot.h * 0.18);
@@ -767,7 +879,7 @@ impl Chart {
                 }
             }
         }
-        for i in i0..=i1 {
+        for i in (i0..=i1).filter(|_| !tpo) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);
@@ -790,7 +902,7 @@ impl Chart {
                 f.stroke_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), 1.0 / dpr, base);
             }
         }
-        if !self.hidden.contains("ema200") {
+        if !tpo && !self.hidden.contains("ema200") {
             self.paint_series(f, &price.scale, &self.engine.ema200, i0, i1, t.ema200, 1.0, LineStyle::Solid);
         }
 
@@ -843,9 +955,11 @@ impl Chart {
         // ---- liquidation feed: hits land above the volume and ride up and out
         if !self.hidden.contains("liquidations") {
             f.clip(Some(price.plot));
-            let size = t.font_px - 1.0;
-            let mark = (size + 3.0).round();
+            let size = t.font_px + 1.0;
+            let mark = (size + 4.0).round();
             let row = mark + 4.0;
+            // Monospace glyphs scale with the size, from the axis font's width.
+            let glyph = self.char_width * size / t.font_px;
             // At the foot of the pane, where the volume is shortest and the
             // candles are not: the feed rises from there rather than sitting
             // among the bodies.
@@ -872,17 +986,17 @@ impl Chart {
                 let base = if l.long { t.bear } else { t.bull };
                 let alpha = (40.0 + 200.0 * fade) as u8;
                 let text = format!("{} ${}", if l.long { "LONG" } else { "SHORT" }, format_turnover(l.usd));
-                let width = mark + 3.0 + text.len() as f32 * self.char_width;
+                let width = mark + 4.0 + text.len() as f32 * glyph;
                 let left = (plot_w - width - 8.0).max(0.0);
                 f.rect(left - 4.0, y - row + 1.0, width + 8.0, row - 1.0, t.background.with_alpha((190.0 * fade) as u8));
-                f.icon(left + mark / 2.0, y - row / 2.0, mark, alpha, Some(price.plot));
-                f.text(left + mark + 3.0, y - row / 2.0, text, base.with_alpha(alpha), Align::Left, Baseline::Middle, size, None, Some(price.plot));
+                f.icon(left + mark / 2.0, y - row / 2.0, mark, alpha, l.mark, Some(price.plot));
+                f.text(left + mark + 4.0, y - row / 2.0, text, base.with_alpha(alpha), Align::Left, Baseline::Middle, size, None, Some(price.plot));
             }
         }
 
         // ---- ribbon crosses, last price, drawings
         f.clip(Some(price.plot));
-        if !self.hidden.contains("ribbon") {
+        if !tpo && !self.hidden.contains("ribbon") {
             for cross in self.engine.crosses.iter().filter(|c| c.index >= i0 && c.index <= i1) {
                 let c = &self.candles[cross.index];
                 let x = self.time.x(cross.index as f64) as f32;
@@ -1017,7 +1131,7 @@ impl Chart {
         let time_axis = Rect { x: 0.0, y: avail, w: plot_w, h: TIME_AXIS_HEIGHT };
         let cross_label = hover_slot.and_then(|slot| Some((slot, self.slot_time(slot)?))).map(|(slot, time)| {
             let monthly = self.timeframe.source().interval == Interval::Mo1;
-            let text = ticks::crosshair_label(time, self.timeframe.source().interval.ms(), monthly);
+            let text = ticks::crosshair_label(self.shown_time(time), self.timeframe.source().interval.ms(), monthly);
             let w = text.len() as f32 * self.char_width + 12.0;
             (self.time.x(slot as f64) as f32, text, w)
         });
@@ -1026,8 +1140,9 @@ impl Chart {
             let Some(b) = self.bar(i) else { continue };
             let x = self.time.x(i as f64) as f32;
             if (0.0..plot_w).contains(&x) {
-                let prev = i.checked_sub(1).and_then(|j| self.bar(j)).map(|pb| pb.time);
-                candidates.push((ticks::boundary_weight(prev, b.time), x, b.time));
+                let prev = i.checked_sub(1).and_then(|j| self.bar(j)).map(|pb| self.shown_time(pb.time));
+                let shown = self.shown_time(b.time);
+                candidates.push((ticks::boundary_weight(prev, shown), x, shown));
             }
         }
         for (x, label) in ticks::pick_time_labels(&candidates, self.char_width * 6.0 + 22.0) {
@@ -1702,11 +1817,6 @@ impl Chart {
 /// A candle body in device pixels, odd once it is wide enough so the wick sits on
 /// its centre, and the wick in CSS pixels: one pixel at any zoom, as on
 /// TradingView — a wick that thickens with the body reads as a second body.
-/// Do two badge boxes share any ground?
-fn overlaps(a: &Rect, b: &Rect) -> bool {
-    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
-}
-
 fn candle_widths(bar_spacing: f64, dpr: f32) -> (f32, f32) {
     let mut body = (bar_spacing as f32 * dpr * 0.8).floor().max(1.0);
     if body >= 3.0 && (body as i32) % 2 == 0 {
@@ -1740,6 +1850,70 @@ mod tests {
     fn click(c: &mut Chart, x: f32, y: f32) {
         c.pointer_down(x, y, 0);
         c.pointer_up(x, y);
+    }
+
+    /// Vertices painted in exactly `color`.
+    fn painted(frame: &Frame, color: Color) -> usize {
+        frame.colors.chunks(4).filter(|c| *c == [color.r, color.g, color.b, color.a]).count()
+    }
+
+    #[test]
+    fn tpo_style_draws_each_session_as_a_profile_in_place_of_candles() {
+        let mut c = chart();
+        let t = Theme::default();
+        let candle = t.bull.with_alpha(t.candle_alpha);
+        assert!(painted(c.render(1_800_000_000_000), candle) > 0, "candles first");
+
+        c.set_tpo("1d");
+        assert_eq!(c.tpo(), Some(ChartTimeframe::D1));
+        let frame = c.render(1_800_000_000_000);
+        assert_eq!(painted(frame, candle), 0, "no candle bodies under the profiles");
+        assert!(painted(frame, t.tpo_poc) > 0, "the point of control is the orange row");
+        let labels: Vec<&str> = frame.texts.iter().map(|t| t.text.as_str()).collect();
+        assert!(labels.iter().any(|l| l.starts_with("VAH ")) && labels.iter().any(|l| l.starts_with("VAL ")), "value area high and low are labelled");
+
+        let cache = c.tpo_profiles.as_ref().expect("profiles were built");
+        // 500 hourly bars are 21 days: the first and last partial, all of them drawn.
+        assert!(cache.list.len() >= 20, "a profile per day, {} of them", cache.list.len());
+        for profile in &cache.list {
+            let brackets: usize = profile.session.rows.iter().map(|r| r.periods.len()).max().unwrap_or(0);
+            assert!(brackets <= 24, "a day holds at most 24 hourly brackets in a row, not {brackets}");
+        }
+
+        c.set_tpo("");
+        assert!(painted(c.render(1_800_000_000_000), candle) > 0, "and candles again");
+    }
+
+    #[test]
+    fn a_tpo_session_must_be_longer_than_the_bars_it_stacks() {
+        let mut c = chart();
+        c.set_tpo("1h");
+        assert_eq!(c.tpo(), None, "an hourly session of hourly bars has nothing to stack");
+        c.set_tpo("nonsense");
+        assert_eq!(c.tpo(), None);
+        c.set_tpo("1w");
+        assert_eq!(c.tpo(), Some(ChartTimeframe::W1));
+
+        // Kept across a timeframe it cannot be drawn on, and back when it can.
+        c.set_timeframe(ChartTimeframe::W1);
+        assert_eq!(c.tpo(), None, "a weekly chart has no brackets to stack into a week");
+        c.set_timeframe(ChartTimeframe::H1);
+        assert_eq!(c.tpo(), Some(ChartTimeframe::W1));
+    }
+
+    #[test]
+    fn the_current_tpo_session_grows_with_the_live_bar() {
+        let mut c = chart();
+        c.set_tpo("1d");
+        c.render(1_800_000_000_000);
+        let before = c.tpo_profiles.as_ref().unwrap().list.last().unwrap().session.periods.len();
+        let last = *c.candles().last().unwrap();
+        c.set_live(Some(LiveBar { open_time: last.open_time + HOUR, open: last.close, high: last.close + 5.0, low: last.close - 5.0, close: last.close, volume: 1.0, closed: false }));
+        c.render(1_800_000_000_000);
+        let session = &c.tpo_profiles.as_ref().unwrap().list.last().unwrap().session;
+        // The live hour opens a bracket in the current day, or starts the next day.
+        assert!(session.periods.len() == before + 1 || session.periods.len() == 1, "the forming bracket is part of the profile");
+        assert_eq!(*session.periods.last().unwrap(), last.open_time + HOUR);
     }
 
     #[test]
@@ -1851,6 +2025,23 @@ mod tests {
     }
 
     #[test]
+    fn intraday_times_are_written_in_the_readers_time_zone() {
+        let mut c = chart();
+        let newest = c.time.bars - 1;
+        let bar = c.candles()[newest].open_time;
+        let x = c.time.x(newest as f64) as f32;
+
+        c.set_utc_offset(7 * 60);
+        c.pointer_move(x, 200.0);
+        let shifted = ticks::crosshair_label(bar + 7 * HOUR, Some(HOUR), false);
+        assert!(c.render(1_800_000_000_000).texts.iter().any(|t| t.text == shifted), "the crosshair reads {shifted} in UTC+7");
+
+        // A day is the exchange's UTC day wherever it is read.
+        c.set_timeframe(ChartTimeframe::D1);
+        assert_eq!(c.shown_time(bar), bar);
+    }
+
+    #[test]
     fn the_crosshair_follows_the_pointer_past_the_newest_bar() {
         let mut c = chart();
         let newest = c.time.bars - 1;
@@ -1941,10 +2132,9 @@ mod tests {
     fn the_liquidation_feed_stacks_the_newest_hit_at_the_foot() {
         let mut c = chart();
         let now = 1_800_000_000_000;
-        let last = *c.candles().last().unwrap();
         let quiet = c.render(now).vertex_count();
 
-        c.push_liquidation(last.open_time as f64, last.close, 2_000_000.0, true, now);
+        c.push_liquidation(2_000_000.0, true, 0, now);
         let frame = c.render(now + 100);
         let (drawn, texts, icons) = (frame.vertex_count(), frame.texts.clone(), frame.icons.len());
         assert!(drawn > quiet, "the hit is drawn");
@@ -1958,9 +2148,11 @@ mod tests {
         assert!(row.y < pane.bottom(), "the feed stays inside the pane");
         assert!(row.y > pane.y + pane.h * 0.9, "and sits at its foot");
 
-        // A second hit takes the foot and pushes the first one up a row.
-        c.push_liquidation(last.open_time as f64, last.close, 4_000.0, false, now + 1_000);
+        // A second hit, on another exchange, takes the foot and pushes the first up a row.
+        c.push_liquidation(4_000.0, false, 1, now + 1_000);
         let frame = c.render(now + 1_400);
+        let marks: Vec<u8> = frame.icons.iter().map(|i| i.mark).collect();
+        assert_eq!(marks, [1, 0], "each row carries its own exchange's mark, newest first");
         let ys: Vec<(String, f32)> = frame.texts.iter().filter(|t| t.text.contains('$')).map(|t| (t.text.clone(), t.y)).collect();
         assert_eq!(ys.len(), 2, "both hits are in the feed");
         let newest = ys.iter().find(|(text, _)| text == "SHORT $4K").unwrap().1;
@@ -1970,7 +2162,7 @@ mod tests {
         assert_eq!(c.render(now + 1_000 + LIQUIDATION_TTL).vertex_count(), quiet, "five seconds and they are gone");
         assert!(!c.needs_render(now + 1_000 + LIQUIDATION_TTL), "and the chart rests again");
 
-        c.push_liquidation(last.open_time as f64, last.close, 900.0, false, now);
+        c.push_liquidation(900.0, false, 0, now);
         c.set_hidden("liquidations");
         assert_eq!(c.render(now + 100).vertex_count(), quiet, "the layer can be switched off");
     }
@@ -1979,10 +2171,9 @@ mod tests {
     fn the_feed_stops_before_it_covers_the_chart() {
         let mut c = chart();
         let now = 1_800_000_000_000;
-        let last = *c.candles().last().unwrap();
 
         for i in 0..20 {
-            c.push_liquidation(last.open_time as f64, last.close, 1_000.0 * f64::from(i + 1), true, now);
+            c.push_liquidation(1_000.0 * f64::from(i + 1), true, 0, now);
         }
         let frame = c.render(now + 300);
         let rows = frame.texts.iter().filter(|t| t.text.contains('$')).count();

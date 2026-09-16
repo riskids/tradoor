@@ -13,12 +13,18 @@ struct MarkPath {
     scale: f64,
 }
 
+/// An exchange's mark: its paths, and the side of the square they are drawn in.
+#[derive(Default)]
+struct Mark {
+    paths: Vec<MarkPath>,
+    size: f64,
+}
+
 pub struct TextLayer {
     canvas: OffscreenCanvas,
     ctx: Ctx,
-    mark: Vec<MarkPath>,
-    /// Side of the square the mark's paths are drawn in.
-    mark_box: f64,
+    /// Numbered as the page numbers exchanges; a liquidation names its mark by index.
+    marks: Vec<Mark>,
 }
 
 fn font(size: f32) -> String {
@@ -28,14 +34,17 @@ fn font(size: f32) -> String {
 impl TextLayer {
     pub fn new(canvas: OffscreenCanvas) -> Result<Self, JsValue> {
         let ctx: Ctx = canvas.get_context("2d")?.ok_or("2D canvas is not available")?.dyn_into()?;
-        Ok(Self { canvas, ctx, mark: Vec::new(), mark_box: 32.0 })
+        Ok(Self { canvas, ctx, marks: Vec::new() })
     }
 
-    /// The venue's mark, one path a line as `tx|ty|scale|fill|d`. An empty spec
-    /// clears it, and a path the browser cannot parse is simply left out.
-    pub fn set_mark(&mut self, box_size: f32, spec: &str) {
-        self.mark_box = f64::from(box_size).max(1.0);
-        self.mark = spec
+    /// Exchange `index`'s mark, one path a line as `tx|ty|scale|fill|d`. An
+    /// empty spec clears it, and a path the browser cannot parse is left out.
+    pub fn set_mark(&mut self, index: u8, box_size: f32, spec: &str) {
+        let index = usize::from(index);
+        if self.marks.len() <= index {
+            self.marks.resize_with(index + 1, Mark::default);
+        }
+        let paths = spec
             .lines()
             .filter_map(|line| {
                 let mut parts = line.splitn(5, '|');
@@ -47,15 +56,14 @@ impl TextLayer {
                 Some(MarkPath { path, fill, tx, ty, scale })
             })
             .collect();
+        self.marks[index] = Mark { paths, size: f64::from(box_size).max(1.0) };
     }
 
-    /// The venue badges beside the liquidation pings.
+    /// The exchange marks on the liquidation feed's rows.
     fn draw_marks(&self, frame: &Frame) {
-        if self.mark.is_empty() || frame.icons.is_empty() {
-            return;
-        }
         let ctx = &self.ctx;
         for icon in &frame.icons {
+            let Some(mark) = self.marks.get(usize::from(icon.mark)).filter(|m| !m.paths.is_empty()) else { continue };
             ctx.save();
             if let Some(c) = icon.clip {
                 ctx.begin_path();
@@ -65,8 +73,8 @@ impl TextLayer {
             ctx.set_global_alpha(f64::from(icon.alpha) / 255.0);
             let size = f64::from(icon.size);
             let _ = ctx.translate(f64::from(icon.x) - size / 2.0, f64::from(icon.y) - size / 2.0);
-            let _ = ctx.scale(size / self.mark_box, size / self.mark_box);
-            for p in &self.mark {
+            let _ = ctx.scale(size / mark.size, size / mark.size);
+            for p in &mark.paths {
                 ctx.save();
                 let _ = ctx.translate(p.tx, p.ty);
                 let _ = ctx.scale(p.scale, p.scale);

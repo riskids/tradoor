@@ -102,6 +102,37 @@ export interface Drawing {
 
 const scope = (market: string, timeframe: string): string => `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}`;
 
+/** One of the four totals: 1h, 4h, 12h or 24h, over every exchange. */
+export interface LiquidationWindow {
+  window: string;
+  longUsd: number;
+  shortUsd: number;
+  longs: number;
+  shorts: number;
+}
+
+export interface LiquidationRow {
+  venue: string;
+  time: number;
+  price: number;
+  qty: number;
+  usd: number;
+  long: boolean;
+}
+
+/** How the server's own socket to an exchange is. */
+export interface CollectorVenue {
+  venue: string;
+  state: 'connecting' | 'connected' | 'retrying';
+  since: number;
+  error: string | null;
+}
+
+/** A ticker the server keeps a day of, or one it does not — with the ones it does. */
+export type LiquidationStats =
+  | { ticker: string; tracked: false; tickers: string[] }
+  | { ticker: string; tracked: true; now: number; coverageFrom: number; windows: LiquidationWindow[]; venues: CollectorVenue[]; recent: LiquidationRow[] };
+
 export const api = {
   async health(): Promise<{ ok: boolean; db: boolean }> {
     const { body } = await request<{ ok: boolean; db: boolean }>('/api/health');
@@ -113,6 +144,7 @@ export const api = {
   updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'DELETE' }),
+  liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
     const res = await request<{ version: number; doc?: unknown; error?: string }>(`/api/workspaces/${id}`, { method: 'PUT', body });

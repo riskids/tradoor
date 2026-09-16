@@ -9,7 +9,19 @@
 import { DEFAULT_MARKET, isMarket } from '../lib/markets';
 import { isTimeframe } from '../lib/timeframes';
 
+/** What a new panel can be. `tpo` is a preset: a chart drawn as TPO profiles. */
 export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations';
+
+/**
+ * How TPO profiles are split, as Exocharts names it: one profile per UTC day,
+ * Monday-to-Sunday week, or calendar month. The chart's own candles are the
+ * brackets, so the timeframe sets how fine a profile is, not how long.
+ */
+export const TPO_SPLITS: readonly { value: string; label: string }[] = [
+  { value: '1d', label: 'Day' },
+  { value: '1w', label: 'Week' },
+  { value: '1M', label: 'Month' },
+];
 export type LinkColor = 'green' | 'blue' | 'red' | 'yellow';
 
 export const LINK_COLORS: readonly LinkColor[] = ['green', 'blue', 'red', 'yellow'];
@@ -33,16 +45,15 @@ export interface ChartPanelState extends PanelBase {
   log: boolean;
   /** `price:3,pct:1`. */
   paneWeights: string;
+  /** TPO split — `1d`, `1w` or `1M` — drawn in place of candles; empty, candles. */
+  tpo: string;
+  /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
+  tpoSettings: Record<string, string>;
 }
 
 export interface WatchlistPanelState extends PanelBase {
   type: 'watchlist';
   markets: string[];
-}
-
-export interface TpoPanelState extends PanelBase {
-  type: 'tpo';
-  sessions: number;
 }
 
 export interface ValuesPanelState extends PanelBase {
@@ -56,7 +67,7 @@ export interface LiquidationsPanelState extends PanelBase {
   minUsd: number;
 }
 
-export type Panel = ChartPanelState | WatchlistPanelState | TpoPanelState | ValuesPanelState | LiquidationsPanelState;
+export type Panel = ChartPanelState | WatchlistPanelState | ValuesPanelState | LiquidationsPanelState;
 
 export interface SplitNode {
   kind: 'split';
@@ -105,11 +116,12 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '' };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', tpoSettings: {} };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST] };
     case 'tpo':
-      return { ...base, type, sessions: 12 };
+      // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', tpoSettings: {} };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -172,11 +184,17 @@ function readPanel(id: string, raw: unknown): Panel | null {
     p.hidden = str(raw.hidden, '');
     p.log = raw.log === true;
     p.paneWeights = str(raw.paneWeights, '');
+    // A TPO panel from before TPO was a chart style keeps its weekly split, as
+    // does a chart saved while TPO was an on/off switch.
+    if (raw.type === 'chart') p.tpo = TPO_SPLITS.some((t) => t.value === raw.tpo) ? (raw.tpo as string) : raw.tpo === true ? '1w' : '';
+    else p.tpo = '1w';
+    if (isObj(raw.tpoSettings)) {
+      for (const [k, v] of Object.entries(raw.tpoSettings).slice(0, 80)) {
+        if (k.length <= 40 && typeof v === 'string' && v.length <= 40) p.tpoSettings[k] = v;
+      }
+    }
   } else if (p.type === 'watchlist') {
     if (Array.isArray(raw.markets)) p.markets = [...new Set(raw.markets.filter(isMarket))].slice(0, 200);
-  } else if (p.type === 'tpo') {
-    const n = Number(raw.sessions);
-    if (Number.isInteger(n) && n >= 1 && n <= 60) p.sessions = n;
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;

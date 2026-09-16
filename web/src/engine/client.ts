@@ -77,10 +77,48 @@ export function call<K extends CallName>(name: K, args: Calls[K]['args']): Promi
   });
 }
 
-export function attachSlot(handlers: SlotHandlers): { id: string; detach(): void } {
-  const id = `chart-${nextSlot++}`;
-  slots.set(id, handlers);
-  return { id, detach: () => void slots.delete(id) };
+export interface HeldChart {
+  /** The engine slot's id. */
+  readonly id: string;
+  readonly gl: HTMLCanvasElement;
+  readonly text: HTMLCanvasElement;
+  /** Whether the canvases have been handed to the engine yet. */
+  created: boolean;
+}
+
+const charts = new Map<string, HeldChart>();
+
+/**
+ * A chart panel's canvases and engine slot, kept for as long as the panel is in
+ * the workspace rather than for as long as it is mounted. A browser gives a
+ * page about sixteen WebGL contexts and frees a dropped one only when it gets
+ * round to it, so a context per mount runs out after a few tab switches and the
+ * oldest chart goes blank. One per panel never does — and a tab shown again
+ * draws at once, with its bars still loaded. Pair with `releaseChart`.
+ */
+export function holdChart(panelId: string, handlers: SlotHandlers): HeldChart {
+  let chart = charts.get(panelId);
+  if (!chart) {
+    chart = { id: `chart-${nextSlot++}`, gl: document.createElement('canvas'), text: document.createElement('canvas'), created: false };
+    charts.set(panelId, chart);
+  }
+  slots.set(chart.id, handlers);
+  return chart;
+}
+
+/** The panel's chart is off screen: kept, paused, while the panel still exists; freed once it does not. */
+export function releaseChart(panelId: string, stillOpen: boolean): void {
+  const chart = charts.get(panelId);
+  if (!chart) return;
+  slots.delete(chart.id);
+  chart.gl.remove();
+  chart.text.remove();
+  if (stillOpen) {
+    if (chart.created) send({ t: 'visible', id: chart.id, value: false });
+    return;
+  }
+  charts.delete(panelId);
+  if (chart.created) send({ t: 'destroy', id: chart.id });
 }
 
 export function onEngineFailure(listener: (message: string) => void): () => void {

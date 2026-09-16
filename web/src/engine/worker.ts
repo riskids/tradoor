@@ -3,14 +3,14 @@
  * canvases. The page sends input and settings; this sends back only what the
  * page shows in the DOM — legend, cursor, events and status.
  */
-import init, { ChartEngine, LiveFeedEngine, fold_candles, indicator_values, profile_spec, study_catalog, timeframe_info, tpo } from '../wasm/pkg/tradoor_wasm.js';
+import init, { ChartEngine, LiveFeedEngine, fold_candles, indicator_values, profile_spec, study_catalog, timeframe_info } from '../wasm/pkg/tradoor_wasm.js';
 import wasmUrl from '../wasm/pkg/tradoor_wasm_bg.wasm?url';
 import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
-import { markOfVenue, markSpec } from '../lib/exchange-marks';
+import { MARK_ORDER, MARKS, markIndex, markSpec } from '../lib/exchange-marks';
 import { parseMarket } from '../lib/markets';
 import { concatCols, emptyCols, openSeries, sliceCols, type Cols, type Series } from './history';
-import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker, TpoData } from './protocol';
+import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
 import { StreamHub, type SocketState, type StreamListener, type StreamMsg } from './streams';
 
 /** Closed bars a chart opens with: enough for EMA 200 to settle, with room to scroll. */
@@ -53,6 +53,8 @@ const EMPTY = new Float64Array(0);
 
 const hub = new StreamHub();
 const theme = new Map<string, string>();
+/** The reader's time zone, minutes east of UTC; charts write intraday times in it. */
+let utcOffset = 0;
 const slots = new Map<string, Slot>();
 
 const info = (tf: string): TfInfo => timeframe_info(tf) as unknown as TfInfo;
@@ -86,6 +88,7 @@ class Slot {
   readonly engine: ChartEngine;
   private market = '';
   private timeframe = '';
+  private bars = CHART_BARS;
   private series: Series | null = null;
   /** Closed bars at the chart's timeframe, as the engine holds them. */
   private closed: Cols = emptyCols();
@@ -103,6 +106,11 @@ class Slot {
   private price = Number.NaN;
   private priceDirty = false;
   private demo: ReturnType<typeof setInterval> | undefined;
+  /** Its tab is not shown: nothing is drawn, everything else carries on. */
+  hidden = false;
+  /** The ticker's perpetual on each exchange, whose liquidations the feed shows. */
+  private liquidationMarkets: string[] = [];
+  private liquidationOff: (() => void)[] = [];
 
   constructor(
     readonly id: string,
@@ -111,6 +119,28 @@ class Slot {
   ) {
     this.engine = new ChartEngine(gl, text, '1h');
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
+    this.engine.set_utc_offset(utcOffset);
+    // Every exchange's mark, once: a liquidation names the one it came from.
+    MARK_ORDER.forEach((id, i) => {
+      const mark = MARKS[id];
+      if (mark) this.engine.set_mark(i, mark.box, markSpec(mark));
+    });
+  }
+
+  /**
+   * Shown again after its tab was away. The panel mounted afresh and holds
+   * nothing, so what is only sent on change — legend, studies, status, price —
+   * is sent again.
+   */
+  show(visible: boolean): void {
+    this.hidden = !visible;
+    if (!visible) return;
+    this.legendKey = '';
+    this.studiesKey = '';
+    this.cursor = '';
+    this.metaDirty = true;
+    this.priceDirty = true;
+    post({ t: 'status', id: this.id, value: this.status });
   }
 
   markMeta(): void {
@@ -119,8 +149,37 @@ class Slot {
 
   destroy(): void {
     clearInterval(this.demo);
+    this.watchLiquidations([]);
     this.detach();
     this.engine.free();
+  }
+
+  /**
+   * The feed follows one ticker on every exchange that lists it. Hits carry
+   * their exchange's mark; the list comes from the page, which has the catalogue.
+   */
+  watchLiquidations(markets: string[]): void {
+    if (markets.join() === this.liquidationMarkets.join()) return;
+    for (const off of this.liquidationOff.splice(0)) off();
+    this.liquidationMarkets = markets;
+    this.engine.clear_liquidations();
+    for (const market of markets) {
+      const ref = parseMarket(market);
+      if (!ref?.venue.endsWith('perp')) continue;
+      const mark = markIndex(ref.venue);
+      this.liquidationOff.push(
+        hub.subscribe(
+          ref.venue,
+          { kind: 'liquidations', symbol: ref.symbol },
+          {
+            message: (m: StreamMsg) => {
+              if (m.kind === 'liquidation') this.engine.push_liquidation(m.price * m.qty, m.long, mark, Date.now());
+            },
+            state: () => {},
+          },
+        ),
+      );
+    }
   }
 
   /**
@@ -137,9 +196,11 @@ class Slot {
       () => {
         const price = this.price;
         if (!Number.isFinite(price)) return;
-        const now = Date.now();
         const hit = demoHit(price);
-        this.engine.push_liquidation(now, hit.price, hit.price * hit.qty, hit.long, now);
+        // Spread across the exchanges the feed follows, as the real ones are.
+        const venues = this.liquidationMarkets.length > 0 ? this.liquidationMarkets : MARK_ORDER;
+        const from = venues[Math.floor(Math.random() * venues.length)]!;
+        this.engine.push_liquidation(hit.price * hit.qty, hit.long, markIndex(from), Date.now());
       },
       Math.max(60_000 / perMinute, 50),
     );
@@ -153,21 +214,18 @@ class Slot {
     this.series = null;
   }
 
-  async load(market: string, timeframe: string): Promise<void> {
-    if (market === this.market && timeframe === this.timeframe && !this.status.error) return;
+  async load(market: string, timeframe: string, bars = CHART_BARS): Promise<void> {
+    if (market === this.market && timeframe === this.timeframe && bars === this.bars && !this.status.error) return;
     this.detach();
     const gen = this.gen;
     this.market = market;
     this.timeframe = timeframe;
+    this.bars = bars;
     this.closed = emptyCols();
     this.extra = [];
     this.live = null;
     this.price = Number.NaN;
     this.engine.clear_live();
-    this.engine.clear_liquidations();
-    // The badge beside a liquidation ping is the venue's own mark.
-    const mark = markOfVenue(parseMarket(market)?.venue ?? '');
-    this.engine.set_logo(mark?.box ?? 0, mark ? markSpec(mark) : '');
     this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.metaDirty = true;
     let tf: TfInfo;
@@ -185,7 +243,7 @@ class Slot {
       if (gen !== this.gen) return;
       this.series = series;
       this.cleanup.push(series.subscribe(() => this.refold()));
-      await series.ensure(baseBars(series, tf, CHART_BARS));
+      await series.ensure(baseBars(series, tf, bars));
       if (gen !== this.gen) return;
       this.refold();
       this.startLive(gen, tf);
@@ -227,22 +285,6 @@ class Slot {
 
   private startLive(gen: number, tf: TfInfo): void {
     const ref = parseMarket(this.market);
-    // Liquidations exist on perpetuals only, and are drawn on every timeframe,
-    // including the folded ones that have no candle stream of their own.
-    if (ref?.venue.endsWith('perp')) {
-      this.cleanup.push(
-        hub.subscribe(
-          ref.venue,
-          { kind: 'liquidations', symbol: ref.symbol },
-          {
-            message: (m: StreamMsg) => {
-              if (gen === this.gen && m.kind === 'liquidation') this.engine.push_liquidation(m.time, m.price, m.price * m.qty, m.long, Date.now());
-            },
-            state: () => {},
-          },
-        ),
-      );
-    }
     if (!ref || !tf.live) {
       this.setStatus({ live: 'off' });
       const timer = setInterval(() => void this.series?.refreshTail(), POLL_MS);
@@ -396,20 +438,6 @@ const lastBars = (c: Cols, n: number): Cols => sliceCols(c, Math.max(0, c.time.l
 /** Source bars in one profile session. */
 const SESSION_BARS: Record<string, number> = { '1d': 24, '1w': 7, '1M': 31 };
 
-async function tpoCall({ market, timeframe, sessions }: Calls['tpo']['args']): Promise<TpoData | null> {
-  const spec = profile_spec(timeframe) as ProfileSpec | null;
-  if (!spec) return null;
-  const want = (sessions + 2) * (SESSION_BARS[spec.session] ?? 31);
-  const src = await hold(market, spec.from, want);
-  try {
-    const c = lastBars(src.series.cols, want);
-    const data = tpo(timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, sessions) as Omit<TpoData, 'precision'> | null;
-    return data && { ...data, precision: precisionOf(c) };
-  } finally {
-    src.release();
-  }
-}
-
 async function valuesCall({ market, timeframe, basis }: Calls['values']['args']): Promise<IndicatorValues | null> {
   const chart = await hold(market, timeframe, CHART_BARS);
   const spec = profile_spec(timeframe) as ProfileSpec | null;
@@ -444,7 +472,6 @@ const calls: Handlers = {
     slot.afterInput();
     return used;
   },
-  tpo: tpoCall,
   values: valuesCall,
 };
 
@@ -473,6 +500,7 @@ function tick(): void {
   scheduled = false;
   const now = Date.now();
   for (const slot of slots.values()) {
+    if (slot.hidden) continue;
     try {
       slot.frame(now);
     } catch (e) {
@@ -485,6 +513,11 @@ function tick(): void {
 function handle(msg: ToWorker): void {
   if (msg.t === 'call') {
     void answer(msg.req, msg.name, msg.args);
+    return;
+  }
+  if (msg.t === 'timeZone') {
+    utcOffset = msg.offsetMinutes;
+    for (const slot of slots.values()) slot.engine.set_utc_offset(utcOffset);
     return;
   }
   if (msg.t === 'theme') {
@@ -516,11 +549,17 @@ function handle(msg: ToWorker): void {
     case 'resize':
       slot.engine.resize(msg.width, msg.height, msg.dpr);
       break;
+    case 'visible':
+      slot.show(msg.value);
+      break;
     case 'demoLiquidations':
       slot.demoLiquidations(msg.perMinute);
       break;
+    case 'liquidationMarkets':
+      slot.watchLiquidations(msg.markets);
+      break;
     case 'market':
-      void slot.load(msg.market, msg.timeframe);
+      void slot.load(msg.market, msg.timeframe, msg.bars);
       break;
     case 'studies':
       slot.engine.set_studies(msg.value);
@@ -532,6 +571,13 @@ function handle(msg: ToWorker): void {
       break;
     case 'log':
       slot.engine.set_log_scale(msg.value);
+      break;
+    case 'tpo':
+      slot.engine.set_tpo(msg.value);
+      slot.markMeta();
+      break;
+    case 'tpoSettings':
+      slot.engine.set_tpo_settings(msg.value);
       break;
     case 'paneWeights':
       slot.engine.set_pane_weights(msg.value);

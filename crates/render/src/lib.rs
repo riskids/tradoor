@@ -15,6 +15,7 @@ pub mod paint;
 pub mod scale;
 pub mod theme;
 mod ticks;
+pub mod tpo;
 
 pub use chart::{Chart, Cursor, Event, Legend, StudyMeta};
 pub use color::Color;
