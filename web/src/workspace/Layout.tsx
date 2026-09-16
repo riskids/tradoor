@@ -2,7 +2,7 @@
  * The terminal layout: splits with draggable gutters, tab groups, and docking
  * by dragging a tab onto another group's centre or edge.
  */
-import { createSignal, For, Match, Show, Switch, type JSX } from 'solid-js';
+import { createSignal, For, Match, onCleanup, Show, Switch, untrack, type JSX } from 'solid-js';
 import { dragging, setDragging } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { Icon } from '../lib/icons';
@@ -13,7 +13,7 @@ import { LiquidationsPanel } from '../panels/LiquidationsPanel';
 import { ValuesPanel } from '../panels/ValuesPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
 import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
-import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, timeframeOf, update } from './store';
+import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, timeframeOf, update } from './store';
 
 /** Smallest a cell may be dragged to, in pixels. */
 const MIN_CELL = 90;
@@ -25,11 +25,66 @@ export function panelTitle(p: Panel): string {
   return `${PANEL_TITLE[p.type]} · ${label}`;
 }
 
+/** Phones and narrow windows: one column the page scrolls, not splits. */
+const MOBILE_QUERY = '(max-width: 760px)';
+
+function useMedia(query: string): () => boolean {
+  const media = matchMedia(query);
+  const [matches, setMatches] = createSignal(media.matches);
+  const change = () => setMatches(media.matches);
+  media.addEventListener('change', change);
+  onCleanup(() => media.removeEventListener('change', change));
+  return matches;
+}
+
 export function Layout() {
+  const mobile = useMedia(MOBILE_QUERY);
   return (
-    <div class="workspace">
-      <NodeView node={doc.root} />
+    <div class="workspace" classList={{ mobile: mobile() }}>
+      <Show when={mobile()} fallback={<NodeView node={doc.root} />}>
+        <MobileStack />
+      </Show>
     </div>
+  );
+}
+
+/**
+ * The same workspace laid out for a phone: the chart in use first, as tall as
+ * the screen allows with the next panel's header peeking below it, then every
+ * other panel in the order the layout holds them. Nothing about the saved
+ * layout changes — turn the phone or widen the window and the splits are back.
+ */
+function MobileStack() {
+  // Fixed on the way in: touching a chart makes it the one in use, and a panel
+  // that jumped to the top under the finger would be unusable.
+  const lead = untrack(() => targetChart()?.id ?? null);
+  const order = () => {
+    const ids: string[] = [];
+    const walk = (node: LayoutNode): void => {
+      if (node.kind === 'split') node.children.forEach(walk);
+      else ids.push(...node.panels);
+    };
+    walk(doc.root);
+    return lead && ids.includes(lead) ? [lead, ...ids.filter((id) => id !== lead)] : ids;
+  };
+  return (
+    <For each={order()}>
+      {(id) => (
+        <Show when={doc.panels[id]}>
+          {(panel) => (
+            <section class={`mcell ${panel().type}`} classList={{ lead: id === lead }} onPointerDown={() => focusPanel(id)}>
+              <div class="mhead">
+                <LinkButton panel={panel()} />
+                <span>{panelTitle(panel())}</span>
+              </div>
+              <div class="panelbody">
+                <PanelView panel={panel()} />
+              </div>
+            </section>
+          )}
+        </Show>
+      )}
+    </For>
   );
 }
 

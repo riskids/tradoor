@@ -24,3 +24,6 @@ export function demoHit(last: number): DemoHit {
   const price = last * (1 + (Math.random() - 0.5) * 0.004);
   return { price, qty: usd / price, long: Math.random() < 0.5 };
 }
+
+/** `?renderer=2d` draws charts the way a browser without WebGL2 in workers does. */
+export const forceFlatRenderer = (): boolean => import.meta.env.DEV && new URLSearchParams(location.search).get('renderer') === '2d';

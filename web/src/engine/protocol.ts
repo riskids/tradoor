@@ -117,7 +117,8 @@ export type CallName = keyof Calls;
 export type PointerKind = 'move' | 'down' | 'up' | 'leave' | 'dblclick';
 
 export type ToWorker =
-  | { t: 'create'; id: string; gl: OffscreenCanvas; text: OffscreenCanvas; width: number; height: number; dpr: number }
+  /** `flat`: shapes on the 2D canvas even where WebGL2 is available (development only). */
+  | { t: 'create'; id: string; gl: OffscreenCanvas; text: OffscreenCanvas; width: number; height: number; dpr: number; flat?: boolean }
   | { t: 'destroy'; id: string }
   /** Off screen (a tab not shown): not drawn, its bars and streams kept. */
   | { t: 'visible'; id: string; value: boolean }

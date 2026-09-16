@@ -3,8 +3,7 @@
  * Keyboard shortcuts go to the focused panel.
  */
 import { createEffect, createSignal, For, lazy, onCleanup, onMount, Show } from 'solid-js';
-import { CommandPalette, type Command } from '../components/CommandPalette';
-import { IndicatorPicker } from '../components/IndicatorPicker';
+import type { Command } from '../components/CommandPalette';
 import { NoteInput } from '../components/NoteInput';
 import { SymbolSearch } from '../components/SymbolSearch';
 import { onEngineFailure, send } from '../engine/client';
@@ -35,6 +34,8 @@ import { chartControllers, closeOverlay, isTypingTarget, overlay, setOverlay } f
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const Help = lazy(() => import('../components/Help').then((m) => ({ default: m.Help })));
+const CommandPalette = lazy(() => import('../components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
+const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then((m) => ({ default: m.IndicatorPicker })));
 const Settings = lazy(() => import('../components/Settings').then((m) => ({ default: m.Settings })));
 const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
 

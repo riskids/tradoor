@@ -1,4 +1,7 @@
-//! The GPU layer: every triangle of a frame in one buffer, drawn in order.
+//! The shape layer: every triangle of a frame in one buffer, drawn in order —
+//! on the GPU where the browser gives a worker WebGL2, and with a 2D canvas
+//! where it does not (iOS before 17, WebKit without a GPU). The 2D path is
+//! slower but draws the same frame, so a chart opens everywhere.
 
 use tradoor_render::Frame;
 use wasm_bindgen::{JsCast, JsValue};
@@ -141,6 +144,103 @@ impl Gl {
                 None => gl.disable(GL::SCISSOR_TEST),
             }
             gl.draw_arrays(GL::TRIANGLES, batch.first as i32, batch.count as i32);
+        }
+    }
+}
+
+/// A frame's triangles on a 2D canvas: runs of one colour filled as one path,
+/// so the two triangles of a rectangle meet without a seam.
+pub struct Flat {
+    canvas: OffscreenCanvas,
+    ctx: web_sys::OffscreenCanvasRenderingContext2d,
+}
+
+impl Flat {
+    pub fn new(canvas: OffscreenCanvas) -> Result<Self, JsValue> {
+        let ctx = canvas.get_context("2d")?.ok_or("neither WebGL2 nor a 2D canvas is available in this browser")?.dyn_into()?;
+        Ok(Self { canvas, ctx })
+    }
+
+    pub fn draw(&mut self, frame: &Frame) {
+        let ctx = &self.ctx;
+        let (w, h) = ((frame.width * frame.dpr).round().max(1.0) as u32, (frame.height * frame.dpr).round().max(1.0) as u32);
+        if self.canvas.width() != w {
+            self.canvas.set_width(w);
+        }
+        if self.canvas.height() != h {
+            self.canvas.set_height(h);
+        }
+        let dpr = f64::from(frame.dpr);
+        let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
+        ctx.set_fill_style_str(&frame.background.css());
+        ctx.fill_rect(0.0, 0.0, f64::from(frame.width), f64::from(frame.height));
+
+        let (p, c) = (&frame.positions, &frame.colors);
+        for batch in frame.batches.iter().filter(|b| b.count > 0) {
+            ctx.save();
+            if let Some(clip) = batch.clip {
+                ctx.begin_path();
+                ctx.rect(f64::from(clip.x), f64::from(clip.y), f64::from(clip.w), f64::from(clip.h));
+                ctx.clip();
+            }
+            let (first, last) = (batch.first as usize, (batch.first + batch.count) as usize);
+            let mut run: Option<&[u8]> = None;
+            for v in (first..last).step_by(3) {
+                if v + 2 >= last {
+                    break;
+                }
+                // A triangle is one colour: the engine gives its three vertices the same.
+                let color = &c[v * 4..v * 4 + 4];
+                if run != Some(color) {
+                    if run.is_some() {
+                        ctx.fill();
+                    }
+                    ctx.set_fill_style_str(&format!("rgba({},{},{},{})", color[0], color[1], color[2], f64::from(color[3]) / 255.0));
+                    ctx.begin_path();
+                    run = Some(color);
+                }
+                let at = |i: usize| (f64::from(p[i * 2]), f64::from(p[i * 2 + 1]));
+                let (a, b, d) = (at(v), at(v + 1), at(v + 2));
+                ctx.move_to(a.0, a.1);
+                ctx.line_to(b.0, b.1);
+                ctx.line_to(d.0, d.1);
+                ctx.close_path();
+            }
+            if run.is_some() {
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+}
+
+/// Whichever layer the browser allows.
+pub enum Surface {
+    Gpu(Gl),
+    Flat(Flat),
+}
+
+impl Surface {
+    pub fn new(canvas: OffscreenCanvas) -> Result<Self, JsValue> {
+        match Gl::new(canvas.clone()) {
+            Ok(gl) => Ok(Self::Gpu(gl)),
+            // A refused WebGL2 context leaves the canvas free for a 2D one.
+            Err(gpu) => Flat::new(canvas).map(Self::Flat).map_err(|_| gpu),
+        }
+    }
+
+    pub fn draw(&mut self, frame: &Frame) {
+        match self {
+            Self::Gpu(gl) => gl.draw(frame),
+            Self::Flat(flat) => flat.draw(frame),
+        }
+    }
+
+    /// `webgl2` or `2d`, for the status line and for tests.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Gpu(_) => "webgl2",
+            Self::Flat(_) => "2d",
         }
     }
 }

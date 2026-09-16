@@ -11,7 +11,8 @@ export default defineConfig({
   plugins: [solid()],
   server: {
     port: 5173,
-    proxy: { '/api': server, '/data': server },
+    // ws: the exchange stream relay for networks that block the exchanges.
+    proxy: { '/api': { target: server, ws: true }, '/data': server },
   },
   worker: { format: 'es' },
   build: {

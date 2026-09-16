@@ -14,7 +14,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{catalog::Catalog, drawings, liquidations, workspaces};
+use crate::{catalog::Catalog, drawings, liquidations, relay, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +24,8 @@ pub struct AppState {
     pub api_token: Option<String>,
     /// Absent when no ticker's liquidations are being kept.
     pub liquidations: Option<Arc<liquidations::Collector>>,
+    /// The exchanges' market data, for browsers on networks that block them.
+    pub relay: Arc<relay::Relay>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -72,6 +74,8 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
         .route("/liquidations/{ticker}", get(liquidations::stats))
+        .route("/relay/rest", get(relay::rest))
+        .route("/relay/ws", get(relay::ws))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(CompressionLayer::new())
         .with_state(state);

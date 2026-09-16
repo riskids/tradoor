@@ -145,15 +145,17 @@ pub struct Collector {
     pub tickers: Vec<String>,
     pub started: i64,
     states: Mutex<Vec<VenueState>>,
+    /// Exchange names looked up over HTTPS, past networks that block them.
+    doh: Option<Arc<crate::dns::Doh>>,
 }
 
 impl Collector {
     /// Starts following `tickers` on every exchange. Returns at once; the work
     /// runs on the runtime for as long as the server does.
-    pub fn start(pool: deadpool_postgres::Pool, tickers: Vec<String>) -> Arc<Self> {
+    pub fn start(pool: deadpool_postgres::Pool, tickers: Vec<String>, doh: Arc<crate::dns::Doh>) -> Arc<Self> {
         let started = now_ms();
         let states = VENUES.iter().map(|v| VenueState { venue: v.id, state: "connecting", since: started, error: None }).collect();
-        let collector = Arc::new(Self { tickers, started, states: Mutex::new(states) });
+        let collector = Arc::new(Self { tickers, started, states: Mutex::new(states), doh: Some(doh) });
         let (tx, rx) = mpsc::channel(8_192);
         tokio::spawn(write(pool, rx));
         for venue in VENUES {
@@ -205,7 +207,13 @@ async fn follow(venue: Venue, url: String, collector: Arc<Collector>, tx: Tx) {
 /// One connection. `Ok(true)` when the exchange ended it and it is worth
 /// reconnecting; `Ok(false)` when the writer has gone and so should we.
 async fn session(venue: &Venue, url: &str, collector: &Collector, tx: &Tx) -> anyhow::Result<bool> {
-    let (mut ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(url)).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
+    let connect = async {
+        match &collector.doh {
+            Some(doh) => doh.connect_ws(url).await,
+            None => Ok(tokio_tungstenite::connect_async(url).await?.0),
+        }
+    };
+    let mut ws = tokio::time::timeout(Duration::from_secs(15), connect).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
     for frame in (venue.subscribe)(&collector.tickers) {
         ws.send(Message::text(frame)).await?;
     }
@@ -487,7 +495,7 @@ mod tests {
             subscribe.to_string()
         });
 
-        let collector = Collector { tickers: vec!["BTCUSDT".into()], started: now_ms(), states: Mutex::new(vec![VenueState { venue: "binance-perp", state: "connecting", since: 0, error: None }]) };
+        let collector = Collector { tickers: vec!["BTCUSDT".into()], started: now_ms(), states: Mutex::new(vec![VenueState { venue: "binance-perp", state: "connecting", since: 0, error: None }]), doh: None };
         let (tx, mut rx) = mpsc::channel(8);
         let reconnect = session(&VENUES[0], &url, &collector, &tx).await.unwrap();
 

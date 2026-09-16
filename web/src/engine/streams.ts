@@ -149,10 +149,10 @@ const BYBIT_INTERVAL: Record<string, string> = {
  * its trade ids are strings that cannot be compared with a kline, and its kline
  * already pushes often.
  */
-function bybit(url: string): Protocol {
+function bybit(urls: string[]): Protocol {
   const tickers = new Map<string, { last: number; pct: number | null; turnover: number | null }>();
   return {
-    urls: [url],
+    urls,
     topic(spec) {
       if (spec.kind === 'kline') return `kline.${BYBIT_INTERVAL[spec.interval] ?? spec.interval}.${spec.symbol}`;
       if (spec.kind === 'liquidations') return `allLiquidation.${spec.symbol}`;
@@ -195,11 +195,20 @@ function bybit(url: string): Protocol {
   };
 }
 
+/**
+ * The same stream through the tradoor server, tried last: on networks that
+ * block the exchanges' names the server can still reach them. A socket that
+ * fails before a word moves to the next address, so the relay is only used
+ * where the exchange itself is out of reach.
+ */
+const relay = (venue: Venue): string[] =>
+  typeof location === 'undefined' ? [] : [`${location.origin.replace(/^http/, 'ws')}/api/relay/ws?venue=${venue}`];
+
 const PROTOCOLS: Record<Venue, () => Protocol> = {
-  'binance-spot': () => binance(['wss://stream.binance.com:9443/ws', 'wss://data-stream.binance.vision/ws']),
-  'binance-perp': () => binance(['wss://fstream.binance.com/market/ws', 'wss://fstream.binance.com/ws']),
-  'bybit-spot': () => bybit('wss://stream.bybit.com/v5/public/spot'),
-  'bybit-perp': () => bybit('wss://stream.bybit.com/v5/public/linear'),
+  'binance-spot': () => binance(['wss://stream.binance.com:9443/ws', 'wss://data-stream.binance.vision/ws', ...relay('binance-spot')]),
+  'binance-perp': () => binance(['wss://fstream.binance.com/market/ws', 'wss://fstream.binance.com/ws', ...relay('binance-perp')]),
+  'bybit-spot': () => bybit(['wss://stream.bybit.com/v5/public/spot', ...relay('bybit-spot')]),
+  'bybit-perp': () => bybit(['wss://stream.bybit.com/v5/public/linear', ...relay('bybit-perp')]),
 };
 
 const STALL_MS = 12_000;

@@ -1,0 +1,176 @@
+//! The exchanges, for browsers that cannot reach them.
+//!
+//! The browser talks to Binance and Bybit itself; this server is not on that
+//! path. But on networks that block the exchanges' names — a phone on an
+//! Indonesian carrier — the browser gets nowhere, while this server, looking
+//! names up over HTTPS, still does. So the page falls back to these two routes:
+//! the handful of REST calls charts make, and the public market streams. Both
+//! are allow-listed: this is a way to the exchanges' market data, not a proxy.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::extract::ws::{Message as ClientMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
+use tokio::sync::Semaphore;
+use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+
+use crate::api::{ApiError, AppState};
+use crate::dns::Doh;
+
+/// REST calls a chart makes, by host and exact path.
+const REST: [(&str, &[&str]); 4] = [
+    ("api.binance.com", &["/api/v3/klines", "/api/v3/ping"]),
+    ("data-api.binance.vision", &["/api/v3/klines", "/api/v3/ping"]),
+    ("fapi.binance.com", &["/fapi/v1/klines", "/fapi/v1/ping"]),
+    ("api.bybit.com", &["/v5/market/kline", "/v5/market/time"]),
+];
+/// Upstream responses larger than this are refused: a kline page is a few hundred kilobytes.
+const MAX_BODY: usize = 8 * 1024 * 1024;
+
+/// The public market stream of each venue.
+fn stream_url(venue: &str) -> Option<&'static str> {
+    Some(match venue {
+        "binance-spot" => "wss://stream.binance.com:9443/ws",
+        "binance-perp" => "wss://fstream.binance.com/market/ws",
+        "bybit-spot" => "wss://stream.bybit.com/v5/public/spot",
+        "bybit-perp" => "wss://stream.bybit.com/v5/public/linear",
+        _ => return None,
+    })
+}
+
+pub struct Relay {
+    pub doh: Arc<Doh>,
+    http: reqwest::Client,
+    /// Streams relayed at once; past this, a browser keeps retrying its own route.
+    streams: Semaphore,
+}
+
+impl Relay {
+    pub fn new(doh: Arc<Doh>) -> anyhow::Result<Arc<Self>> {
+        let http = reqwest::Client::builder().dns_resolver(doh.resolver()).user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(20)).build()?;
+        Ok(Arc::new(Self { doh, http, streams: Semaphore::new(500) }))
+    }
+}
+
+/// Whether `url` is one of the REST calls relayed.
+pub fn allowed_rest(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.port().is_none() && REST.iter().any(|(host, paths)| url.host_str() == Some(*host) && paths.contains(&url.path()))
+}
+
+#[derive(Deserialize)]
+pub struct RestQuery {
+    url: String,
+}
+
+/// `GET /api/relay/rest?url=…`: the exchange's answer, status and body as they came.
+pub async fn rest(State(state): State<AppState>, Query(q): Query<RestQuery>) -> Result<Response, ApiError> {
+    let url = reqwest::Url::parse(&q.url).map_err(|_| ApiError::bad_request("not a URL"))?;
+    if !allowed_rest(&url) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only the exchanges' market data calls are relayed".into()));
+    }
+    let upstream = state.relay.http.get(url).send().await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("the exchange could not be reached: {e}")))?;
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let bytes = upstream.bytes().await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("the exchange's answer broke off: {e}")))?;
+    if bytes.len() > MAX_BODY {
+        return Err(ApiError(StatusCode::BAD_GATEWAY, "the exchange's answer was too large to relay".into()));
+    }
+    let mut res = Response::new(Body::from(bytes));
+    *res.status_mut() = status;
+    let headers = res.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Some(ct) = content_type.and_then(|ct| HeaderValue::from_str(&ct).ok()) {
+        headers.insert(header::CONTENT_TYPE, ct);
+    }
+    Ok(res)
+}
+
+#[derive(Deserialize)]
+pub struct StreamQuery {
+    venue: String,
+}
+
+/// `GET /api/relay/ws?venue=binance-perp`: the venue's public stream, frame for frame.
+pub async fn ws(State(state): State<AppState>, Query(q): Query<StreamQuery>, upgrade: WebSocketUpgrade) -> Response {
+    let Some(url) = stream_url(&q.venue) else {
+        return ApiError::bad_request("an unknown venue").into_response();
+    };
+    let relay = state.relay.clone();
+    upgrade.on_upgrade(move |client| async move {
+        let Ok(_permit) = relay.streams.try_acquire() else { return };
+        pipe(client, &relay.doh, url).await;
+    })
+}
+
+/// Frames both ways until either side closes. The browser's hub subscribes and
+/// pings as it would directly; this only carries.
+async fn pipe(client: WebSocket, doh: &Doh, url: &str) {
+    let upstream = match doh.connect_ws(url).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            tracing::warn!(url, error = %e, "relayed stream could not connect");
+            return;
+        }
+    };
+    let (mut up_tx, mut up_rx) = upstream.split();
+    let (mut client_tx, mut client_rx) = client.split();
+    loop {
+        tokio::select! {
+            frame = client_rx.next() => match frame {
+                Some(Ok(ClientMessage::Text(text))) => {
+                    if up_tx.send(UpstreamMessage::text(text.as_str())).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(ClientMessage::Binary(bytes))) => {
+                    if up_tx.send(UpstreamMessage::binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(ClientMessage::Ping(_) | ClientMessage::Pong(_))) => {}
+                _ => break,
+            },
+            frame = up_rx.next() => match frame {
+                Some(Ok(UpstreamMessage::Text(text))) => {
+                    if client_tx.send(ClientMessage::text(text.as_str())).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(UpstreamMessage::Binary(bytes))) => {
+                    if client_tx.send(ClientMessage::binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(UpstreamMessage::Ping(_) | UpstreamMessage::Pong(_) | UpstreamMessage::Frame(_))) => {}
+                _ => break,
+            },
+        }
+    }
+    let _ = up_tx.close().await;
+    let _ = client_tx.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_market_data_calls_are_relayed() {
+        let ok = |u: &str| allowed_rest(&reqwest::Url::parse(u).unwrap());
+        assert!(ok("https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=1000"));
+        assert!(ok("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1"));
+        assert!(!ok("https://fapi.binance.com/fapi/v1/order"), "no trading endpoints");
+        assert!(!ok("https://evil.example/fapi/v1/klines"), "no other hosts");
+        assert!(!ok("http://fapi.binance.com/fapi/v1/klines"), "https only");
+        assert!(!ok("https://fapi.binance.com:8443/fapi/v1/klines"), "no other ports");
+        assert!(!ok("https://fapi.binance.com/fapi/v1/klines/../order"), "the path must match exactly");
+        assert_eq!(stream_url("bybit-perp"), Some("wss://stream.bybit.com/v5/public/linear"));
+        assert_eq!(stream_url("wss://anything"), None);
+    }
+}

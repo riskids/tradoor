@@ -1,15 +1,19 @@
 //! tradoor-server — the small API next to the static files.
 //!
 //! It serves the market catalogue, drawings and workspaces, and (in development)
-//! the candle partitions and the built web app. Market data never passes through
-//! it: the browser streams from the exchanges directly and reads history as
-//! static files, which nginx and the CDN serve in production.
+//! the candle partitions and the built web app. Market data does not normally
+//! pass through it: the browser streams from the exchanges directly and reads
+//! history as static files, which nginx and the CDN serve in production. The one
+//! exception is the relay (`relay.rs`), which a browser falls back to only when
+//! its network blocks the exchanges' names.
 
 mod api;
 mod catalog;
+mod dns;
 mod drawings;
 mod import;
 mod liquidations;
+mod relay;
 mod workspaces;
 
 use std::net::SocketAddr;
@@ -76,12 +80,14 @@ async fn main() -> anyhow::Result<()> {
             if let Some(bad) = tickers.iter().find(|t| !liquidations::is_ticker(t)) {
                 anyhow::bail!("TRADOOR_LIQUIDATIONS: {bad:?} is not a ticker — write them like BTCUSDT,ETHUSDT");
             }
+            let doh = dns::Doh::new()?;
             let state = api::AppState {
-                liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers)),
+                liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),
                 pool,
                 data: DataDir::new(&cli.data_dir),
-                catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone())?),
+                catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?),
                 api_token: cli.api_token.clone().filter(|t| !t.is_empty()),
+                relay: relay::Relay::new(doh)?,
             };
             let app = api::router(state, cli.data_dir.clone(), cli.web_dir.clone());
             let listener = tokio::net::TcpListener::bind(cli.bind).await.with_context(|| format!("binding {}", cli.bind))?;

@@ -35,18 +35,26 @@ fn timeframe(tf: &str) -> Result<ChartTimeframe, JsValue> {
 #[wasm_bindgen]
 pub struct ChartEngine {
     chart: Chart,
-    gl: gl::Gl,
+    gl: gl::Surface,
     text: text::TextLayer,
 }
 
 #[wasm_bindgen]
 impl ChartEngine {
     #[wasm_bindgen(constructor)]
-    pub fn new(gl_canvas: web_sys::OffscreenCanvas, text_canvas: web_sys::OffscreenCanvas, tf: &str) -> Result<ChartEngine, JsValue> {
+    /// `flat` draws shapes with the 2D canvas even where WebGL2 is there — the
+    /// path older iPhones take, forced so it can be looked at anywhere.
+    pub fn new(gl_canvas: web_sys::OffscreenCanvas, text_canvas: web_sys::OffscreenCanvas, tf: &str, flat: bool) -> Result<ChartEngine, JsValue> {
         let mut chart = Chart::new(timeframe(tf)?);
         let text = text::TextLayer::new(text_canvas)?;
         chart.set_char_width(text.char_width(chart.theme().font_px));
-        Ok(Self { chart, gl: gl::Gl::new(gl_canvas)?, text })
+        let gl = if flat { gl::Surface::Flat(gl::Flat::new(gl_canvas)?) } else { gl::Surface::new(gl_canvas)? };
+        Ok(Self { chart, gl, text })
+    }
+
+    /// What draws the shapes: `webgl2`, or `2d` where a worker has no WebGL2.
+    pub fn renderer(&self) -> String {
+        self.gl.kind().to_string()
     }
 
     pub fn resize(&mut self, width: f32, height: f32, dpr: f32) {

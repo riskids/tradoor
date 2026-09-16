@@ -45,8 +45,8 @@ struct Response<'a> {
 }
 
 impl Catalog {
-    pub fn new(binance_spot_rest: String) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder().user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(30)).build()?;
+    pub fn new(binance_spot_rest: String, doh: &std::sync::Arc<crate::dns::Doh>) -> anyhow::Result<Self> {
+        let http = reqwest::Client::builder().dns_resolver(doh.resolver()).user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(30)).build()?;
         Ok(Self { http, binance_spot_rest, state: Mutex::new(None) })
     }
 

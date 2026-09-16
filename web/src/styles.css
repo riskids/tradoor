@@ -277,3 +277,28 @@ table.venues tr.off td { color: var(--dim); }
 .conn.unlisted { border-style: dashed; }
 .subhead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 12px; padding: 3px 8px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .note { padding: 5px 8px; font-size: 10px; line-height: 1.5; color: var(--dim); }
+
+/* ------------------------------------------------------------ phones
+   The workspace becomes one scrolling column (Layout's MobileStack): the chart
+   in use as tall as the screen less a peek of the next panel, the rest below.
+   The chart itself keeps touch-action: none, so the page scrolls by the panel
+   headers and toolbars and the chart pans by the chart. */
+.workspace.mobile { display: block; padding: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.mcell { display: flex; flex-direction: column; height: 62vh; height: 62dvh; border-bottom: 1px solid var(--border); background: var(--surface); }
+.mcell.chart { height: 78vh; height: 78dvh; }
+.mcell.lead { height: calc(100vh - 28px - 22px - 34px); height: calc(100dvh - 28px - 22px - 34px); }
+.mcell.watchlist { height: auto; max-height: 60vh; max-height: 60dvh; }
+.mhead { display: flex; flex: 0 0 24px; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 11px; color: var(--muted); }
+.mcell > .panelbody { flex: 1; min-height: 0; }
+
+@media (max-width: 760px) {
+  /* Room for the chart: the top bar keeps what a thumb needs. */
+  .topbar .item.dim, .topbar kbd, .statusbar .hint-key { display: none; }
+  .topbar .item { padding: 0 8px; }
+  /* A toolbar wider than a phone scrolls sideways instead of cutting its end off. */
+  .toolbar { overflow-x: auto; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .toolbar > * { flex-shrink: 0; }
+  .dialog { max-height: 88vh; max-height: 88dvh; }
+  .backdrop { padding: 4vh 8px 8px; }
+}

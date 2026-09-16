@@ -116,8 +116,9 @@ class Slot {
     readonly id: string,
     gl: OffscreenCanvas,
     text: OffscreenCanvas,
+    flat = false,
   ) {
-    this.engine = new ChartEngine(gl, text, '1h');
+    this.engine = new ChartEngine(gl, text, '1h', flat);
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
     // Every exchange's mark, once: a liquidation names the one it came from.
@@ -530,7 +531,7 @@ function handle(msg: ToWorker): void {
   }
   if (msg.t === 'create') {
     try {
-      const slot = new Slot(msg.id, msg.gl, msg.text);
+      const slot = new Slot(msg.id, msg.gl, msg.text, msg.flat === true);
       slot.engine.resize(msg.width, msg.height, msg.dpr);
       slots.set(msg.id, slot);
       schedule();

@@ -137,6 +137,26 @@ an offset (again every minute, for daylight saving) and the engine shifts
 intraday axis and crosshair labels by it; daily and longer bars keep their
 exchange's UTC dates, as a daily candle is a UTC day.
 
+Some networks block the exchanges' names — Indonesian ISPs and carriers answer
+Binance and Bybit with a block page — and a browser there reaches neither their
+REST calls nor their streams. It falls back to the tradoor server: a REST call
+that fails at the network level is retried through `/api/relay/rest` (klines and
+pings on allow-listed hosts and paths only), and each stream's address list ends
+with `/api/relay/ws?venue=…`, which the hub moves to when the exchange's own
+sockets fail before a word. The server looks exchange names up over HTTPS at
+1.1.1.1 and 8.8.8.8, by address, so its own resolver cannot be lied to either;
+the liquidation collector and the market catalogue use the same lookups.
+
+Shapes are drawn with WebGL2 in the worker where the browser allows it there
+(iOS 17 and up, every current desktop browser) and with the worker's 2D canvas
+where it does not: a frame is single-coloured triangles, so runs of one colour
+fill as one path. `?renderer=2d` forces that path in development.
+
+On a phone (under 760px wide) the workspace is shown as one scrolling column
+rather than splits: the chart in use first, as tall as the screen less a peek of
+the next panel, then every other panel in layout order. The saved layout is not
+changed, so a wider window shows the splits again.
+
 A chart panel's canvases and engine slot live as long as the panel, not as long
 as its tab is shown: a browser allows a page about sixteen WebGL contexts and
 frees a dropped one lazily, so a context per mount blanks charts after a few tab

@@ -11,7 +11,7 @@ first.
 | Live | Exchange WebSockets straight to the browser: trades folded into the forming bar between kline updates, and liquidations feeding a ticker above the volume and a tape of their own as they land. |
 | Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, and a day of liquidations for a few tickers. |
 | Database | PostgreSQL 18, for metadata only. Candles never enter it. |
-| UI | SolidJS (35 KB gzip): splits, tabs, docking by drag, link groups, command palette, theme. |
+| UI | SolidJS (35 KB gzip): splits, tabs, docking by drag, link groups, command palette, theme; one scrolling column on a phone. |
 
 ## Repository
 

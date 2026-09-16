@@ -8,7 +8,7 @@ import { chartControllers, setOverlay } from '../app/ui';
 import { call, holdChart, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
-import { demoRate } from '../lib/demo';
+import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
 import { Icon, type IconName } from '../lib/icons';
@@ -144,7 +144,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       try {
         const gl = chart.gl.transferControlToOffscreen();
         const text = chart.text.transferControlToOffscreen();
-        send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio }, [gl, text]);
+        send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio, flat: forceFlatRenderer() }, [gl, text]);
         chart.created = true;
       } catch (e) {
         setStatus((s) => ({ ...s, loading: false, error: `this browser cannot draw off the main thread (${errorText(e)})` }));

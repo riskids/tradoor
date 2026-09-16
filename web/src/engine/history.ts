@@ -102,9 +102,31 @@ const pageLimit = (ref: MarketRef): number => (ref.venue === 'binance-perp' ? 15
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Exchange hosts this browser could not reach. Some networks block the
+ * exchanges' names — a phone on an Indonesian carrier — so their calls go
+ * through the tradoor server instead, which can still reach them. Once a host
+ * fails it goes that way for the rest of the session.
+ */
+const unreachable = new Set<string>();
+
+async function fetchExchange(url: string): Promise<Response> {
+  const host = new URL(url).host;
+  if (!unreachable.has(host)) {
+    try {
+      return await fetch(url);
+    } catch (e) {
+      // A TypeError is the network refusing, not the exchange answering.
+      if (!(e instanceof TypeError)) throw e;
+      unreachable.add(host);
+    }
+  }
+  return fetch(`/api/relay/rest?url=${encodeURIComponent(url)}`);
+}
+
 async function getJson(url: string): Promise<unknown> {
   for (let attempt = 0; ; attempt += 1) {
-    const res = await fetch(url);
+    const res = await fetchExchange(url);
     if (res.ok) return res.json();
     const retryable = res.status === 429 || res.status === 418 || res.status >= 500;
     if (!retryable || attempt >= 3) throw new Error(`${new URL(url).host} answered ${res.status}`);
