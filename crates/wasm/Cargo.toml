@@ -19,6 +19,7 @@ web-sys = { version = "0.3.105", features = [
   "console",
   "OffscreenCanvas",
   "OffscreenCanvasRenderingContext2d",
+  "Path2d",
   "TextMetrics",
   "WebGl2RenderingContext",
   "WebGlBuffer",

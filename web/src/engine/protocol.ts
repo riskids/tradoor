@@ -61,6 +61,8 @@ export type ChartEvent =
   | { type: 'drawingCreated'; kind: string; points: DrawingPoint[] }
   | { type: 'selection'; id: number | null }
   | { type: 'delete'; id: number }
+  | { type: 'drawingChanged'; id: number; points: DrawingPoint[] }
+  | { type: 'editRequested'; id: number }
   | { type: 'toolFinished' }
   | { type: 'needHistory'; before: number }
   | { type: 'paneWeights'; value: string }
@@ -163,6 +165,8 @@ export type ToWorker =
   | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
+  /** Development only: fake liquidations, so the ping design can be judged. */
+  | { t: 'demoLiquidations'; id: string; perMinute: number }
   | { t: 'call'; req: number; name: CallName; args: unknown };
 
 export type FromWorker =

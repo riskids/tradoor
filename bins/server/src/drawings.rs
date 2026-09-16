@@ -50,8 +50,19 @@ pub fn parse_body(body: &Value) -> Result<DrawingInput, String> {
     let kind = b.get("kind").and_then(Value::as_str).filter(|k| KINDS.contains(k)).ok_or_else(|| {
         format!("invalid kind: '{}'. Valid: {}", b.get("kind").map_or("undefined".into(), |k| k.as_str().map_or(k.to_string(), str::to_string)), KINDS.join(", "))
     })?;
-    let points = b.get("points").and_then(Value::as_array).ok_or("points must be an array")?;
-    let (expected, open_ended) = arity(kind).expect("kind is valid");
+    let points = parse_points(kind, b.get("points"))?;
+    let style = b.get("style").and_then(Value::as_object).cloned().unwrap_or_default();
+    let label = b.get("label").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
+    if kind == "text" && label.is_none() {
+        return Err("a text drawing needs a label".into());
+    }
+    Ok(DrawingInput { kind: kind.to_string(), points, style, label })
+}
+
+/// The anchors of a `kind`, counted and checked.
+pub fn parse_points(kind: &str, value: Option<&Value>) -> Result<Vec<Point>, String> {
+    let points = value.and_then(Value::as_array).ok_or("points must be an array")?;
+    let (expected, open_ended) = arity(kind).ok_or_else(|| format!("unknown kind: {kind}"))?;
     if open_ended {
         if points.len() < expected {
             return Err(format!("a {kind} needs at least {expected} points, got {}", points.len()));
@@ -73,12 +84,7 @@ pub fn parse_body(body: &Value) -> Result<DrawingInput, String> {
             Ok(Point { time, price })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let style = b.get("style").and_then(Value::as_object).cloned().unwrap_or_default();
-    let label = b.get("label").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
-    if kind == "text" && label.is_none() {
-        return Err("a text drawing needs a label".into());
-    }
-    Ok(DrawingInput { kind: kind.to_string(), points, style, label })
+    Ok(points)
 }
 
 #[derive(Deserialize)]
@@ -131,6 +137,44 @@ pub async fn create(State(state): State<AppState>, Query(scope): Query<Scope>, J
     let client = state.pool.get().await?;
     let row = insert(&client, &market, timeframe, &input).await?;
     Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
+}
+
+/// Move or relabel one drawing. Its kind and its chart never change: those are
+/// what it IS, and anchors from one timeframe mean nothing on another.
+pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    let b = body.as_object().ok_or_else(|| ApiError::bad_request("body must be a JSON object"))?;
+    let client = state.pool.get().await?;
+    let row = client.query_opt("SELECT kind, label FROM drawing WHERE id = $1", &[&id]).await?;
+    let row = row.ok_or_else(|| ApiError::not_found(format!("drawing {id} not found")))?;
+    let kind: String = row.get(0);
+
+    let points = match b.get("points") {
+        Some(value) => {
+            let points = parse_points(&kind, Some(value)).map_err(ApiError::bad_request)?;
+            Some(serde_json::to_value(points).expect("points serialise"))
+        }
+        None => None,
+    };
+    let label = match b.get("label") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(value) => {
+            let text = value.as_str().map(str::trim).filter(|l| !l.is_empty()).ok_or_else(|| ApiError::bad_request("label must be a non-empty string, or null to clear it"))?;
+            Some(Some(text.to_string()))
+        }
+    };
+    if points.is_none() && label.is_none() {
+        return Err(ApiError::bad_request("nothing to change: send points, label, or both"));
+    }
+    if kind == "text" && matches!(label, Some(None)) {
+        return Err(ApiError::bad_request("a text drawing needs a label"));
+    }
+    let label = label.unwrap_or_else(|| row.get(1));
+
+    let row = client
+        .query_one(&format!("UPDATE drawing SET points = COALESCE($2::jsonb, points), label = $3 WHERE id = $1 RETURNING {COLUMNS}"), &[&id, &points, &label])
+        .await?;
+    Ok(Json(json!({ "drawing": row_json(&row) })))
 }
 
 pub async fn delete_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {

@@ -9,6 +9,7 @@ import { Icon } from '../lib/icons';
 import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
+import { LiquidationsPanel } from '../panels/LiquidationsPanel';
 import { TpoPanel } from '../panels/TpoPanel';
 import { ValuesPanel } from '../panels/ValuesPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
@@ -283,5 +284,7 @@ function PanelView(props: { panel: Panel }) {
       return <TpoPanel panel={p} />;
     case 'values':
       return <ValuesPanel panel={p} />;
+    case 'liquidations':
+      return <LiquidationsPanel panel={p} />;
   }
 }

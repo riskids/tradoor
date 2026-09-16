@@ -6,6 +6,8 @@
 import init, { ChartEngine, LiveFeedEngine, fold_candles, indicator_values, profile_spec, study_catalog, timeframe_info, tpo } from '../wasm/pkg/tradoor_wasm.js';
 import wasmUrl from '../wasm/pkg/tradoor_wasm_bg.wasm?url';
 import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
+import { demoHit } from '../lib/demo';
+import { markOfVenue, markSpec } from '../lib/exchange-marks';
 import { parseMarket } from '../lib/markets';
 import { concatCols, emptyCols, openSeries, sliceCols, type Cols, type Series } from './history';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker, TpoData } from './protocol';
@@ -100,6 +102,7 @@ class Slot {
   private metaDirty = true;
   private price = Number.NaN;
   private priceDirty = false;
+  private demo: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     readonly id: string,
@@ -115,8 +118,31 @@ class Slot {
   }
 
   destroy(): void {
+    clearInterval(this.demo);
     this.detach();
     this.engine.free();
+  }
+
+  /**
+   * Development only: liquidations that never happened, at a given rate, so the
+   * pings can be looked at without waiting on the market. Sizes are drawn on a
+   * log scale — mostly small hits with the occasional big one, as they arrive
+   * in life — and the price wanders a little around the last trade.
+   */
+  demoLiquidations(perMinute: number): void {
+    clearInterval(this.demo);
+    this.demo = undefined;
+    if (perMinute <= 0) return;
+    this.demo = setInterval(
+      () => {
+        const price = this.price;
+        if (!Number.isFinite(price)) return;
+        const now = Date.now();
+        const hit = demoHit(price);
+        this.engine.push_liquidation(now, hit.price, hit.price * hit.qty, hit.long, now);
+      },
+      Math.max(60_000 / perMinute, 50),
+    );
   }
 
   private detach(): void {
@@ -138,6 +164,10 @@ class Slot {
     this.live = null;
     this.price = Number.NaN;
     this.engine.clear_live();
+    this.engine.clear_liquidations();
+    // The badge beside a liquidation ping is the venue's own mark.
+    const mark = markOfVenue(parseMarket(market)?.venue ?? '');
+    this.engine.set_logo(mark?.box ?? 0, mark ? markSpec(mark) : '');
     this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.metaDirty = true;
     let tf: TfInfo;
@@ -197,6 +227,22 @@ class Slot {
 
   private startLive(gen: number, tf: TfInfo): void {
     const ref = parseMarket(this.market);
+    // Liquidations exist on perpetuals only, and are drawn on every timeframe,
+    // including the folded ones that have no candle stream of their own.
+    if (ref?.venue.endsWith('perp')) {
+      this.cleanup.push(
+        hub.subscribe(
+          ref.venue,
+          { kind: 'liquidations', symbol: ref.symbol },
+          {
+            message: (m: StreamMsg) => {
+              if (gen === this.gen && m.kind === 'liquidation') this.engine.push_liquidation(m.time, m.price, m.price * m.qty, m.long, Date.now());
+            },
+            state: () => {},
+          },
+        ),
+      );
+    }
     if (!ref || !tf.live) {
       this.setStatus({ live: 'off' });
       const timer = setInterval(() => void this.series?.refreshTail(), POLL_MS);
@@ -469,6 +515,9 @@ function handle(msg: ToWorker): void {
       break;
     case 'resize':
       slot.engine.resize(msg.width, msg.height, msg.dpr);
+      break;
+    case 'demoLiquidations':
+      slot.demoLiquidations(msg.perMinute);
       break;
     case 'market':
       void slot.load(msg.market, msg.timeframe);

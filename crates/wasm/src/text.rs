@@ -2,11 +2,23 @@
 
 use tradoor_render::{Align, Baseline, Frame};
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{OffscreenCanvas, OffscreenCanvasRenderingContext2d as Ctx};
+use web_sys::{OffscreenCanvas, OffscreenCanvasRenderingContext2d as Ctx, Path2d};
+
+/// One filled path of the venue's mark, with the group transform it sits under.
+struct MarkPath {
+    path: Path2d,
+    fill: String,
+    tx: f64,
+    ty: f64,
+    scale: f64,
+}
 
 pub struct TextLayer {
     canvas: OffscreenCanvas,
     ctx: Ctx,
+    mark: Vec<MarkPath>,
+    /// Side of the square the mark's paths are drawn in.
+    mark_box: f64,
 }
 
 fn font(size: f32) -> String {
@@ -16,7 +28,55 @@ fn font(size: f32) -> String {
 impl TextLayer {
     pub fn new(canvas: OffscreenCanvas) -> Result<Self, JsValue> {
         let ctx: Ctx = canvas.get_context("2d")?.ok_or("2D canvas is not available")?.dyn_into()?;
-        Ok(Self { canvas, ctx })
+        Ok(Self { canvas, ctx, mark: Vec::new(), mark_box: 32.0 })
+    }
+
+    /// The venue's mark, one path a line as `tx|ty|scale|fill|d`. An empty spec
+    /// clears it, and a path the browser cannot parse is simply left out.
+    pub fn set_mark(&mut self, box_size: f32, spec: &str) {
+        self.mark_box = f64::from(box_size).max(1.0);
+        self.mark = spec
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(5, '|');
+                let tx = parts.next()?.parse().ok()?;
+                let ty = parts.next()?.parse().ok()?;
+                let scale = parts.next()?.parse().ok()?;
+                let fill = parts.next()?.to_string();
+                let path = Path2d::new_with_path_string(parts.next()?).ok()?;
+                Some(MarkPath { path, fill, tx, ty, scale })
+            })
+            .collect();
+    }
+
+    /// The venue badges beside the liquidation pings.
+    fn draw_marks(&self, frame: &Frame) {
+        if self.mark.is_empty() || frame.icons.is_empty() {
+            return;
+        }
+        let ctx = &self.ctx;
+        for icon in &frame.icons {
+            ctx.save();
+            if let Some(c) = icon.clip {
+                ctx.begin_path();
+                ctx.rect(f64::from(c.x), f64::from(c.y), f64::from(c.w), f64::from(c.h));
+                ctx.clip();
+            }
+            ctx.set_global_alpha(f64::from(icon.alpha) / 255.0);
+            let size = f64::from(icon.size);
+            let _ = ctx.translate(f64::from(icon.x) - size / 2.0, f64::from(icon.y) - size / 2.0);
+            let _ = ctx.scale(size / self.mark_box, size / self.mark_box);
+            for p in &self.mark {
+                ctx.save();
+                let _ = ctx.translate(p.tx, p.ty);
+                let _ = ctx.scale(p.scale, p.scale);
+                ctx.set_fill_style_str(&p.fill);
+                ctx.fill_with_path_2d(&p.path);
+                ctx.restore();
+            }
+            ctx.restore();
+        }
+        ctx.set_global_alpha(1.0);
     }
 
     /// Axis labels are monospace, so one glyph's width sizes every label.
@@ -88,5 +148,6 @@ impl TextLayer {
                 current = (0.0, None, None);
             }
         }
+        self.draw_marks(frame);
     }
 }

@@ -2,10 +2,13 @@ import { createSignal, onMount } from 'solid-js';
 
 /** The text of a note whose anchor is already placed. Cancelling drops it —
  *  a note nobody wrote is not a drawing. */
-export function NoteInput(props: { onSave(label: string): void; onClose(): void }) {
-  const [text, setText] = createSignal('');
+export function NoteInput(props: { initial?: string; onSave(label: string): void; onClose(): void }) {
+  const [text, setText] = createSignal(props.initial ?? '');
   let input!: HTMLInputElement;
-  onMount(() => input.focus());
+  onMount(() => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
   const save = () => {
     const label = text().trim();
     props.onClose();

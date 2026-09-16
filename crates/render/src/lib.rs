@@ -19,5 +19,5 @@ mod ticks;
 pub use chart::{Chart, Cursor, Event, Legend, StudyMeta};
 pub use color::Color;
 pub use drawings::{Anchor, DrawingKind, DrawingShape};
-pub use paint::{Align, Baseline, Batch, Frame, Rect, TextCmd};
+pub use paint::{Align, Baseline, Batch, Frame, IconCmd, Rect, TextCmd};
 pub use theme::Theme;

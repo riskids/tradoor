@@ -58,6 +58,10 @@ jobs:
         working-directory: web
         run: deno task check
 
+      - name: Web tests
+        working-directory: web
+        run: deno task test
+
       - name: Web build
         working-directory: web
         run: deno task build

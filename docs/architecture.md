@@ -32,16 +32,28 @@ page never drops a frame of the chart.
 4. The kline stream (plus aggregate trades on Binance) feeds `LiveFeedEngine`,
    which never lets a stale kline rewind trades already folded. When the bar
    rolls over, the finished bar is kept as closed until REST confirms it.
-5. `ChartEngine` (tradoor-render) turns candles, studies, drawings and the view
+5. On a perpetual the venue's liquidation stream is subscribed too. Each hit is
+   pushed into the engine at the price it filled at and joins a feed above the
+   volume: the newest lands at the foot, pushes the stack up as it arrives, and
+   fades out five seconds later. A row carries the venue's mark and what the hit
+   cost. Nothing is stored — the Liquidations panel keeps its own tape of the
+   same stream in the tab, and a reload starts it empty.
+6. `ChartEngine` (tradoor-render) turns candles, studies, drawings and the view
    into a `Frame`: one vertex buffer of triangles in draw order with clip
    batches, and a list of text commands. The worker uploads it in two buffer
    writes and replays the text on the 2D canvas. Nothing is drawn unless
    something changed or the countdown needs its next second.
-6. Panning near the oldest bar held emits `needHistory`; the series loads the
+7. Panning near the oldest bar held emits `needHistory`; the series loads the
    next older partition, or pages REST back, and every chart on it refolds.
 
 Series nobody reads are dropped after two minutes, so a deep 1-minute history
 does not outlive its chart.
+
+Every chart and watchlist row shares one socket per venue, each topic subscribed
+once and reference counted. Bybit refuses a whole subscribe frame when one topic
+in it is unknown — `error:handler not found` — so a refused frame drops the topic
+it names and re-sends the rest one at a time, and the named topic is not tried
+again on that socket.
 
 ## Stored history
 

@@ -26,11 +26,23 @@ const SEPARATOR_GRAB: f32 = 4.0;
 const DEFAULT_VISIBLE_BARS: f64 = 150.0;
 const RIGHT_MARGIN_BARS: f64 = 2.0;
 const CLICK_SLOP: f32 = 5.0;
+/// How near an anchor handle counts as grabbing it.
+const HANDLE_HIT: f32 = 9.0;
 /// How far a drag must move vertically before it takes an autoscaled pane's
 /// price axis over, so a sideways pan with a shaky hand keeps autoscale.
 const VERTICAL_PAN_SLOP: f32 = 24.0;
-const HIT_TOLERANCE: f32 = 6.0;
+const HIT_TOLERANCE: f32 = 8.0;
 const BRUSH_SAMPLE: f32 = 3.0;
+/// How long a liquidation stays in the feed before it is gone.
+const LIQUIDATION_TTL: i64 = 5_000;
+/// A new hit slides the stack up over this long, and fades in as it arrives.
+const LIQUIDATION_ENTER: i64 = 260;
+/// The fade at the end of a hit's five seconds.
+const LIQUIDATION_FADE: i64 = 900;
+/// Rows of the feed that fit before the chart starts disappearing behind it.
+const LIQUIDATION_ROWS: usize = 10;
+/// Pings held at once; older ones drop off even before their time is up.
+const MAX_LIQUIDATIONS: usize = 400;
 /// Ask for older history once fewer than this many bars remain off the left edge.
 const HISTORY_MARGIN_BARS: f64 = 80.0;
 
@@ -40,6 +52,10 @@ pub enum Event {
     DrawingCreated { kind: DrawingKind, points: Vec<Anchor> },
     SelectionChanged(Option<i64>),
     DeleteRequested(i64),
+    /// Moved or reshaped by hand; the page saves its new anchors.
+    DrawingChanged { id: i64, points: Vec<Anchor> },
+    /// Double-clicked; the page opens its label for editing.
+    EditRequested(i64),
     /// A tool finished or was cancelled; the palette falls back to select.
     ToolFinished,
     /// The view is near the oldest bar held.
@@ -55,6 +71,7 @@ pub enum Cursor {
     Crosshair,
     Pointer,
     Grabbing,
+    Move,
     ColResize,
     RowResize,
     NsResize,
@@ -67,6 +84,7 @@ impl Cursor {
             Self::Crosshair => "crosshair",
             Self::Pointer => "pointer",
             Self::Grabbing => "grabbing",
+            Self::Move => "move",
             Self::ColResize => "ew-resize",
             Self::RowResize => "row-resize",
             Self::NsResize => "ns-resize",
@@ -132,6 +150,11 @@ enum Drag {
     TimeAxis { last_x: f32 },
     Separator { upper: usize, last_y: f32 },
     Brush { last: (f32, f32) },
+    /// Moving a whole drawing, or one of its anchors.
+    Shape { id: i64, last: (f32, f32), moved: bool },
+    Anchor { id: i64, index: usize, moved: bool },
+    /// Pressed with a tool armed: a drag places its next anchors in one gesture.
+    Draw { kind: DrawingKind, start: Anchor, start_px: (f32, f32), moved: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +164,18 @@ enum Zone {
     TimeAxis,
     Separator(usize),
     Outside,
+}
+
+/// A position closed out by the exchange, drawn as a ping beside the candles.
+#[derive(Clone, Copy, Debug)]
+struct Liquidation {
+    time: f64,
+    price: f64,
+    usd: f64,
+    /// A long was liquidated — someone was sold out of the market.
+    long: bool,
+    /// When it reached us, for the fade.
+    at: i64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +199,7 @@ pub struct Chart {
     candles: Vec<Candle>,
     times: Vec<f64>,
     live: Option<LiveBar>,
+    liquidations: Vec<Liquidation>,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -205,6 +241,7 @@ impl Chart {
             candles: Vec::new(),
             times: Vec::new(),
             live: None,
+            liquidations: Vec::new(),
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -235,7 +272,8 @@ impl Chart {
         }
     }
 
-    fn touch(&mut self) {
+    /// Mark the chart for one more paint, when something it does not own changed.
+    pub fn touch(&mut self) {
         self.dirty = true;
     }
 
@@ -324,6 +362,24 @@ impl Chart {
             self.live = live;
             self.touch();
         }
+    }
+
+    /// One liquidation, to ping beside the candles until it fades.
+    pub fn push_liquidation(&mut self, time: f64, price: f64, usd: f64, long: bool, at: i64) {
+        if !(time.is_finite() && price.is_finite() && usd.is_finite()) {
+            return;
+        }
+        self.liquidations.retain(|l| at - l.at < LIQUIDATION_TTL);
+        if self.liquidations.len() >= MAX_LIQUIDATIONS {
+            self.liquidations.remove(0);
+        }
+        self.liquidations.push(Liquidation { time, price, usd, long, at });
+        self.touch();
+    }
+
+    pub fn clear_liquidations(&mut self) {
+        self.liquidations.clear();
+        self.touch();
     }
 
     /// `ema:50,rsi:14`.
@@ -465,9 +521,12 @@ impl Chart {
         self.cursor
     }
 
-    /// Something changed, or the countdown needs its next second.
+    /// Something changed, the countdown needs its next second, or a liquidation
+    /// ping is still fading.
     pub fn needs_render(&self, now: i64) -> bool {
-        self.dirty || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second)
+        self.dirty
+            || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second)
+            || self.liquidations.iter().any(|l| now - l.at < LIQUIDATION_TTL)
     }
 
     // ------------------------------------------------------------------ layout
@@ -781,6 +840,46 @@ impl Chart {
             }
         }
 
+        // ---- liquidation feed: hits land above the volume and ride up and out
+        if !self.hidden.contains("liquidations") {
+            f.clip(Some(price.plot));
+            let size = t.font_px - 1.0;
+            let mark = (size + 3.0).round();
+            let row = mark + 4.0;
+            // At the foot of the pane, where the volume is shortest and the
+            // candles are not: the feed rises from there rather than sitting
+            // among the bodies.
+            let foot = price.plot.bottom() - 4.0;
+            // The newest hit pushes the whole stack up as it arrives, rather
+            // than snapping a row taller between one frame and the next.
+            let shift = match self.liquidations.last() {
+                Some(l) if now - l.at < LIQUIDATION_ENTER => row * (1.0 - (now - l.at).max(0) as f32 / LIQUIDATION_ENTER as f32),
+                _ => 0.0,
+            };
+            for (slot, l) in self.liquidations.iter().rev().take(LIQUIDATION_ROWS).enumerate() {
+                let age = (now - l.at).max(0);
+                if age >= LIQUIDATION_TTL {
+                    break;
+                }
+                let y = foot - slot as f32 * row + shift;
+                if y - row < price.plot.y {
+                    break;
+                }
+                // Full strength in the middle of its life: it arrives with the
+                // stack and leaves by fading where it stands.
+                let fade = (age as f32 / LIQUIDATION_ENTER as f32).min((LIQUIDATION_TTL - age) as f32 / LIQUIDATION_FADE as f32).clamp(0.0, 1.0);
+                // A long liquidated is forced selling, so it takes the bear colour.
+                let base = if l.long { t.bear } else { t.bull };
+                let alpha = (40.0 + 200.0 * fade) as u8;
+                let text = format!("{} ${}", if l.long { "LONG" } else { "SHORT" }, format_turnover(l.usd));
+                let width = mark + 3.0 + text.len() as f32 * self.char_width;
+                let left = (plot_w - width - 8.0).max(0.0);
+                f.rect(left - 4.0, y - row + 1.0, width + 8.0, row - 1.0, t.background.with_alpha((190.0 * fade) as u8));
+                f.icon(left + mark / 2.0, y - row / 2.0, mark, alpha, Some(price.plot));
+                f.text(left + mark + 3.0, y - row / 2.0, text, base.with_alpha(alpha), Align::Left, Baseline::Middle, size, None, Some(price.plot));
+            }
+        }
+
         // ---- ribbon crosses, last price, drawings
         f.clip(Some(price.plot));
         if !self.hidden.contains("ribbon") {
@@ -1090,6 +1189,53 @@ impl Chart {
         (time.is_finite() && price.is_finite()).then_some(Anchor { time, price })
     }
 
+    /// An anchor handle of the selected drawing under the pointer.
+    fn handle_at(&self, x: f32, y: f32) -> Option<(i64, usize)> {
+        let id = self.selected?;
+        let shape = self.drawings.iter().find(|d| d.id == Some(id)).filter(|d| d.kind != DrawingKind::Brush)?;
+        let placed = self.place(shape, false)?;
+        let hit = placed.points.iter().position(|p| (p.0 - x).hypot(p.1 - y) <= HANDLE_HIT)?;
+        Some((id, hit))
+    }
+
+    fn select(&mut self, id: Option<i64>) {
+        if self.selected != id {
+            self.selected = id;
+            self.events.push(Event::SelectionChanged(id));
+            self.touch();
+        }
+    }
+
+    fn move_anchor(&mut self, id: i64, index: usize, x: f32, y: f32) {
+        let Some(anchor) = self.anchor_at(x, y) else { return };
+        if let Some(shape) = self.drawings.iter_mut().find(|d| d.id == Some(id)) {
+            if let Some(point) = shape.points.get_mut(index) {
+                *point = anchor;
+            }
+        }
+        self.touch();
+    }
+
+    /// Shift a whole drawing by a pointer move: along the bars, and by the same
+    /// distance on the price axis — a ratio under a log scale.
+    fn move_shape(&mut self, id: i64, from: (f32, f32), to: (f32, f32)) {
+        let Some(pane) = self.panes.first().copied() else { return };
+        let Some(index) = self.drawings.iter().position(|d| d.id == Some(id)) else { return };
+        let bars = f64::from(to.0 - from.0) / self.time.bar_spacing;
+        let scale = pane.scale;
+        let rise = scale.transform(scale.price(f64::from(to.1))) - scale.transform(scale.price(f64::from(from.1)));
+        let moved: Vec<Anchor> = self.drawings[index]
+            .points
+            .iter()
+            .map(|p| Anchor {
+                time: time_to_logical(&self.times, p.time).and_then(|l| logical_to_time(&self.times, l + bars)).unwrap_or(p.time),
+                price: scale.untransform(scale.transform(p.price) + rise),
+            })
+            .collect();
+        self.drawings[index].points = moved;
+        self.touch();
+    }
+
     fn drawing_at(&self, x: f32, y: f32) -> Option<i64> {
         let (mut best, mut best_distance) = (None, HIT_TOLERANCE);
         for d in &self.drawings {
@@ -1110,6 +1256,7 @@ impl Chart {
         }
         match self.drag {
             Drag::Press { panning: true, .. } => Cursor::Grabbing,
+            Drag::Shape { .. } | Drag::Anchor { .. } => Cursor::Move,
             Drag::PriceAxis { .. } => Cursor::NsResize,
             Drag::TimeAxis { .. } => Cursor::ColResize,
             Drag::Separator { .. } => Cursor::RowResize,
@@ -1117,7 +1264,8 @@ impl Chart {
                 Zone::Separator(_) => Cursor::RowResize,
                 Zone::PriceAxis(_) => Cursor::NsResize,
                 Zone::TimeAxis => Cursor::ColResize,
-                Zone::Plot(0) if self.drawing_at(x, y).is_some() => Cursor::Pointer,
+                Zone::Plot(0) if self.handle_at(x, y).is_some() => Cursor::Pointer,
+                Zone::Plot(0) if self.drawing_at(x, y).is_some() => Cursor::Move,
                 Zone::Plot(_) => Cursor::Crosshair,
                 Zone::Outside => Cursor::Default,
             },
@@ -1160,6 +1308,26 @@ impl Chart {
                 self.resize_panes(upper, y - last_y);
                 self.drag = Drag::Separator { upper, last_y: y };
             }
+            Drag::Anchor { id, index, .. } => {
+                self.move_anchor(id, index, x, y);
+                self.drag = Drag::Anchor { id, index, moved: true };
+            }
+            Drag::Shape { id, last, .. } => {
+                self.move_shape(id, last, (x, y));
+                self.drag = Drag::Shape { id, last: (x, y), moved: true };
+            }
+            Drag::Draw { kind, start, start_px, moved } => {
+                let moved = moved || (x - start_px.0).hypot(y - start_px.1) > CLICK_SLOP;
+                if moved {
+                    if let Some(end) = self.anchor_at(x, y) {
+                        let mut points = self.placed.clone();
+                        points.push(start);
+                        points.push(end);
+                        self.draft = Some(DrawingShape { id: None, kind, points, label: None });
+                    }
+                }
+                self.drag = Drag::Draw { kind, start, start_px, moved };
+            }
             Drag::Brush { last } => {
                 if (x - last.0).hypot(y - last.1) >= BRUSH_SAMPLE && self.placed.len() < MAX_POINTS {
                     if let Some(a) = self.anchor_at(x, y) {
@@ -1171,7 +1339,7 @@ impl Chart {
             }
             Drag::None => {}
         }
-        if let Some(tool) = self.tool.filter(|t| *t != DrawingKind::Brush && !self.placed.is_empty()) {
+        if let Some(tool) = self.tool.filter(|t| *t != DrawingKind::Brush && !self.placed.is_empty() && !matches!(self.drag, Drag::Draw { .. })) {
             if let Some(a) = self.anchor_at(x, y) {
                 self.draft_with(tool, Some(a));
             }
@@ -1197,6 +1365,23 @@ impl Chart {
                 }
                 None => Drag::None,
             },
+            // A handle of the selected drawing reshapes it, anywhere else on a
+            // drawing moves the whole thing, and bare chart pans.
+            Zone::Plot(0) if free => {
+                if let Some((id, index)) = self.handle_at(x, y) {
+                    Drag::Anchor { id, index, moved: false }
+                } else if let Some(id) = self.drawing_at(x, y) {
+                    self.select(Some(id));
+                    Drag::Shape { id, last: (x, y), moved: false }
+                } else {
+                    Drag::Press { start: (x, y), last_x: x, last_y: y, pane: 0, panning: false, price_pan: false }
+                }
+            }
+            // With a tool armed, a drag places its anchors in one gesture.
+            Zone::Plot(0) if !matches!(self.tool, Some(DrawingKind::Text) | Some(DrawingKind::Path)) => match (self.tool, self.anchor_at(x, y)) {
+                (Some(kind), Some(start)) => Drag::Draw { kind, start, start_px: (x, y), moved: false },
+                _ => Drag::None,
+            },
             Zone::Plot(p) => Drag::Press { start: (x, y), last_x: x, last_y: y, pane: p, panning: false, price_pan: false },
             _ => Drag::None,
         };
@@ -1214,6 +1399,31 @@ impl Chart {
                 if points.len() >= DrawingKind::Brush.arity() {
                     self.events.push(Event::DrawingCreated { kind: DrawingKind::Brush, points });
                     self.finish_tool();
+                }
+            }
+            Drag::Anchor { id, moved: true, .. } | Drag::Shape { id, moved: true, .. } => {
+                if let Some(shape) = self.drawings.iter().find(|d| d.id == Some(id)) {
+                    self.events.push(Event::DrawingChanged { id, points: shape.points.clone() });
+                }
+            }
+            Drag::Draw { kind, start, start_px, moved } => {
+                if !moved || (x - start_px.0).hypot(y - start_px.1) <= CLICK_SLOP {
+                    self.click(x, y);
+                } else if let Some(end) = self.anchor_at(x, y) {
+                    let mut points = std::mem::take(&mut self.placed);
+                    if kind.arity() == 1 {
+                        points.push(end);
+                    } else {
+                        points.push(start);
+                        points.push(end);
+                    }
+                    if points.len() >= kind.arity() {
+                        self.events.push(Event::DrawingCreated { kind, points });
+                        self.finish_tool();
+                    } else {
+                        self.placed = points;
+                        self.draft_with(kind, Some(end));
+                    }
                 }
             }
             Drag::Separator { .. } => self.events.push(Event::PaneWeightsChanged(self.pane_weights())),
@@ -1241,13 +1451,7 @@ impl Chart {
     fn click(&mut self, x: f32, y: f32) {
         let on_price = self.zone(x, y) == Zone::Plot(0);
         match self.tool {
-            None => {
-                let hit = if on_price { self.drawing_at(x, y) } else { None };
-                if hit != self.selected {
-                    self.selected = hit;
-                    self.events.push(Event::SelectionChanged(hit));
-                }
-            }
+            None => self.select(if on_price { self.drawing_at(x, y) } else { None }),
             Some(DrawingKind::Brush) => {}
             Some(tool) => {
                 let Some(anchor) = self.anchor_at(x, y).filter(|_| on_price) else { return };
@@ -1292,6 +1496,13 @@ impl Chart {
                     }
                 }
                 Zone::TimeAxis => self.view_ready = false,
+                // Reopens a note's text; other kinds have nothing to type.
+                Zone::Plot(0) => {
+                    if let Some(id) = self.drawing_at(x, y) {
+                        self.select(Some(id));
+                        self.events.push(Event::EditRequested(id));
+                    }
+                }
                 _ => {}
             }
         }
@@ -1491,6 +1702,11 @@ impl Chart {
 /// A candle body in device pixels, odd once it is wide enough so the wick sits on
 /// its centre, and the wick in CSS pixels: one pixel at any zoom, as on
 /// TradingView — a wick that thickens with the body reads as a second body.
+/// Do two badge boxes share any ground?
+fn overlaps(a: &Rect, b: &Rect) -> bool {
+    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+}
+
 fn candle_widths(bar_spacing: f64, dpr: f32) -> (f32, f32) {
     let mut body = (bar_spacing as f32 * dpr * 0.8).floor().max(1.0);
     if body >= 3.0 && (body as i32) % 2 == 0 {
@@ -1719,6 +1935,105 @@ mod tests {
         assert_eq!(c.take_events(), vec![Event::DeleteRequested(7)]);
         assert!(c.key("Escape"));
         assert!(!c.key("Escape"), "nothing left to cancel");
+    }
+
+    #[test]
+    fn the_liquidation_feed_stacks_the_newest_hit_at_the_foot() {
+        let mut c = chart();
+        let now = 1_800_000_000_000;
+        let last = *c.candles().last().unwrap();
+        let quiet = c.render(now).vertex_count();
+
+        c.push_liquidation(last.open_time as f64, last.close, 2_000_000.0, true, now);
+        let frame = c.render(now + 100);
+        let (drawn, texts, icons) = (frame.vertex_count(), frame.texts.clone(), frame.icons.len());
+        assert!(drawn > quiet, "the hit is drawn");
+        assert!(texts.iter().any(|t| t.text == "LONG $2.0M"), "says which side was closed out, and how big it was");
+        assert_eq!(icons, 1, "with the venue's mark beside the figure");
+        assert!(c.needs_render(now + 100), "and the feed keeps the chart animating");
+
+        // Out of the candles' way: at the foot of the pane, inside it.
+        let pane = c.panes[0].plot;
+        let row = texts.iter().find(|t| t.text == "LONG $2.0M").unwrap();
+        assert!(row.y < pane.bottom(), "the feed stays inside the pane");
+        assert!(row.y > pane.y + pane.h * 0.9, "and sits at its foot");
+
+        // A second hit takes the foot and pushes the first one up a row.
+        c.push_liquidation(last.open_time as f64, last.close, 4_000.0, false, now + 1_000);
+        let frame = c.render(now + 1_400);
+        let ys: Vec<(String, f32)> = frame.texts.iter().filter(|t| t.text.contains('$')).map(|t| (t.text.clone(), t.y)).collect();
+        assert_eq!(ys.len(), 2, "both hits are in the feed");
+        let newest = ys.iter().find(|(text, _)| text == "SHORT $4K").unwrap().1;
+        let older = ys.iter().find(|(text, _)| text == "LONG $2.0M").unwrap().1;
+        assert!(newest > older, "the newest hit is at the foot and the older one has risen");
+
+        assert_eq!(c.render(now + 1_000 + LIQUIDATION_TTL).vertex_count(), quiet, "five seconds and they are gone");
+        assert!(!c.needs_render(now + 1_000 + LIQUIDATION_TTL), "and the chart rests again");
+
+        c.push_liquidation(last.open_time as f64, last.close, 900.0, false, now);
+        c.set_hidden("liquidations");
+        assert_eq!(c.render(now + 100).vertex_count(), quiet, "the layer can be switched off");
+    }
+
+    #[test]
+    fn the_feed_stops_before_it_covers_the_chart() {
+        let mut c = chart();
+        let now = 1_800_000_000_000;
+        let last = *c.candles().last().unwrap();
+
+        for i in 0..20 {
+            c.push_liquidation(last.open_time as f64, last.close, 1_000.0 * f64::from(i + 1), true, now);
+        }
+        let frame = c.render(now + 300);
+        let rows = frame.texts.iter().filter(|t| t.text.contains('$')).count();
+        assert!(rows <= LIQUIDATION_ROWS, "at most {LIQUIDATION_ROWS} rows, not {rows}");
+        assert_eq!(rows, frame.icons.len(), "every row carries its mark");
+        // The newest hits are the ones kept.
+        assert!(frame.texts.iter().any(|t| t.text == "LONG $20K"), "the newest hit is in the feed");
+        assert!(!frame.texts.iter().any(|t| t.text == "LONG $1K"), "the oldest has been pushed out");
+    }
+
+    #[test]
+    fn a_drawing_moves_by_dragging_it_and_reshapes_by_its_handles() {
+        let mut c = chart();
+        let (a, b) = (Anchor { time: c.times[400], price: c.panes[0].scale.price(200.0) }, Anchor { time: c.times[450], price: c.panes[0].scale.price(150.0) });
+        c.set_drawings(vec![DrawingShape { id: Some(3), kind: DrawingKind::Trendline, points: vec![a, b], label: None }]);
+        c.render(1_800_000_000_000);
+
+        let (mx, my) = ((c.time.x(400.0) + c.time.x(450.0)) as f32 / 2.0, 175.0);
+        c.pointer_down(mx, my, 0);
+        c.pointer_move(mx, my + 40.0);
+        c.pointer_up(mx, my + 40.0);
+        let events = c.take_events();
+        assert!(events.contains(&Event::SelectionChanged(Some(3))), "{events:?}");
+        let Some(Event::DrawingChanged { id, points }) = events.into_iter().find(|e| matches!(e, Event::DrawingChanged { .. })) else { panic!("no change event") };
+        assert_eq!(id, 3);
+        assert!(points[0].price < a.price && points[1].price < b.price, "dragging down lowers both ends");
+        assert!((points[0].time - a.time).abs() < 1.0, "a straight-down drag keeps the times");
+
+        c.render(1_800_000_000_000);
+        let handle = c.place(&c.drawings[0], false).unwrap().points[1];
+        c.pointer_down(handle.0, handle.1, 0);
+        c.pointer_move(handle.0, handle.1 - 30.0);
+        c.pointer_up(handle.0, handle.1 - 30.0);
+        let Some(Event::DrawingChanged { points: reshaped, .. }) = c.take_events().into_iter().find(|e| matches!(e, Event::DrawingChanged { .. })) else { panic!("no change event") };
+        assert_eq!(reshaped[0], points[0], "the other end stays put");
+        assert!(reshaped[1].price > points[1].price, "the grabbed end rose");
+    }
+
+    #[test]
+    fn a_tool_can_be_dragged_to_place_a_drawing_in_one_gesture() {
+        let mut c = chart();
+        c.set_tool(Some(DrawingKind::Rect));
+        c.pointer_down(300.0, 200.0, 0);
+        c.pointer_move(360.0, 230.0);
+        assert!(c.draft.is_some(), "the rectangle follows the pointer while dragging");
+        c.pointer_move(420.0, 260.0);
+        c.pointer_up(420.0, 260.0);
+        let events = c.take_events();
+        let Some(Event::DrawingCreated { kind, points }) = events.first().cloned() else { panic!("{events:?}") };
+        assert_eq!((kind, points.len()), (DrawingKind::Rect, 2));
+        assert_eq!(c.tool(), None, "and the tool is done");
     }
 
     #[test]

@@ -179,7 +179,9 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .venue-name { font-size: 11px; color: var(--muted); }
 .kind { font-size: 9px; letter-spacing: 0.08em; line-height: 13px; padding: 0 3px; border: 1px solid var(--border); color: var(--dim); flex: none; }
 .health { display: flex; }
-.hint { flex: none; padding: 2px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--primary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Floats over the plot, clear of the time axis: appearing must never resize
+   the canvas under a tool the user is already aiming with. */
+.hint { position: absolute; left: 50%; bottom: 28px; z-index: 6; transform: translateX(-50%); max-width: calc(100% - 20px); padding: 2px 8px; border: 1px solid var(--border); background: color-mix(in oklab, var(--surface) 86%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .chartwrap { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 1px; flex: 0 0 30px; padding: 3px 0; border-right: 1px solid var(--border); background: var(--surface-2); overflow-y: auto; overflow-x: hidden; }
 .rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; color: var(--dim); }
@@ -232,5 +234,15 @@ table.grid td { padding: 2px 8px; border-bottom: 1px solid var(--grid); }
 table.grid tr:nth-child(even) td { background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
 table.grid td:first-child { font-size: 10px; letter-spacing: 0.1em; color: var(--dim); }
 table.grid td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* The liquidation tape: four columns that stay put as hits arrive at the top. */
+table.tape { font-size: 11px; }
+table.tape thead th { position: sticky; top: 0; z-index: 1; padding: 2px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--dim); font-size: 9px; font-weight: 400; letter-spacing: 0.12em; text-transform: uppercase; text-align: right; }
+table.tape thead th:first-child, table.tape thead th:nth-child(2) { text-align: left; }
+table.tape td { padding: 1px 8px; }
+table.tape td:first-child, table.tape td:nth-child(2) { font-size: 11px; letter-spacing: 0; color: inherit; }
+table.tape td:nth-child(2) { display: flex; align-items: center; gap: 5px; font-size: 9px; letter-spacing: 0.1em; }
+table.tape td:nth-child(3), table.tape td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+table.tape tr.big td { font-weight: 700; background: color-mix(in oklab, currentColor 8%, transparent); }
 .subhead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 12px; padding: 3px 8px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .note { padding: 5px 8px; font-size: 10px; line-height: 1.5; color: var(--dim); }

@@ -7,7 +7,7 @@ export type Overlay =
   | { kind: 'palette' }
   | { kind: 'settings' }
   | { kind: 'help' }
-  | { kind: 'note'; save(label: string): void };
+  | { kind: 'note'; initial?: string; save(label: string): void };
 
 export const [overlay, setOverlay] = createSignal<Overlay | null>(null);
 export const closeOverlay = (): void => void setOverlay(null);

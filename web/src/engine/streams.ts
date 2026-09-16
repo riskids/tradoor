@@ -11,7 +11,9 @@ export type SocketState = 'connecting' | 'live' | 'stalled' | 'retrying';
 export type StreamSpec =
   | { kind: 'kline'; symbol: string; interval: string }
   | { kind: 'trades'; symbol: string }
-  | { kind: 'ticker'; symbol: string };
+  | { kind: 'ticker'; symbol: string }
+  /// Positions the exchange closed out — perpetuals only.
+  | { kind: 'liquidations'; symbol: string };
 
 export interface KlineMsg {
   kind: 'kline';
@@ -41,7 +43,16 @@ export interface TickerMsg {
   quoteVolume: number | null;
 }
 
-export type StreamMsg = KlineMsg | TradeMsg | TickerMsg;
+export interface LiquidationMsg {
+  kind: 'liquidation';
+  time: number;
+  price: number;
+  qty: number;
+  /** A long was liquidated: the exchange sold someone out. */
+  long: boolean;
+}
+
+export type StreamMsg = KlineMsg | TradeMsg | TickerMsg | LiquidationMsg;
 
 export interface StreamListener {
   message(msg: StreamMsg): void;
@@ -56,6 +67,8 @@ interface Protocol {
   topic(spec: StreamSpec): string;
   frames(op: 'subscribe' | 'unsubscribe', topics: string[]): unknown[];
   read(msg: Json, emit: (topic: string, msg: StreamMsg) => void): void;
+  /** A refused frame: the topic the exchange named, and the batch it came in. */
+  refused?(msg: Json): { bad: string; batch: string[] } | null;
   heartbeat?: unknown;
 }
 
@@ -79,7 +92,8 @@ function binance(urls: string[]): Protocol {
     topic(spec) {
       const s = spec.symbol.toLowerCase();
       if (spec.kind === 'kline') return `${s}@kline_${spec.interval}`;
-      return spec.kind === 'trades' ? `${s}@aggTrade` : `${s}@miniTicker`;
+      if (spec.kind === 'trades') return `${s}@aggTrade`;
+      return spec.kind === 'liquidations' ? `${s}@forceOrder` : `${s}@miniTicker`;
     },
     // Every frame counts against a five-a-second limit, so topics travel in batches.
     frames: (op, topics) => chunks(topics, 100).map((params) => ({ method: op.toUpperCase(), params, id: ++id })),
@@ -100,6 +114,20 @@ function binance(urls: string[]): Protocol {
         });
       } else if (m.e === 'aggTrade') {
         emit(`${s}@aggTrade`, { kind: 'trade', time: num(m.T), price: num(m.p), qty: num(m.q), lastTradeId: typeof m.l === 'number' ? m.l : -1 });
+      } else if (m.e === 'forceOrder' && m.o && typeof m.o === 'object') {
+        const o = m.o as Json;
+        // `p` is the order's limit price, set through the book so the position
+        // is certain to close — a percent or more off the market. `ap` is what
+        // it actually filled at, which is where the hit belongs on the chart.
+        const filled = num(o.ap);
+        // A forced SELL closes a long position.
+        emit(`${String(o.s ?? '').toLowerCase()}@forceOrder`, {
+          kind: 'liquidation',
+          time: num(o.T),
+          price: filled > 0 ? filled : num(o.p),
+          qty: num(o.q),
+          long: o.S === 'SELL',
+        });
       } else if (m.e === '24hrMiniTicker') {
         const last = num(m.c);
         const open = num(m.o);
@@ -127,10 +155,17 @@ function bybit(url: string): Protocol {
     urls: [url],
     topic(spec) {
       if (spec.kind === 'kline') return `kline.${BYBIT_INTERVAL[spec.interval] ?? spec.interval}.${spec.symbol}`;
+      if (spec.kind === 'liquidations') return `allLiquidation.${spec.symbol}`;
       return spec.kind === 'ticker' ? `tickers.${spec.symbol}` : `publicTrade.${spec.symbol}`;
     },
-    // Spot accepts at most ten topics a frame.
-    frames: (op, topics) => chunks(topics, 10).map((args) => ({ op, args })),
+    // Spot accepts at most ten topics a frame. The id carries the batch back:
+    // Bybit refuses the whole frame over one bad topic and names only that one.
+    frames: (op, topics) => chunks(topics, 10).map((args) => ({ op, args, req_id: args.join(',') })),
+    refused(m) {
+      if (m.op !== 'subscribe' || m.success !== false) return null;
+      const named = /topic:([^\s,]+)/.exec(String(m.ret_msg ?? ''));
+      return { bad: named?.[1] ?? '', batch: typeof m.req_id === 'string' && m.req_id !== '' ? m.req_id.split(',') : [] };
+    },
     read(m, emit) {
       const topic = m.topic;
       if (typeof topic !== 'string') return;
@@ -138,6 +173,11 @@ function bybit(url: string): Protocol {
         for (const k of m.data as Json[]) {
           // No trades are folded here, so every kline is taken whole: id 0.
           emit(topic, { kind: 'kline', openTime: num(k.start), open: num(k.open), high: num(k.high), low: num(k.low), close: num(k.close), volume: num(k.volume), lastTradeId: 0, closed: k.confirm === true });
+        }
+      } else if (topic.startsWith('allLiquidation.') && Array.isArray(m.data)) {
+        for (const l of m.data as Json[]) {
+          // Bybit reports the POSITION side: Buy means a long was liquidated.
+          emit(topic, { kind: 'liquidation', time: num(l.T), price: num(l.p), qty: num(l.v), long: l.S === 'Buy' });
         }
       } else if (topic.startsWith('tickers.') && m.data && typeof m.data === 'object') {
         const d = m.data as Json;
@@ -174,6 +214,8 @@ class Connection {
   private ws: WebSocket | null = null;
   private current: SocketState = 'connecting';
   private readonly topics = new Map<string, Set<StreamListener>>();
+  /** Topics the exchange has refused; re-sending them would refuse the frame again. */
+  private readonly dead = new Set<string>();
   private readonly pending = { subscribe: new Set<string>(), unsubscribe: new Set<string>() };
   private flushQueued = false;
   private urlIndex = 0;
@@ -233,7 +275,20 @@ class Connection {
   }
 
   private sendFrames(ws: WebSocket, op: 'subscribe' | 'unsubscribe', topics: string[]): void {
-    for (const frame of this.proto.frames(op, topics)) ws.send(JSON.stringify(frame));
+    const wanted = op === 'subscribe' ? topics.filter((t) => !this.dead.has(t)) : topics;
+    if (wanted.length === 0) return;
+    for (const frame of this.proto.frames(op, wanted)) ws.send(JSON.stringify(frame));
+  }
+
+  /**
+   * One unknown symbol must not take nine good topics down with it: drop the
+   * one the exchange named and re-send the rest a topic at a time. A frame of
+   * one is already as narrow as it gets, so it is never retried.
+   */
+  private retryWithout(ws: WebSocket, bad: string, batch: string[]): void {
+    if (bad !== '') this.dead.add(bad);
+    if (batch.length <= 1) return;
+    for (const topic of batch) if (topic !== bad && this.topics.has(topic)) this.sendFrames(ws, 'subscribe', [topic]);
   }
 
   private setState(state: SocketState): void {
@@ -275,6 +330,11 @@ class Connection {
         return;
       }
       if (!msg || typeof msg !== 'object') return;
+      const refused = this.proto.refused?.(msg as Json);
+      if (refused) {
+        this.retryWithout(ws, refused.bad, refused.batch);
+        return;
+      }
       this.proto.read(msg as Json, (topic, m) => {
         if (!this.heard) {
           this.heard = true;

@@ -60,6 +60,18 @@ pub struct TextCmd {
     pub clip: Option<Rect>,
 }
 
+/// A badge the platform draws for us — the venue's own mark, whose artwork the
+/// engine never holds. Only where, how big, and how strongly it shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IconCmd {
+    /// Centre of the square the mark is drawn in.
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub alpha: u8,
+    pub clip: Option<Rect>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Frame {
     pub width: f32,
@@ -72,6 +84,7 @@ pub struct Frame {
     pub colors: Vec<u8>,
     pub batches: Vec<Batch>,
     pub texts: Vec<TextCmd>,
+    pub icons: Vec<IconCmd>,
 }
 
 impl Frame {
@@ -85,6 +98,7 @@ impl Frame {
         self.colors.clear();
         self.batches.clear();
         self.texts.clear();
+        self.icons.clear();
         self.batches.push(Batch { first: 0, count: 0, clip: None });
     }
 
@@ -223,6 +237,13 @@ impl Frame {
     #[allow(clippy::too_many_arguments)]
     pub fn text(&mut self, x: f32, y: f32, text: impl Into<String>, color: Color, align: Align, baseline: Baseline, size: f32, background: Option<Color>, clip: Option<Rect>) {
         self.texts.push(TextCmd { x, y, text: text.into(), color, align, baseline, size, background, clip });
+    }
+
+    pub fn icon(&mut self, x: f32, y: f32, size: f32, alpha: u8, clip: Option<Rect>) {
+        if alpha == 0 || size <= 0.0 {
+            return;
+        }
+        self.icons.push(IconCmd { x, y, size, alpha, clip });
     }
 }
 

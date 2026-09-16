@@ -70,6 +70,21 @@ impl ChartEngine {
         self.chart.set_live(None);
     }
 
+    /// One liquidation to ping beside the candles: `at` is when it reached us.
+    pub fn push_liquidation(&mut self, time: f64, price: f64, usd: f64, long: bool, at: f64) {
+        self.chart.push_liquidation(time, price, usd, long, at as i64);
+    }
+
+    /// The venue's mark, drawn beside each liquidation ping.
+    pub fn set_logo(&mut self, box_size: f32, spec: &str) {
+        self.text.set_mark(box_size, spec);
+        self.chart.touch();
+    }
+
+    pub fn clear_liquidations(&mut self) {
+        self.chart.clear_liquidations();
+    }
+
     pub fn set_studies(&mut self, raw: &str) {
         self.chart.set_studies(raw);
     }
@@ -217,6 +232,16 @@ impl ChartEngine {
                     }
                     Event::DeleteRequested(id) => {
                         set(&o, "type", "delete");
+                        set(&o, "id", id as f64);
+                    }
+                    Event::DrawingChanged { id, points } => {
+                        set(&o, "type", "drawingChanged");
+                        set(&o, "id", id as f64);
+                        let list: Array = points.iter().map(|p| JsValue::from(js::point(p.time, p.price))).collect();
+                        set(&o, "points", list);
+                    }
+                    Event::EditRequested(id) => {
+                        set(&o, "type", "editRequested");
                         set(&o, "id", id as f64);
                     }
                     Event::ToolFinished => set(&o, "type", "toolFinished"),

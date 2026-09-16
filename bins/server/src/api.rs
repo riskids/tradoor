@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
 use serde_json::json;
 use tower_http::compression::CompressionLayer;
@@ -67,7 +67,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/markets", get(markets))
         .route("/history", get(history))
         .route("/drawings", get(drawings::list).post(drawings::create).delete(drawings::clear))
-        .route("/drawings/{id}", delete(drawings::delete_one))
+        .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(CompressionLayer::new())

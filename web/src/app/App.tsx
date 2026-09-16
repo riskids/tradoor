@@ -263,7 +263,7 @@ function Overlays() {
           case 'help':
             return <Help onClose={closeOverlay} />;
           case 'note':
-            return <NoteInput onClose={closeOverlay} onSave={o.save} />;
+            return <NoteInput initial={o.initial} onClose={closeOverlay} onSave={o.save} />;
         }
       }}
     </Show>

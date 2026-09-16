@@ -7,12 +7,26 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
+    "test": "deno test --quiet",
     "size": "size-limit"
   },
   "size-limit": [
-    { "name": "app js", "path": "dist/assets/index-*.js", "limit": "40 kB" },
-    { "name": "engine worker js", "path": "dist/assets/worker-*.js", "limit": "15 kB" },
-    { "name": "engine wasm", "path": "dist/assets/*.wasm", "limit": "150 kB", "gzip": true }
+    {
+      "name": "app js",
+      "path": "dist/assets/index-*.js",
+      "limit": "40 kB"
+    },
+    {
+      "name": "engine worker js",
+      "path": "dist/assets/worker-*.js",
+      "limit": "15 kB"
+    },
+    {
+      "name": "engine wasm",
+      "path": "dist/assets/*.wasm",
+      "limit": "150 kB",
+      "gzip": true
+    }
   ],
   "dependencies": {
     "solid-js": "1.9.15"

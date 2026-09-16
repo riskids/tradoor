@@ -110,6 +110,7 @@ export const api = {
   drawings: (market: string, timeframe: string) => json<{ count: number; drawings: Drawing[] }>(`/api/drawings?${scope(market, timeframe)}`),
   createDrawing: (market: string, timeframe: string, input: { kind: string; points: DrawingPoint[]; label?: string }) =>
     json<{ drawing: Drawing }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'POST', body: input }),
+  updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'DELETE' }),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),

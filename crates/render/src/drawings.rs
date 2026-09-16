@@ -186,7 +186,7 @@ pub fn paint(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme) {
     if d.selected && d.shape.kind != crate::DrawingKind::Brush {
         for &p in &d.points {
             frame.circle(p.0, p.1, 4.5, color);
-            frame.circle(p.0, p.1, 3.0, theme.handle);
+            frame.circle(p.0, p.1, 4.0, theme.handle);
         }
     }
     let _ = format_price;

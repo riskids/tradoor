@@ -9,12 +9,12 @@
 import { DEFAULT_MARKET, isMarket } from '../lib/markets';
 import { isTimeframe } from '../lib/timeframes';
 
-export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values';
+export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations';
 export type LinkColor = 'green' | 'blue' | 'red' | 'yellow';
 
 export const LINK_COLORS: readonly LinkColor[] = ['green', 'blue', 'red', 'yellow'];
-export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values'];
-export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values' };
+export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values', 'liquidations'];
+export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values', liquidations: 'Liquidations' };
 
 interface PanelBase {
   id: string;
@@ -50,7 +50,13 @@ export interface ValuesPanelState extends PanelBase {
   basis: 'volume' | 'tpo';
 }
 
-export type Panel = ChartPanelState | WatchlistPanelState | TpoPanelState | ValuesPanelState;
+export interface LiquidationsPanelState extends PanelBase {
+  type: 'liquidations';
+  /** Hits smaller than this are left out of the tape. */
+  minUsd: number;
+}
+
+export type Panel = ChartPanelState | WatchlistPanelState | TpoPanelState | ValuesPanelState | LiquidationsPanelState;
 
 export interface SplitNode {
   kind: 'split';
@@ -106,6 +112,8 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
       return { ...base, type, sessions: 12 };
     case 'values':
       return { ...base, type, basis: 'volume' };
+    case 'liquidations':
+      return { ...base, type, minUsd: 0 };
   }
 }
 
@@ -169,6 +177,9 @@ function readPanel(id: string, raw: unknown): Panel | null {
   } else if (p.type === 'tpo') {
     const n = Number(raw.sessions);
     if (Number.isInteger(n) && n >= 1 && n <= 60) p.sessions = n;
+  } else if (p.type === 'liquidations') {
+    const n = Number(raw.minUsd);
+    if (Number.isFinite(n) && n >= 0) p.minUsd = n;
   } else if (raw.basis === 'tpo') {
     p.basis = 'tpo';
   }

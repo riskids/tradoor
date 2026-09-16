@@ -8,6 +8,7 @@ import { chartControllers, setOverlay } from '../app/ui';
 import { attachSlot, call, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, errorText, type Drawing } from '../lib/api';
+import { demoRate } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
 import { Icon, type IconName } from '../lib/icons';
@@ -51,6 +52,7 @@ const LAYERS = [
   { id: 'ribbon', label: 'EMA 12/25 ribbon' },
   { id: 'ema200', label: 'EMA 200' },
   { id: 'volume', label: 'Volume' },
+  { id: 'liquidations', label: 'Liquidations' },
 ];
 
 const RANGES: { label: string; days: number | 'ytd' | null }[] = [
@@ -143,6 +145,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       send({ t: 'wheel', id: sid, x: p.x, y: p.y, dx: e.deltaX * unit, dy: e.deltaY * unit });
     };
     box.addEventListener('wheel', onWheel, { passive: false });
+    // `?liqdemo=30` invents thirty liquidations a minute, for judging the feed.
+    if (demoRate() > 0) send({ t: 'demoLiquidations', id: sid, perMinute: demoRate() });
     chartControllers.set(id, {
       key: (key) => call('key', { id: sid, key }),
       resetView: () => send({ t: 'resetView', id: sid }),
@@ -199,39 +203,65 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     }),
   );
 
+  /* Every change is applied here first and sent afterwards, so a drawing appears
+     under the pointer the moment it is placed rather than a round trip later. A
+     rejected change is rolled back and the server's list is re-read. */
+  let pending = 0;
+  const onSameChart = (m: string, tf: string) => m === market() && tf === timeframe();
+
   async function createDrawing(kind: string, points: DrawingPoint[], label?: string): Promise<void> {
     const [m, tf] = [market(), timeframe()];
+    const temporary: Drawing = { id: --pending, market: m, timeframe: tf, kind, points, style: {}, label: label ?? null, createdAt: Date.now() };
+    setDrawings((list) => [...list, temporary]);
     try {
-      await api.createDrawing(m, tf, { kind, points, label });
+      const { drawing } = await api.createDrawing(m, tf, { kind, points, label });
       setDrawError(null);
+      if (onSameChart(m, tf)) setDrawings((list) => list.map((d) => (d.id === temporary.id ? drawing : d)));
     } catch (e) {
       setDrawError(errorText(e));
+      if (onSameChart(m, tf)) setDrawings((list) => list.filter((d) => d.id !== temporary.id));
     }
-    if (m === market() && tf === timeframe()) void loadDrawings();
+  }
+
+  async function changeDrawing(drawingId: number, patch: { points?: DrawingPoint[]; label?: string }): Promise<void> {
+    const [m, tf] = [market(), timeframe()];
+    setDrawings((list) => list.map((d) => (d.id === drawingId ? { ...d, ...patch } : d)));
+    if (drawingId < 0) return; // still being created; its own request carries the points
+    try {
+      const { drawing } = await api.updateDrawing(drawingId, patch);
+      setDrawError(null);
+      if (onSameChart(m, tf)) setDrawings((list) => list.map((d) => (d.id === drawingId ? drawing : d)));
+    } catch (e) {
+      setDrawError(errorText(e));
+      if (onSameChart(m, tf)) void loadDrawings();
+    }
   }
 
   async function deleteDrawing(drawingId: number): Promise<void> {
+    setDrawings((list) => list.filter((d) => d.id !== drawingId));
+    if (selected() === drawingId) setSelected(null);
+    if (drawingId < 0) return;
     try {
       await api.deleteDrawing(drawingId);
       setDrawError(null);
-      if (selected() === drawingId) setSelected(null);
     } catch (e) {
       setDrawError(errorText(e));
+      void loadDrawings();
     }
-    void loadDrawings();
   }
 
   async function clearDrawings(): Promise<void> {
     const n = drawings().length;
     if (n === 0 || !confirm(`Remove all ${n} drawings on ${symbolOf(market())} ${tfLabel(timeframe())}?`)) return;
+    setDrawings([]);
+    setSelected(null);
     try {
       await api.clearDrawings(market(), timeframe());
-      setSelected(null);
       setDrawError(null);
     } catch (e) {
       setDrawError(errorText(e));
+      void loadDrawings();
     }
-    void loadDrawings();
   }
 
   function onEvent(e: ChartEvent): void {
@@ -245,6 +275,14 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       case 'selection':
         setSelected(e.id);
         break;
+      case 'drawingChanged':
+        void changeDrawing(e.id, { points: e.points });
+        break;
+      case 'editRequested': {
+        const note = drawings().find((d) => d.id === e.id && d.kind === 'text');
+        if (note) setOverlay({ kind: 'note', initial: note.label ?? '', save: (label) => void changeDrawing(e.id, { label }) });
+        break;
+      }
       case 'delete':
         void deleteDrawing(e.id);
         break;
@@ -356,13 +394,6 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         )}
       </Show>
 
-      <Show when={tool() !== '' || selected() !== null || drawError()}>
-        <div class="hint">
-          {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · Delete removes it, esc deselects' : ''}
-          <Show when={drawError()}>{(err) => <span class="warn"> ▲ {err()}</span>}</Show>
-        </div>
-      </Show>
-
       <div class="chartwrap">
         <div class="rail">
           <For each={TOOLS}>
@@ -421,6 +452,12 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         >
           <canvas ref={glCanvas} />
           <canvas ref={textCanvas} />
+          <Show when={tool() !== '' || selected() !== null || drawError()}>
+            <div class="hint">
+              {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · Delete removes it, esc deselects' : ''}
+              <Show when={drawError()}>{(err) => <span class="warn"> ▲ {err()}</span>}</Show>
+            </div>
+          </Show>
           <div class="legend">
             <div class="line">
               <span class="title">{symbolOf(market())}</span>
