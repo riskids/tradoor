@@ -20,7 +20,12 @@ use crate::ticks::nice_step;
 /// Rows the loaded range is cut into on auto row size.
 const AUTO_ROWS: f64 = 500.0;
 /// How much of its session the fullest profile's widest row spans, unexpanded.
-const FILL: f64 = 0.92;
+const FILL: f64 = 0.97;
+/// Air between neighbouring blocks, as a share of a block's slot — TradingView's
+/// packing: a sliver, so a row reads as a run of brackets rather than a dotted line.
+const BLOCK_GAP: f32 = 0.14;
+/// The most air between blocks or rows, in CSS pixels, however far in the zoom.
+const MAX_GAP: f32 = 2.0;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -493,7 +498,8 @@ pub fn paint(f: &mut Frame, v: &View, p: &Profiles, s: &Settings) {
     let hair = 1.0 / dpr;
     let bar = v.bar_spacing;
     let slot = if s.expand { bar } else { bar * p.pitch as f32 };
-    let block = f.snap((slot * 0.62).max(hair)).max(hair);
+    let gap_x = (slot * BLOCK_GAP).clamp(hair, MAX_GAP);
+    let block = f.snap((slot - gap_x).max(hair)).max(hair);
     let merged = slot * dpr < 1.5;
     let va_color = s.va_color.unwrap_or(t.tpo);
     let poc_color = s.poc_color.unwrap_or(t.tpo_poc);
@@ -569,7 +575,7 @@ pub fn paint(f: &mut Frame, v: &View, p: &Profiles, s: &Settings) {
                 continue;
             }
             let height = bottom - top;
-            let gap = if height >= 3.0 { hair } else { 0.0 };
+            let gap = if height >= 3.0 { f.snap((height * BLOCK_GAP).clamp(hair, MAX_GAP)).max(hair) } else { 0.0 };
             let h = (height - gap).max(hair);
             let mid = p.grid_low + (row.index as f64 + 0.5) * p.row_size;
             let in_va = mid >= val && mid <= vah;

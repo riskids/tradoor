@@ -1415,8 +1415,10 @@ impl Chart {
                 self.drag = Drag::PriceAxis { pane, last_y: y };
             }
             Drag::TimeAxis { last_x } => {
+                // Pulling the dates left stretches the bars, pushing them right
+                // squeezes them — the way TradingView's time scale moves.
                 let at = self.zoom_anchor(self.plot_width());
-                self.time.zoom_at(at, (f64::from(x - last_x) * 0.01).exp());
+                self.time.zoom_at(at, (f64::from(last_x - x) * 0.01).exp());
                 self.drag = Drag::TimeAxis { last_x: x };
             }
             Drag::Separator { upper, last_y } => {
@@ -1977,6 +1979,25 @@ mod tests {
         assert!((c.time.bar_spacing - c.time.max_spacing()).abs() < 1e-6);
         assert!(c.time.bar_spacing > 400.0, "well past the old 80px stop");
         assert!((c.time.x(newest) - x).abs() < 1e-3, "the newest bar holds still");
+    }
+
+    #[test]
+    fn dragging_the_dates_left_stretches_the_bars_and_right_squeezes_them() {
+        let mut c = chart();
+        let y = c.time_axis_top() + TIME_AXIS_HEIGHT / 2.0;
+        let x = c.plot_width() / 2.0;
+        let before = c.time.bar_spacing;
+
+        c.pointer_down(x, y, 0);
+        c.pointer_move(x - 60.0, y);
+        c.pointer_up(x - 60.0, y);
+        let stretched = c.time.bar_spacing;
+        assert!(stretched > before, "left: bars wider, {before} to {stretched}");
+
+        c.pointer_down(x, y, 0);
+        c.pointer_move(x + 120.0, y);
+        c.pointer_up(x + 120.0, y);
+        assert!(c.time.bar_spacing < stretched, "right: bars narrower");
     }
 
     #[test]
