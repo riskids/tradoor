@@ -3,6 +3,7 @@
  * share WASM memory, loaded history and exchange sockets.
  */
 import { createStore } from 'solid-js/store';
+import { nextPrice, type LastPrice } from '../lib/last-price';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, Legend, StudyDefinition, StudyMeta, ToWorker } from './protocol';
 
 export interface SlotHandlers {
@@ -13,12 +14,6 @@ export interface SlotHandlers {
   status(value: ChartStatus): void;
 }
 
-export interface LastPrice {
-  /** The market it was traded on: a chart switched to another has none yet. */
-  market: string;
-  price: number;
-  precision: number;
-}
 
 let worker: Worker | null = null;
 let failure: string | null = null;
@@ -58,7 +53,7 @@ function dispatch(msg: FromWorker): void {
     }
     case 'price': {
       const panel = panelOf.get(msg.id);
-      if (panel) setPrices(panel, { market: msg.market, price: msg.price, precision: msg.precision });
+      if (panel) setPrices(panel, nextPrice(prices[panel], msg.market, msg.price, msg.precision));
       return;
     }
     default: {

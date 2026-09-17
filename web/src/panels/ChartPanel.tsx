@@ -11,6 +11,7 @@ import { api, catalog, errorText, type Drawing, type Product } from '../lib/api'
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
+import type { LastPrice } from '../lib/last-price';
 import { Icon, type IconName } from '../lib/icons';
 import { VenueTag } from '../lib/exchanges';
 import { liquidationVenues } from '../lib/liquidation-venues';
@@ -747,30 +748,18 @@ function LayerRow(props: {
  * keeps its width as prints land on round prices, and it holds the colour of
  * the last change through unchanged prints.
  */
-function LiveBadge(props: { market: string; live: LiveStatus; price: { price: number; precision: number } | null }) {
-  const [direction, setDirection] = createSignal(0);
-  let previous = Number.NaN;
+function LiveBadge(props: { market: string; live: LiveStatus; price: LastPrice | null }) {
   let digits = 0;
   createEffect(
     on(
       () => props.market,
       () => {
-        previous = Number.NaN;
         digits = 0;
-        setDirection(0);
       },
     ),
   );
-  createEffect(
-    on(
-      () => props.price?.price,
-      (p) => {
-        if (p === undefined || !Number.isFinite(p)) return;
-        if (Number.isFinite(previous) && p !== previous) setDirection(p > previous ? 1 : -1);
-        previous = p;
-      },
-    ),
-  );
+  // The same move the tab title's arrow shows.
+  const direction = () => props.price?.direction ?? 0;
   const text = () => {
     const p = props.price;
     if (!p || !Number.isFinite(p.price)) return '';

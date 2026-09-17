@@ -8,7 +8,7 @@ import { batch, createSignal } from 'solid-js';
 import { createStore, reconcile, unwrap } from 'solid-js/store';
 import { api, ApiError } from '../lib/api';
 import { readJson, writePref } from '../lib/prefs';
-import { defaultWorkspace, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
+import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
 
 const LOCAL_KEY = 'workspace';
 const SERVER_ID = 'default';
@@ -39,7 +39,9 @@ export function targetChart(): ChartPanelState | null {
   const id = lastChart();
   const last = id ? doc.panels[id] : undefined;
   if (last?.type === 'chart') return last;
-  return (Object.values(doc.panels).find((p) => p.type === 'chart') as ChartPanelState | undefined) ?? null;
+  const charts = Object.values(doc.panels).filter((p): p is ChartPanelState => p.type === 'chart');
+  // Before one is used, the first on screen: a chart behind another tab has drawn nothing, not even a price.
+  return charts.find((p) => tabsOf(doc.root, p.id)?.active === p.id) ?? charts[0] ?? null;
 }
 
 export const marketOf = (p: Panel): string => (p.link ? doc.links[p.link].market : p.market);
