@@ -158,5 +158,5 @@ export type FromWorker =
   | { t: 'studies'; id: string; value: StudyMeta[] }
   | { t: 'event'; id: string; event: ChartEvent }
   | { t: 'status'; id: string; value: ChartStatus }
-  | { t: 'price'; id: string; price: number; precision: number }
+  | { t: 'price'; id: string; market: string; price: number; precision: number }
   | { t: 'reply'; req: number; value?: unknown; error?: string };

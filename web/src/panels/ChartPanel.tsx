@@ -5,7 +5,7 @@
  */
 import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { chartControllers, setOverlay } from '../app/ui';
-import { call, holdChart, releaseChart, send } from '../engine/client';
+import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
@@ -95,7 +95,6 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
   const [status, setStatus] = createSignal<ChartStatus>({ loading: true, error: null, bars: 0, source: null, live: 'off', exhausted: false });
-  const [price, setPrice] = createSignal<{ price: number; precision: number } | null>(null);
   const [cursor, setCursor] = createSignal('crosshair');
   const [tool, setTool] = createSignal('');
   const [autoScale, setAutoScale] = createSignal(true);
@@ -120,10 +119,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     legend: setLegend,
     studies: setStudies,
     status: setStatus,
-    price: (p, precision) => setPrice({ price: p, precision }),
     event: (e) => onEvent(e),
   });
   const sid = chart.id;
+  const price = () => {
+    const p = lastPrice(id);
+    return p && p.market === market() ? p : null;
+  };
 
   const local = (e: MouseEvent) => {
     const r = box.getBoundingClientRect();

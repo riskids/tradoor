@@ -2,6 +2,7 @@
  * The page's side of the engine worker. One worker serves every chart, so they
  * share WASM memory, loaded history and exchange sockets.
  */
+import { createStore } from 'solid-js/store';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, Legend, StudyDefinition, StudyMeta, ToWorker } from './protocol';
 
 export interface SlotHandlers {
@@ -10,13 +11,25 @@ export interface SlotHandlers {
   studies(value: StudyMeta[]): void;
   event(event: ChartEvent): void;
   status(value: ChartStatus): void;
-  price(price: number, precision: number): void;
+}
+
+export interface LastPrice {
+  /** The market it was traded on: a chart switched to another has none yet. */
+  market: string;
+  price: number;
+  precision: number;
 }
 
 let worker: Worker | null = null;
 let failure: string | null = null;
 const failureListeners = new Set<(message: string) => void>();
 const slots = new Map<string, SlotHandlers>();
+/** Engine slot → the chart panel it belongs to. */
+const panelOf = new Map<string, string>();
+const [prices, setPrices] = createStore<Record<string, LastPrice>>({});
+
+/** A chart panel's last price, kept while the panel is off screen. */
+export const lastPrice = (panelId: string): LastPrice | undefined => prices[panelId];
 const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
 let nextRequest = 1;
 let nextSlot = 1;
@@ -43,6 +56,11 @@ function dispatch(msg: FromWorker): void {
       else p.resolve(msg.value);
       return;
     }
+    case 'price': {
+      const panel = panelOf.get(msg.id);
+      if (panel) setPrices(panel, { market: msg.market, price: msg.price, precision: msg.precision });
+      return;
+    }
     default: {
       const h = slots.get(msg.id);
       if (!h) return;
@@ -50,8 +68,7 @@ function dispatch(msg: FromWorker): void {
       else if (msg.t === 'legend') h.legend(msg.value);
       else if (msg.t === 'studies') h.studies(msg.value);
       else if (msg.t === 'event') h.event(msg.event);
-      else if (msg.t === 'status') h.status(msg.value);
-      else h.price(msg.price, msg.precision);
+      else h.status(msg.value);
     }
   }
 }
@@ -101,6 +118,7 @@ export function holdChart(panelId: string, handlers: SlotHandlers): HeldChart {
   if (!chart) {
     chart = { id: `chart-${nextSlot++}`, gl: document.createElement('canvas'), text: document.createElement('canvas'), created: false };
     charts.set(panelId, chart);
+    panelOf.set(chart.id, panelId);
   }
   slots.set(chart.id, handlers);
   return chart;
@@ -118,6 +136,8 @@ export function releaseChart(panelId: string, stillOpen: boolean): void {
     return;
   }
   charts.delete(panelId);
+  panelOf.delete(chart.id);
+  setPrices(panelId, undefined!);
   if (chart.created) send({ t: 'destroy', id: chart.id });
 }
 

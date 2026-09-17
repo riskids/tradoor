@@ -19,6 +19,8 @@ const CHART_BARS = 1_500;
 const MAX_BASE_BARS = 60_000;
 /** Timeframes the exchange does not stream (2D, 3M…) pick up new bars this often. */
 const POLL_MS = 5 * 60_000;
+/** How late a price may go out when no frame is drawn to carry it. */
+const PRICE_UNDRAWN_MS = 250;
 
 interface TfInfo {
   timeframe: string;
@@ -105,6 +107,7 @@ class Slot {
   private metaDirty = true;
   private price = Number.NaN;
   private priceDirty = false;
+  private priceTimer: ReturnType<typeof setTimeout> | undefined;
   private demo: ReturnType<typeof setInterval> | undefined;
   /** Its tab is not shown: nothing is drawn, everything else carries on. */
   hidden = false;
@@ -150,6 +153,7 @@ class Slot {
 
   destroy(): void {
     clearInterval(this.demo);
+    clearTimeout(this.priceTimer);
     this.watchLiquidations([]);
     this.detach();
     this.engine.free();
@@ -226,6 +230,7 @@ class Slot {
     this.extra = [];
     this.live = null;
     this.price = Number.NaN;
+    this.markPrice();
     this.engine.clear_live();
     this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.metaDirty = true;
@@ -342,7 +347,26 @@ class Slot {
   private setPrice(price: number): void {
     if (price === this.price) return;
     this.price = price;
+    this.markPrice();
+  }
+
+  /**
+   * The price goes out with the next frame — or, when no frame comes because
+   * the page is in the background or this tab is not shown, a moment later:
+   * the browser tab's title follows it there.
+   */
+  private markPrice(): void {
     this.priceDirty = true;
+    this.priceTimer ??= setTimeout(() => {
+      this.priceTimer = undefined;
+      this.flushPrice();
+    }, PRICE_UNDRAWN_MS);
+  }
+
+  private flushPrice(): void {
+    if (!this.priceDirty) return;
+    this.priceDirty = false;
+    post({ t: 'price', id: this.id, market: this.market, price: this.price, precision: this.engine.precision() });
   }
 
   private setStatus(patch: Partial<ChartStatus>): void {
@@ -411,10 +435,7 @@ class Slot {
         post({ t: 'studies', id: this.id, value: studies });
       }
     }
-    if (this.priceDirty) {
-      this.priceDirty = false;
-      post({ t: 'price', id: this.id, price: this.price, precision: this.engine.precision() });
-    }
+    this.flushPrice();
   }
 }
 

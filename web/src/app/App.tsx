@@ -6,10 +6,11 @@ import { createEffect, createSignal, For, lazy, onCleanup, onMount, Show } from 
 import type { Command } from '../components/CommandPalette';
 import { NoteInput } from '../components/NoteInput';
 import { SymbolSearch } from '../components/SymbolSearch';
-import { onEngineFailure, send } from '../engine/client';
+import { lastPrice, onEngineFailure, send } from '../engine/client';
 import { api } from '../lib/api';
 import { deviceZone, formatClock, LOCAL_ZONE, offsetMinutes, timeZone, zoneLabel } from '../lib/timezone';
 import { Icon } from '../lib/icons';
+import { tabTitle } from '../lib/tab-title';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { Layout, panelTitle } from '../workspace/Layout';
@@ -292,6 +293,11 @@ function Overlays() {
 export function App() {
   const [engineError, setEngineError] = createSignal<string | null>(null);
   applyTheme();
+  // The chart last used names the browser tab, with its live price.
+  createEffect(() => {
+    const chart = targetChart();
+    document.title = chart ? tabTitle(marketOf(chart), lastPrice(chart.id)) : tabTitle(null, undefined);
+  });
   onMount(() => {
     const chart = targetChart();
     if (chart) focusPanel(chart.id);
