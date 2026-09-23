@@ -128,11 +128,25 @@ ssh-keyscan -p <port> <server> | gh secret set VPS_KNOWN_HOSTS
 To roll back, set `TRADOOR_IMAGE` in `/var/www/tradoor/.env` to an earlier
 commit's tag and run `docker compose up -d`.
 
+## Drawings and layouts belong to a browser
+
+Each browser makes a random id on first visit (Settings → Browser id) and its
+drawings, layout, watchlists and indicators are kept on the server under it: a
+private window or another browser starts empty. To carry them to another
+device, paste the id there.
+
+Drawings and the layout saved before browsers had ids belong to nobody. Give
+them to your browser's id once:
+
+```sh
+docker compose exec server tradoor-server adopt <your-browser-id>
+```
+
 ## Moving drawings from rsalianto
 
 ```sh
 RSALIANTO_DATABASE_URL=postgres://… scripts/export-rsalianto-drawings.sh > drawings.jsonl
-./target/release/tradoor-server import-drawings drawings.jsonl
+./target/release/tradoor-server import-drawings drawings.jsonl --owner <your-browser-id>
 ```
 
 ## Keyboard

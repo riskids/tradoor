@@ -2,6 +2,7 @@
  *  do not come through here — they are files under /data and exchange REST. */
 import type { DrawingPoint } from '../engine/protocol';
 import type { Style } from './drawing-style';
+import { ownerId } from './owner';
 import { readPref } from './prefs';
 
 export class ApiError extends Error {
@@ -21,7 +22,8 @@ export const API_TOKEN_PREF = 'api-token';
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: T | null }> {
   const method = init.method ?? 'GET';
-  const headers: Record<string, string> = {};
+  // Drawings and layouts are this browser's own: the server scopes them by this id.
+  const headers: Record<string, string> = { 'x-tradoor-owner': ownerId() };
   const token = readPref(API_TOKEN_PREF);
   if (token && method !== 'GET') headers.authorization = `Bearer ${token}`;
   if (init.body !== undefined) headers['content-type'] = 'application/json';

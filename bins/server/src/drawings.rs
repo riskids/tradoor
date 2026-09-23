@@ -1,12 +1,15 @@
-//! Hand-drawn markup, stored per market. The timeframe it was drawn on is kept,
-//! but every timeframe of the market shows it: anchors are epoch ms and price,
-//! which mean the same thing on any bar length — as on TradingView.
+//! Hand-drawn markup, stored per browser and market. The timeframe it was drawn
+//! on is kept, but every timeframe of the market shows it: anchors are epoch ms
+//! and price, which mean the same thing on any bar length — as on TradingView.
+//! Every query is scoped to the owner the request names, so one browser can
+//! neither see nor change another's.
 //!
 //! Strict about the SHAPE of what goes in: `points` is JSONB, so Postgres would
 //! accept any JSON at all, and a row that cannot be rendered cannot be selected
 //! and deleted from the chart either — it becomes junk only psql can remove.
 
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -14,7 +17,7 @@ use serde_json::{json, Map, Value};
 use tradoor_core::ChartTimeframe;
 use tradoor_venues::MarketRef;
 
-use crate::api::{ApiError, ApiResult, AppState};
+use crate::api::{owner, ApiError, ApiResult, AppState};
 
 pub const KINDS: [&str; 12] = ["path", "trendline", "horizontal", "ray", "rect", "fib", "text", "measure", "long", "short", "brush", "channel"];
 /// A style is a flat object of short settings; this bounds what one row may carry.
@@ -127,40 +130,44 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
     })
 }
 
-pub async fn list(State(state): State<AppState>, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
+pub async fn list(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
     let (market, _) = scope.validated()?;
     let client = state.pool.get().await?;
-    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE market = $1 ORDER BY id"), &[&market]).await?;
+    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE owner = $1 AND market = $2 ORDER BY id"), &[&owner, &market]).await?;
     // Kinds this version no longer draws are left out rather than shipped to a
     // renderer that cannot show — or delete — them.
     let drawings: Vec<Value> = rows.iter().filter(|r| KINDS.contains(&r.get::<_, &str>(3))).map(row_json).collect();
     Ok(Json(json!({ "count": drawings.len(), "drawings": drawings })))
 }
 
-pub async fn insert(client: &tokio_postgres::Client, market: &str, timeframe: &str, input: &DrawingInput) -> Result<tokio_postgres::Row, tokio_postgres::Error> {
+pub async fn insert(client: &tokio_postgres::Client, owner: &str, market: &str, timeframe: &str, input: &DrawingInput) -> Result<tokio_postgres::Row, tokio_postgres::Error> {
     let points = serde_json::to_value(&input.points).expect("points serialise");
     let style = Value::Object(input.style.clone());
     client
         .query_one(
-            &format!("INSERT INTO drawing (market, timeframe, kind, points, style, label) VALUES ($1, $2, $3, $4, $5, $6) RETURNING {COLUMNS}"),
-            &[&market, &timeframe, &input.kind, &points, &style, &input.label],
+            &format!("INSERT INTO drawing (owner, market, timeframe, kind, points, style, label) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {COLUMNS}"),
+            &[&owner, &market, &timeframe, &input.kind, &points, &style, &input.label],
         )
         .await
 }
 
-pub async fn create(State(state): State<AppState>, Query(scope): Query<Scope>, Json(body): Json<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+pub async fn create(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>, Json(body): Json<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let owner = owner(&headers)?;
     let (market, timeframe) = scope.validated()?;
     let input = parse_body(&body).map_err(ApiError::bad_request)?;
     let client = state.pool.get().await?;
-    let row = insert(&client, &market, timeframe, &input).await?;
+    let row = insert(&client, &owner, &market, timeframe, &input).await?;
     Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
 }
 
 /// Move, relabel or restyle one drawing. Its kind and its market never change.
-pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
     let b = body.as_object().ok_or_else(|| ApiError::bad_request("body must be a JSON object"))?;
     let client = state.pool.get().await?;
-    let row = client.query_opt("SELECT kind, label FROM drawing WHERE id = $1", &[&id]).await?;
+    // Someone else's drawing is not found, not forbidden: its existence is not theirs to learn.
+    let row = client.query_opt("SELECT kind, label FROM drawing WHERE id = $1 AND owner = $2", &[&id, &owner]).await?;
     let row = row.ok_or_else(|| ApiError::not_found(format!("drawing {id} not found")))?;
     let kind: String = row.get(0);
 
@@ -194,26 +201,28 @@ pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(bod
 
     let row = client
         .query_one(
-            &format!("UPDATE drawing SET points = COALESCE($2::jsonb, points), label = $3, style = COALESCE($4::jsonb, style) WHERE id = $1 RETURNING {COLUMNS}"),
-            &[&id, &points, &label, &style],
+            &format!("UPDATE drawing SET points = COALESCE($2::jsonb, points), label = $3, style = COALESCE($4::jsonb, style) WHERE id = $1 AND owner = $5 RETURNING {COLUMNS}"),
+            &[&id, &points, &label, &style, &owner],
         )
         .await?;
     Ok(Json(json!({ "drawing": row_json(&row) })))
 }
 
-pub async fn delete_one(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+pub async fn delete_one(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
     let client = state.pool.get().await?;
-    match client.execute("DELETE FROM drawing WHERE id = $1", &[&id]).await? {
+    match client.execute("DELETE FROM drawing WHERE id = $1 AND owner = $2", &[&id, &owner]).await? {
         0 => Err(ApiError::not_found(format!("drawing {id} not found"))),
         _ => Ok(Json(json!({ "id": id }))),
     }
 }
 
 /// Every drawing on one market — on every timeframe, since each shows them all.
-pub async fn clear(State(state): State<AppState>, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
+pub async fn clear(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
     let (market, _) = scope.validated()?;
     let client = state.pool.get().await?;
-    let deleted = client.execute("DELETE FROM drawing WHERE market = $1", &[&market]).await?;
+    let deleted = client.execute("DELETE FROM drawing WHERE owner = $1 AND market = $2", &[&owner, &market]).await?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 

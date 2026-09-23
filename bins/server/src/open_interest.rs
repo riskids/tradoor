@@ -32,8 +32,10 @@ const FIVE_MINUTES: i64 = 5 * MINUTE;
 const POLL: Duration = Duration::from_secs(15);
 const HOUR: i64 = 60 * MINUTE;
 const DAY: i64 = 24 * HOUR;
-/// Rows a minute apart are kept this long; after it, only those on the hour —
-/// hourly history is plenty for the daily and weekly charts that reach back.
+/// Rows a minute apart are kept a week, then only those on five minutes for
+/// the month, then only those on the hour — plenty for the longer charts that
+/// reach back, at a fraction of the rows.
+const KEEP_MINUTES_MS: i64 = 7 * DAY;
 const KEEP_MS: i64 = 35 * DAY;
 const KEEP_HOURLY_MS: i64 = 400 * DAY;
 /// Binance keeps thirty days; asking for the very edge of that is refused.
@@ -599,8 +601,8 @@ impl Recorder {
             every.tick().await;
             if let Ok(client) = self.pool.get().await {
                 let now = now_ms();
-                let sql = "DELETE FROM open_interest WHERE (time < $1 AND time % 3600000 <> 0) OR time < $2";
-                if let Err(e) = client.execute(sql, &[&(now - KEEP_MS), &(now - KEEP_HOURLY_MS)]).await {
+                let sql = "DELETE FROM open_interest WHERE (time < $1 AND time % 300000 <> 0) OR (time < $2 AND time % 3600000 <> 0) OR time < $3";
+                if let Err(e) = client.execute(sql, &[&(now - KEEP_MINUTES_MS), &(now - KEEP_MS), &(now - KEEP_HOURLY_MS)]).await {
                     tracing::error!(error = %e, "trimming open interest");
                 }
             }

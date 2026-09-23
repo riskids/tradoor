@@ -60,7 +60,15 @@ enum Command {
     /// Run the HTTP server (the default).
     Serve,
     /// Import drawings exported from rsalianto (JSON lines; see scripts/export-rsalianto-drawings.sh).
-    ImportDrawings { file: PathBuf },
+    ImportDrawings {
+        file: PathBuf,
+        /// The browser id they go to (Settings → Browser id); without it they are nobody's until adopted.
+        #[arg(long, default_value = "")]
+        owner: String,
+    },
+    /// Give the drawings and workspace that have no owner — everything from
+    /// before browsers had ids — to one browser id (Settings → Browser id).
+    Adopt { owner: String },
 }
 
 #[tokio::main]
@@ -79,7 +87,23 @@ async fn main() -> anyhow::Result<()> {
         .context("creating the connection pool")?;
 
     match cli.command.unwrap_or(Command::Serve) {
-        Command::ImportDrawings { file } => import::run(&pool, &file).await,
+        Command::ImportDrawings { file, owner } => {
+            if !owner.is_empty() && !api::valid_owner(&owner) {
+                anyhow::bail!("--owner must be a browser id: 16 to 64 letters, digits and dashes");
+            }
+            import::run(&pool, &file, &owner).await
+        }
+        Command::Adopt { owner } => {
+            if !api::valid_owner(&owner) {
+                anyhow::bail!("a browser id is 16 to 64 letters, digits and dashes — copy it from Settings");
+            }
+            let client = pool.get().await?;
+            let drawings = client.execute("UPDATE drawing SET owner = $1 WHERE owner = ''", &[&owner]).await?;
+            // The browser's own workspace, if it saved one, stays; the old shared one is dropped then.
+            let workspaces = client.execute("UPDATE workspace w SET owner = $1 WHERE owner = '' AND NOT EXISTS (SELECT 1 FROM workspace o WHERE o.owner = $1 AND o.id = w.id)", &[&owner]).await?;
+            tracing::info!(drawings, workspaces, owner = %owner, "adopted");
+            Ok(())
+        }
         Command::Serve => {
             let tickers: Vec<String> = cli.liquidations.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
             if let Some(bad) = tickers.iter().find(|t| !liquidations::is_ticker(t)) {

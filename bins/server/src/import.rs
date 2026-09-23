@@ -14,7 +14,7 @@ use tradoor_venues::MarketRef;
 
 use crate::drawings::{insert, parse_body};
 
-pub async fn run(pool: &deadpool_postgres::Pool, file: &Path) -> anyhow::Result<()> {
+pub async fn run(pool: &deadpool_postgres::Pool, file: &Path, owner: &str) -> anyhow::Result<()> {
     let text = tokio::fs::read_to_string(file).await.with_context(|| format!("reading {}", file.display()))?;
     let client = pool.get().await?;
     let (mut imported, mut skipped) = (0, 0);
@@ -27,7 +27,7 @@ pub async fn run(pool: &deadpool_postgres::Pool, file: &Path) -> anyhow::Result<
         })();
         match result {
             Ok((market, timeframe, input)) => {
-                insert(&client, &market, &timeframe, &input).await?;
+                insert(&client, owner, &market, &timeframe, &input).await?;
                 imported += 1;
             }
             Err(e) => {

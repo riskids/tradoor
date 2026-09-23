@@ -67,6 +67,24 @@ impl From<deadpool_postgres::PoolError> for ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
+/// The header a browser names itself in: a random id it made and keeps.
+pub const OWNER_HEADER: &str = "x-tradoor-owner";
+
+/// Whose drawings and workspace a request is about. Long and random enough to
+/// be unguessable: knowing it is what makes them yours.
+pub fn owner(headers: &axum::http::HeaderMap) -> ApiResult<String> {
+    let id = headers.get(OWNER_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    if valid_owner(id) {
+        Ok(id.to_string())
+    } else {
+        Err(ApiError::bad_request(format!("{OWNER_HEADER} must be this browser's id: 16 to 64 letters, digits and dashes")))
+    }
+}
+
+pub fn valid_owner(id: &str) -> bool {
+    (16..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/health", get(health))

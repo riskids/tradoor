@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from 'solid-js';
 import { API_TOKEN_PREF } from '../lib/api';
+import { OWNER_KEY, OWNER_PATTERN, ownerId } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { readPref, writePref } from '../lib/prefs';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
@@ -135,6 +136,9 @@ export function Settings(props: { onClose(): void }) {
             </For>
           </div>
 
+          <h3 class="caps">Browser id</h3>
+          <OwnerRow />
+
           <h3 class="caps">Server</h3>
           <label class="swatch">
             <span class="name">API token for saving drawings and layouts</span>
@@ -177,5 +181,47 @@ export function Settings(props: { onClose(): void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** This browser's id, to copy — and another's, to take its drawings and layout over. */
+function OwnerRow() {
+  const [other, setOther] = createSignal('');
+  const [copied, setCopied] = createSignal(false);
+  return (
+    <>
+      <label class="swatch">
+        <span class="name">Your drawings and layout belong to</span>
+        <input class="box wide num" readOnly value={ownerId()} onFocus={(e) => e.currentTarget.select()} />
+        <button
+          class="btn"
+          onClick={() => {
+            void navigator.clipboard?.writeText(ownerId()).then(() => setCopied(true));
+          }}
+        >
+          {copied() ? 'Copied' : 'Copy'}
+        </button>
+      </label>
+      <label class="swatch">
+        <span class="name">Use another browser's id</span>
+        <input class="box wide num" value={other()} placeholder="paste the id from your other device" onInput={(e) => setOther(e.currentTarget.value)} />
+        <button
+          class="btn"
+          disabled={!OWNER_PATTERN.test(other().trim())}
+          onClick={() => {
+            if (!confirm("Switch to that browser's drawings and layout? This browser's stay under its own id.")) return;
+            // Taken over from the next load on: the page reads the id once.
+            writePref(OWNER_KEY, other().trim());
+            location.reload();
+          }}
+        >
+          Use
+        </button>
+      </label>
+      <p class="note" style={{ padding: '4px 0' }}>
+        Drawings and layouts are kept on the server under this id, and only this browser sends it. A private window or another browser starts empty; paste the id there to carry
+        yours over. Keep it to yourself — whoever has it can change them.
+      </p>
+    </>
   );
 }

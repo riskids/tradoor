@@ -98,9 +98,9 @@ Writes require `Authorization: Bearer` when `TRADOOR_API_TOKEN` is set.
 
 | Table | |
 |---|---|
-| `drawing` | hand-drawn markup per market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
+| `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
-| `workspace` | the terminal layout, whole, with an optimistic version |
+| `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |

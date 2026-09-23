@@ -5,7 +5,6 @@
 import { createEffect, createSignal, For, lazy, onCleanup, onMount, Show } from 'solid-js';
 import type { Command } from '../components/CommandPalette';
 import { NoteInput } from '../components/NoteInput';
-import { SymbolSearch } from '../components/SymbolSearch';
 import { lastPrice, onEngineFailure, send } from '../engine/client';
 import { api } from '../lib/api';
 import { deviceZone, formatClock, LOCAL_ZONE, offsetMinutes, timeZone, zoneLabel } from '../lib/timezone';
@@ -36,6 +35,7 @@ import {
 import { chartControllers, closeOverlay, isTypingTarget, overlay, setOverlay } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
+const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
 const Help = lazy(() => import('../components/Help').then((m) => ({ default: m.Help })));
 const CommandPalette = lazy(() => import('../components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then((m) => ({ default: m.IndicatorPicker })));
