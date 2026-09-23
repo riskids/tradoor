@@ -11,8 +11,8 @@ export const OI_ALL = (1 << OI_VENUES.length) - 1;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const REFRESH_MS = 30_000;
-/** What the server keeps, and the most steps it answers with. */
-const KEPT_MS = 35 * 24 * HOUR;
+/** What the server keeps — hourly past its first month — and the most steps it answers with. */
+const KEPT_MS = 400 * 24 * HOUR;
 const MAX_STEPS = 19_000;
 
 export interface OiSteps {

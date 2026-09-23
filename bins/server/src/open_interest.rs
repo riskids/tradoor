@@ -30,8 +30,12 @@ const MINUTE: i64 = 60_000;
 const FIVE_MINUTES: i64 = 5 * MINUTE;
 /// How often every venue is read.
 const POLL: Duration = Duration::from_secs(15);
-/// What is kept, and what is backfilled when a coin starts being recorded.
-const KEEP_MS: i64 = 35 * 86_400_000;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 24 * HOUR;
+/// Rows a minute apart are kept this long; after it, only those on the hour —
+/// hourly history is plenty for the daily and weekly charts that reach back.
+const KEEP_MS: i64 = 35 * DAY;
+const KEEP_HOURLY_MS: i64 = 400 * DAY;
 /// Binance keeps thirty days; asking for the very edge of that is refused.
 const BACKFILL_MS: i64 = 29 * 86_400_000;
 /// A venue that does not list a coin is asked again after this long.
@@ -98,6 +102,17 @@ impl OiVenue {
     /// than double, so it is recorded from now on only.
     pub fn has_history(self) -> bool {
         matches!(self, Self::BinanceUsdt | Self::BybitUsdt | Self::OkxUsdt | Self::BybitUsd | Self::OkxUsd)
+    }
+
+    /// How far back the exchange keeps an HOURLY history, beyond its
+    /// five-minute one: Bybit a year and more, OKX about seven weeks, Binance
+    /// nothing past its thirty days.
+    pub fn hourly_reach(self) -> Option<i64> {
+        match self {
+            Self::BybitUsdt | Self::BybitUsd => Some(365 * DAY),
+            Self::OkxUsdt | Self::OkxUsd => Some(55 * DAY),
+            _ => None,
+        }
     }
 }
 
@@ -319,27 +334,31 @@ async fn current(http: &Http, venue: OiVenue, coin: &Coin, hyperliquid: &Option<
     reading(result)
 }
 
-/// Five-minute history from `from` up to `to`, oldest first, paged backwards.
-async fn history(http: &Http, venue: OiVenue, coin: &Coin, from: i64, to: i64) -> Result<Vec<(i64, f64)>, String> {
+/// History from `from` up to `to`, oldest first, paged backwards: five-minute
+/// points, or hourly ones where `hourly`.
+async fn history(http: &Http, venue: OiVenue, coin: &Coin, from: i64, to: i64, hourly: bool) -> Result<Vec<(i64, f64)>, String> {
     let (name, bare) = (&coin.name, &coin.bare);
+    let step = if hourly { HOUR } else { FIVE_MINUTES };
+    let (bybit_interval, mark_interval, okx_period) = if hourly { ("1h", "60", "1H") } else { ("5min", "5", "5m") };
     let mut out: Vec<(i64, f64)> = Vec::new();
     let mut end = to;
-    for _ in 0..60 {
+    for _ in 0..80 {
         if end <= from {
             break;
         }
         let page = match venue {
             OiVenue::BinanceUsdt => {
-                let start = (end - 500 * FIVE_MINUTES).max(from);
-                parse_binance_history(&http.get(&format!("{BINANCE}/futures/data/openInterestHist?symbol={name}USDT&period=5m&limit=500&startTime={start}&endTime={end}")).await?)
+                let start = (end - 500 * step).max(from);
+                let period = if hourly { "1h" } else { "5m" };
+                parse_binance_history(&http.get(&format!("{BINANCE}/futures/data/openInterestHist?symbol={name}USDT&period={period}&limit=500&startTime={start}&endTime={end}")).await?)
             }
             OiVenue::BybitUsdt | OiVenue::BybitUsd => {
                 let (category, symbol) = if venue == OiVenue::BybitUsdt { ("linear", format!("{name}USDT")) } else { ("inverse", format!("{bare}USD")) };
-                let start = (end - 199 * FIVE_MINUTES).max(from);
-                let oi = parse_bybit_history(&http.get(&format!("{BYBIT}/v5/market/open-interest?category={category}&symbol={symbol}&intervalTime=5min&limit=200&startTime={start}&endTime={end}")).await?);
+                let start = (end - 199 * step).max(from);
+                let oi = parse_bybit_history(&http.get(&format!("{BYBIT}/v5/market/open-interest?category={category}&symbol={symbol}&intervalTime={bybit_interval}&limit=200&startTime={start}&endTime={end}")).await?);
                 if venue == OiVenue::BybitUsd {
-                    // Inverse open interest is in dollars: the mark price of the same five minutes makes it coins.
-                    let marks = parse_bybit_marks(&http.get(&format!("{BYBIT}/v5/market/mark-price-kline?category=inverse&symbol={symbol}&interval=5&limit=1000&start={start}&end={end}")).await?);
+                    // Inverse open interest is in dollars: the mark price of the same moment makes it coins.
+                    let marks = parse_bybit_marks(&http.get(&format!("{BYBIT}/v5/market/mark-price-kline?category=inverse&symbol={symbol}&interval={mark_interval}&limit=1000&start={start}&end={end}")).await?);
                     oi.into_iter().filter_map(|(t, usd)| marks.get(&t).filter(|m| **m > 0.0).map(|m| (t, usd / m))).collect()
                 } else {
                     oi
@@ -347,7 +366,7 @@ async fn history(http: &Http, venue: OiVenue, coin: &Coin, from: i64, to: i64) -
             }
             OiVenue::OkxUsdt | OiVenue::OkxUsd => {
                 let inst = if venue == OiVenue::OkxUsdt { format!("{bare}-USDT-SWAP") } else { format!("{bare}-USD-SWAP") };
-                parse_okx_history(&http.get(&format!("{OKX}/api/v5/rubik/stat/contracts/open-interest-history?instId={inst}&period=5m&limit=100&end={end}")).await?).into_iter().map(|(t, c)| (t, c / coin.mult)).collect()
+                parse_okx_history(&http.get(&format!("{OKX}/api/v5/rubik/stat/contracts/open-interest-history?instId={inst}&period={okx_period}&limit=100&end={end}")).await?).into_iter().map(|(t, c)| (t, c / coin.mult)).collect()
             }
             _ => return Ok(Vec::new()),
         };
@@ -521,22 +540,40 @@ impl Recorder {
                 _ => ranges.push((from, now)),
             }
             for (a, b) in ranges {
-                match history(&self.http, venue, &coin, a, b).await {
-                    Ok(points) if !points.is_empty() => {
-                        let n = points.len();
-                        for chunk in points.chunks(2_000) {
-                            let rows: Vec<(String, &'static str, f64)> = chunk.iter().map(|(_, v)| (name.clone(), venue.id(), *v)).collect();
-                            let times: Vec<i64> = chunk.iter().map(|(t, _)| *t).collect();
-                            if let Err(e) = self.write_at(&rows, &times).await {
-                                tracing::warn!(coin = %name, venue = venue.id(), error = %e, "backfill write failed");
-                            }
-                        }
-                        tracing::info!(coin = %name, venue = venue.id(), points = n, "open interest backfilled");
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!(coin = %name, venue = venue.id(), error = %e, "open interest backfill failed"),
+                self.fill(&coin, venue, a, b, false).await;
+            }
+            // Past the five-minute history, the hourly one, back as far as the exchange keeps it.
+            if let Some(reach) = venue.hourly_reach() {
+                let first = async {
+                    let client = self.pool.get().await.ok()?;
+                    client.query_one("SELECT MIN(time) FROM open_interest WHERE coin = $1 AND venue = $2", &[&name, &venue.id()]).await.ok()?.get::<_, Option<i64>>(0)
+                }
+                .await;
+                let deep = now - reach;
+                if let Some(first) = first.filter(|f| *f > deep + HOUR) {
+                    self.fill(&coin, venue, deep, first - first.rem_euclid(HOUR), true).await;
                 }
             }
+        }
+    }
+
+    /// Fetch one stretch of history and store it under what is already there.
+    async fn fill(&self, coin: &Coin, venue: OiVenue, from: i64, to: i64, hourly: bool) {
+        let name = &coin.name;
+        match history(&self.http, venue, coin, from, to, hourly).await {
+            Ok(points) if !points.is_empty() => {
+                let n = points.len();
+                for chunk in points.chunks(2_000) {
+                    let rows: Vec<(String, &'static str, f64)> = chunk.iter().map(|(_, v)| (name.clone(), venue.id(), *v)).collect();
+                    let times: Vec<i64> = chunk.iter().map(|(t, _)| *t).collect();
+                    if let Err(e) = self.write_at(&rows, &times).await {
+                        tracing::warn!(coin = %name, venue = venue.id(), error = %e, "backfill write failed");
+                    }
+                }
+                tracing::info!(coin = %name, venue = venue.id(), points = n, hourly, "open interest backfilled");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(coin = %name, venue = venue.id(), error = %e, hourly, "open interest backfill failed"),
         }
     }
 
@@ -561,7 +598,9 @@ impl Recorder {
         loop {
             every.tick().await;
             if let Ok(client) = self.pool.get().await {
-                if let Err(e) = client.execute("DELETE FROM open_interest WHERE time < $1", &[&(now_ms() - KEEP_MS)]).await {
+                let now = now_ms();
+                let sql = "DELETE FROM open_interest WHERE (time < $1 AND time % 3600000 <> 0) OR time < $2";
+                if let Err(e) = client.execute(sql, &[&(now - KEEP_MS), &(now - KEEP_HOURLY_MS)]).await {
                     tracing::error!(error = %e, "trimming open interest");
                 }
             }
