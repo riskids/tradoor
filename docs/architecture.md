@@ -87,6 +87,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
+| `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin starts recording it |
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 
@@ -97,6 +98,7 @@ Writes require `Authorization: Bearer` when `TRADOOR_API_TOKEN` is set.
 | Table | |
 |---|---|
 | `drawing` | hand-drawn markup per market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
+| `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `workspace` | the terminal layout, whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |

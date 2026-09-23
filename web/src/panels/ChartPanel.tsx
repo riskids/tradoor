@@ -27,6 +27,7 @@ import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../wo
 
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
+const OpenInterestSettings = lazy(() => import('../components/OpenInterestSettings').then((m) => ({ default: m.OpenInterestSettings })));
 const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
@@ -112,6 +113,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [drawings, setDrawings] = createSignal<Drawing[]>([]);
   const [offline, setOffline] = createSignal<string | null>(null);
   const [drawError, setDrawError] = createSignal<string | null>(null);
+  /** The study whose settings dialog is open. */
+  const [studyEditing, setStudyEditing] = createSignal<string | null>(null);
   /** The drawing whose settings dialog is open. */
   const [editing, setEditing] = createSignal<number | null>(null);
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
@@ -462,6 +465,19 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     patchPanel(id, { hidden: [...next].join(',') });
   };
 
+  /** Swap a study for the same one with other parameters, keeping it shown or hidden. */
+  const replaceStudy = (from: string, to: string) => {
+    patchPanel(id, {
+      studies: splitList(props.panel.studies)
+        .map((s) => (s === from ? to : s))
+        .filter((s, i, all) => all.indexOf(s) === i)
+        .join(','),
+      hidden: splitList(props.panel.hidden)
+        .map((h) => (h === from ? to : h))
+        .join(','),
+    });
+  };
+
   const removeStudy = (study: string) => {
     patchPanel(id, {
       studies: splitList(props.panel.studies)
@@ -713,6 +729,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                   off={s.hidden}
                   onToggle={() => toggleLayer(s.id)}
                   onRemove={() => removeStudy(s.id)}
+                  onSettings={s.id.split(':')[0] === 'oi' ? () => setStudyEditing(s.id) : undefined}
                   values={s.hidden ? [] : s.lines.map((line) => ({ color: line.color, text: () => legend()?.values[line.id] ?? '—' }))}
                   stats={s.hidden ? [] : s.stats}
                 />
@@ -771,6 +788,10 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
         </div>
       </div>
+
+      <Show when={studyEditing()} keyed>
+        {(studyId) => <OpenInterestSettings id={studyId} onApply={(next) => replaceStudy(studyId, next)} onClose={() => setStudyEditing(null)} />}
+      </Show>
 
       {/* Keyed on the id alone: each previewed change must not remount the dialog. */}
       <Show when={editing()} keyed>
@@ -834,6 +855,7 @@ function LayerRow(props: {
   off: boolean;
   onToggle(): void;
   onRemove?: () => void;
+  onSettings?: () => void;
   values?: { color: string; text: () => string }[];
   stats?: { label: string; value: string }[];
 }) {
@@ -856,6 +878,13 @@ function LayerRow(props: {
       </For>
       {/* Only the buttons keep the press: a drag that starts on the legend text still pans. */}
       <span class="btns" onPointerDown={(e) => e.stopPropagation()}>
+        <Show when={props.onSettings}>
+          {(open) => (
+            <button title="Settings" onClick={() => open()()}>
+              <Icon name="settings" size={12} />
+            </button>
+          )}
+        </Show>
         <button title={props.off ? 'Show' : 'Hide'} onClick={() => props.onToggle()}>
           <Icon name={props.off ? 'eyeOff' : 'eye'} size={12} />
         </button>

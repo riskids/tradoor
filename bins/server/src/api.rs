@@ -14,7 +14,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{catalog::Catalog, drawings, liquidations, relay, workspaces};
+use crate::{catalog::Catalog, drawings, liquidations, open_interest, relay, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +24,8 @@ pub struct AppState {
     pub api_token: Option<String>,
     /// Absent when no ticker's liquidations are being kept.
     pub liquidations: Option<Arc<liquidations::Collector>>,
+    /// Absent when no coin's open interest is being recorded.
+    pub open_interest: Option<Arc<open_interest::Recorder>>,
     /// The exchanges' market data, for browsers on networks that block them.
     pub relay: Arc<relay::Relay>,
 }
@@ -74,6 +76,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
         .route("/liquidations/{ticker}", get(liquidations::stats))
+        .route("/open-interest", get(open_interest::candles))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))

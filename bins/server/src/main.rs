@@ -13,6 +13,7 @@ mod dns;
 mod drawings;
 mod import;
 mod liquidations;
+mod open_interest;
 mod relay;
 mod workspaces;
 
@@ -48,6 +49,10 @@ struct Cli {
     /// perpetual exchange. An empty list turns the collection off.
     #[arg(long, env = "TRADOOR_LIQUIDATIONS", default_value = "BTCUSDT,ETHUSDT,SOLUSDT", value_delimiter = ',')]
     liquidations: Vec<String>,
+    /// Coins whose open interest is recorded from the start; a chart asking for
+    /// another adds it. An empty list turns the recording off.
+    #[arg(long, env = "TRADOOR_OPEN_INTEREST", default_value = "BTC,ETH,SOL", value_delimiter = ',')]
+    open_interest: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -81,7 +86,13 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("TRADOOR_LIQUIDATIONS: {bad:?} is not a ticker — write them like BTCUSDT,ETHUSDT");
             }
             let doh = dns::Doh::new()?;
+            let coins: Vec<String> = cli.open_interest.iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
+            if let Some(bad) = coins.iter().find(|c| open_interest::Coin::parse(c).is_none()) {
+                anyhow::bail!("TRADOOR_OPEN_INTEREST: {bad:?} is not a coin — write them like BTC,ETH,1000PEPE");
+            }
+            let open_interest = if coins.is_empty() { None } else { Some(open_interest::Recorder::start(pool.clone(), coins, &doh).await?) };
             let state = api::AppState {
+                open_interest,
                 liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),
                 pool,
                 data: DataDir::new(&cli.data_dir),

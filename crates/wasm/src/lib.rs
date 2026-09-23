@@ -113,6 +113,12 @@ impl ChartEngine {
         self.chart.set_studies(raw);
     }
 
+    /// Summed open interest from the server: candles of one step, oldest first.
+    pub fn set_open_interest(&mut self, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64]) {
+        let n = time.len().min(open.len()).min(high.len()).min(low.len()).min(close.len());
+        self.chart.set_open_interest((0..n).map(|i| (time[i] as i64, [open[i], high[i], low[i], close[i]])).collect());
+    }
+
     pub fn set_hidden(&mut self, raw: &str) {
         self.chart.set_hidden(raw);
     }

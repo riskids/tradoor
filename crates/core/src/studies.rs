@@ -19,6 +19,7 @@ pub enum StudyKind {
     KeyLevels,
     Avwap,
     SwingMap,
+    OpenInterest,
 }
 
 impl StudyKind {
@@ -34,6 +35,7 @@ impl StudyKind {
             Self::KeyLevels => "keylevels",
             Self::Avwap => "avwap",
             Self::SwingMap => "swingmap",
+            Self::OpenInterest => "oi",
         }
     }
 }
@@ -44,6 +46,8 @@ pub enum Group {
     Pct,
     Macd,
     Atr,
+    /// Open interest: its own pane, in coins or dollars.
+    Oi,
 }
 
 impl Group {
@@ -53,6 +57,7 @@ impl Group {
             Self::Pct => "pct",
             Self::Macd => "macd",
             Self::Atr => "atr",
+            Self::Oi => "oi",
         }
     }
 }
@@ -77,7 +82,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 10] = [
+pub static STUDIES: [StudyDefinition; 11] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -88,7 +93,20 @@ pub static STUDIES: [StudyDefinition; 10] = [
     StudyDefinition { kind: StudyKind::Avwap, name: "Anchored VWAP (S/W/M/Y)", short: "Multi-VWAP", group: Group::Price, params: &[], about: "Volume-weighted average price since the session, week, month and year opened. The session line is drawn on intraday charts only." },
     StudyDefinition { kind: StudyKind::SwingMap, name: "Range Swing Structure Map", short: "Swings", group: Group::Price, params: &[p("left", 5, 1, 100), p("right", 5, 1, 100)], about: "Zigzag of confirmed pivots tagged HH/HL/LH/LL, with each leg’s move and duration, and the averages across the window." },
     StudyDefinition { kind: StudyKind::Atr, name: "Average True Range", short: "ATR", group: Group::Atr, params: &[p("length", 14, 2, 1000)], about: "Average range of a bar, in the instrument’s own price units. A stop distance, not a direction." },
+    StudyDefinition {
+        kind: StudyKind::OpenInterest,
+        name: "Aggregated Open Interest",
+        short: "Aggregated OI",
+        group: Group::Oi,
+        // `venues` is a bit per venue in the server's order; `measure` 0 coins, 1 dollars; `view` 0 candles, 1 line.
+        params: &[p("venues", OI_ALL_VENUES, 1, OI_ALL_VENUES), p("measure", 0, 0, 1), p("view", 0, 0, 1)],
+        about: "Open interest summed across Binance, Bybit, OKX, Deribit and Hyperliquid perpetuals, stablecoin- and coin-margined, as candles. Recorded by the tradoor server.",
+    },
 ];
+
+/// One bit per open interest venue, in the server's order.
+pub const OI_VENUES: [&str; 8] = ["binance-usdt", "bybit-usdt", "okx-usdt", "deribit-usd", "hyperliquid-usd", "binance-usd", "bybit-usd", "okx-usd"];
+pub const OI_ALL_VENUES: u32 = (1 << OI_VENUES.len()) - 1;
 
 pub fn definition(kind: &str) -> Option<&'static StudyDefinition> {
     STUDIES.iter().find(|d| d.kind.as_str() == kind)
@@ -114,6 +132,13 @@ impl StudySpec {
     /// `EMA 50`, `Stoch RSI 14 14 3 3`.
     pub fn label(&self) -> String {
         let short = self.def().short;
+        if self.kind == StudyKind::OpenInterest {
+            let venues = self.params.first().copied().unwrap_or(OI_ALL_VENUES);
+            let measure = if self.params.get(1) == Some(&1) { "USD" } else { "Coins" };
+            let view = if self.params.get(2) == Some(&1) { "Line" } else { "Candles" };
+            let count = if venues == OI_ALL_VENUES { String::new() } else { format!(" · {} venues", venues.count_ones()) };
+            return format!("{short} {measure} {view}{count}");
+        }
         if self.params.is_empty() {
             short.to_string()
         } else {
@@ -186,12 +211,24 @@ pub struct StudyLine {
     /// Fixed colour for lines told apart BY colour; otherwise the chart's palette.
     pub color: Option<&'static str>,
     pub width: f32,
+    /// Whether its last value gets a badge on the axis.
+    pub badge: bool,
 }
 
 impl StudyLine {
     fn line(key: &'static str, label: impl Into<String>, values: Series) -> Self {
-        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, width: 1.0 }
+        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, width: 1.0, badge: true }
     }
+}
+
+/// What a study reads besides the closed candles.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StudyInputs<'a> {
+    /// Summed open interest as `(time, [open, high, low, close])` candles of
+    /// some step no longer than a bar, oldest first.
+    pub open_interest: &'a [(i64, [f64; 4])],
+    /// The forming bar's open time and last price: open interest runs to it.
+    pub live: Option<(i64, f64)>,
 }
 
 /// A level that holds for a bounded stretch of time — last week's open is a fact
@@ -230,14 +267,20 @@ pub struct ComputedStudy {
     pub segments: Vec<StudySegment>,
     pub markers: Vec<StudyMarker>,
     pub stats: Vec<(&'static str, String)>,
+    /// Candles drawn in the study's pane, one per bar — the forming one included.
+    pub candles: Vec<Option<[f64; 4]>>,
 }
 
 pub fn compute_study(spec: &StudySpec, candles: &[Candle]) -> ComputedStudy {
+    compute_study_with(spec, candles, &StudyInputs::default())
+}
+
+pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyInputs<'_>) -> ComputedStudy {
     let def = spec.def();
     let close: Series = candles.iter().map(|c| Some(c.close)).collect();
     let label = spec.label();
     let param = |i: usize| spec.params.get(i).copied().unwrap_or(def.params.get(i).map_or(0, |p| p.default)) as usize;
-    let mut study = ComputedStudy { id: spec.id(), kind: def.kind, label: label.clone(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new() };
+    let mut study = ComputedStudy { id: spec.id(), kind: def.kind, label: label.clone(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new(), candles: Vec::new() };
 
     match def.kind {
         StudyKind::Ema => study.lines.push(StudyLine::line("ema", label, indicators::ema(&close, param(0)))),
@@ -264,8 +307,74 @@ pub fn compute_study(spec: &StudySpec, candles: &[Candle]) -> ComputedStudy {
         StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles),
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
         StudyKind::SwingMap => (study.lines, study.markers, study.stats) = swing_map(candles, param(0), param(1)),
+        StudyKind::OpenInterest => {
+            let usd = param(1) == 1;
+            let (mut bars, closes) = open_interest_bars(candles, inputs);
+            if usd {
+                open_interest_usd(&mut bars, &closes);
+            }
+            let line = param(2) == 1;
+            let pick = |k: usize| -> Series { bars.iter().map(|b| b.map(|b| b[k])).collect() };
+            let hidden = |key: &'static str, label: &'static str, values: Series| StudyLine { style: LineStyle::None, badge: false, ..StudyLine::line(key, label, values) };
+            let close = StudyLine { style: if line { LineStyle::Solid } else { LineStyle::None }, color: Some(OI_COLOR), width: 1.5, ..StudyLine::line("close", if usd { "OI $" } else { "OI" }, pick(3)) };
+            study.lines = if line { vec![close] } else { vec![hidden("open", "O", pick(0)), hidden("high", "H", pick(1)), hidden("low", "L", pick(2)), close] };
+            if !line {
+                study.candles = bars;
+            }
+        }
     }
     study
+}
+
+const OI_COLOR: &str = "#f0b90b";
+
+/// Fold open interest steps into the chart's bars, the forming one last: each
+/// bar is the candle of the steps that start inside it. A bar no step starts in
+/// holds the last close flat; bars before the first step have none. In dollars
+/// each figure is multiplied by the bar's close.
+fn open_interest_bars(candles: &[Candle], inputs: &StudyInputs<'_>) -> (Vec<Option<[f64; 4]>>, Vec<f64>) {
+    let steps = inputs.open_interest;
+    let mut bars: Vec<(i64, f64)> = candles.iter().map(|c| (c.open_time, c.close)).collect();
+    if let Some(live) = inputs.live.filter(|l| bars.last().is_none_or(|b| l.0 > b.0)) {
+        bars.push(live);
+    }
+    let mut out = Vec::with_capacity(bars.len());
+    let mut j = 0usize;
+    let mut last: Option<f64> = None;
+    for (i, &(open, _)) in bars.iter().enumerate() {
+        let end = bars.get(i + 1).map_or(i64::MAX, |b| b.0);
+        // Steps before this bar carry their close in, without drawing.
+        while j < steps.len() && steps[j].0 < open {
+            last = Some(steps[j].1[3]);
+            j += 1;
+        }
+        let mut bar: Option<[f64; 4]> = None;
+        while j < steps.len() && steps[j].0 < end {
+            let s = steps[j].1;
+            bar = Some(match bar {
+                None => s,
+                Some(b) => [b[0], b[1].max(s[1]), b[2].min(s[2]), s[3]],
+            });
+            j += 1;
+        }
+        let bar = bar.or_else(|| last.map(|c| [c, c, c, c]));
+        if let Some(b) = bar {
+            last = Some(b[3]);
+        }
+        out.push(bar);
+    }
+    (out, bars.iter().map(|b| b.1).collect())
+}
+
+/// The dollar value of the open interest, bar by bar.
+fn open_interest_usd(bars: &mut [Option<[f64; 4]>], closes: &[f64]) {
+    for (bar, close) in bars.iter_mut().zip(closes) {
+        if let Some(b) = bar {
+            for v in b.iter_mut() {
+                *v *= close;
+            }
+        }
+    }
 }
 
 const WEEKLY: &str = "#fffcbc";
@@ -513,6 +622,35 @@ mod tests {
                 Candle { open_time: t0 + i as i64 * step, open: o.unwrap_or(base), high: h.unwrap_or(base + 1.0), low: l.unwrap_or(base - 1.0), close: c.unwrap_or(base), volume: v.unwrap_or(1.0), quote_volume: None }
             })
             .collect()
+    }
+
+    #[test]
+    fn open_interest_folds_steps_into_bars_and_the_forming_one() {
+        let hour = 3_600_000;
+        let candles = series("2026-09-01", 3, hour, |i| (None, None, None, Some(100.0 * (i + 1) as f64), None));
+        let t0 = candles[0].open_time;
+        let m = 15 * 60_000;
+        // Four 15-minute steps in the first hour, none in the second, one in the third, one in the forming fourth.
+        let steps = vec![
+            (t0 - m, [9.0, 9.0, 9.0, 9.0]),
+            (t0, [10.0, 12.0, 10.0, 11.0]),
+            (t0 + m, [11.0, 15.0, 11.0, 14.0]),
+            (t0 + 2 * m, [14.0, 14.0, 8.0, 9.0]),
+            (t0 + 3 * m, [9.0, 10.0, 9.0, 10.0]),
+            (t0 + 2 * hour, [20.0, 21.0, 19.0, 20.0]),
+            (t0 + 3 * hour, [30.0, 30.0, 30.0, 30.0]),
+        ];
+        let inputs = StudyInputs { open_interest: &steps, live: Some((t0 + 3 * hour, 400.0)) };
+        let study = compute_study_with(&parse_studies("oi", 12)[0], &candles, &inputs);
+        assert_eq!(study.candles, vec![Some([10.0, 15.0, 8.0, 10.0]), Some([10.0; 4]), Some([20.0, 21.0, 19.0, 20.0]), Some([30.0; 4])]);
+        assert_eq!(line(&study, "close"), &vec![Some(10.0), Some(10.0), Some(20.0), Some(30.0)]);
+        assert!(study.label.starts_with("Aggregated OI Coins Candles"));
+
+        // In dollars each bar is multiplied by its close; as a line there are no candles.
+        let usd = compute_study_with(&parse_studies("oi:3:1:1", 12)[0], &candles, &inputs);
+        assert!(usd.candles.is_empty());
+        assert_eq!(line(&usd, "close"), &vec![Some(1000.0), Some(2000.0), Some(6000.0), Some(12_000.0)]);
+        assert!(usd.label.contains("USD Line · 2 venues"));
     }
 
     fn line<'a>(study: &'a ComputedStudy, key: &str) -> &'a Series {

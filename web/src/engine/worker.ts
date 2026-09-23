@@ -11,6 +11,7 @@ import { MARK_ORDER, MARKS, markIndex, markSpec } from '../lib/exchange-marks';
 import { parseMarket } from '../lib/markets';
 import { concatCols, emptyCols, openSeries, sliceCols, type Cols, type Series } from './history';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
+import { coinOf, oiVenues, OpenInterestFeed } from './open-interest';
 import { StreamHub, type SocketState, type StreamListener, type StreamMsg } from './streams';
 
 /** Closed bars a chart opens with: enough for EMA 200 to settle, with room to scroll. */
@@ -113,6 +114,12 @@ class Slot {
   hidden = false;
   /** The ticker's perpetual on each exchange, whose liquidations the feed shows. */
   private liquidationMarkets: string[] = [];
+  /** The studies as last set, for whether open interest is shown. */
+  private studies = '';
+  private readonly openInterest = new OpenInterestFeed((steps) => {
+    this.engine.set_open_interest(steps.time, steps.open, steps.high, steps.low, steps.close);
+    this.metaDirty = true;
+  });
   private liquidationOff: (() => void)[] = [];
 
   constructor(
@@ -151,10 +158,31 @@ class Slot {
     this.metaDirty = true;
   }
 
+  setStudies(value: string): void {
+    this.studies = value;
+    this.engine.set_studies(value);
+    this.metaDirty = true;
+    this.syncOpenInterest();
+  }
+
+  /** Open interest follows the chart's market, bars and the study's venues. */
+  private syncOpenInterest(): void {
+    const ref = parseMarket(this.market);
+    const first = this.closed.time.length > 0 ? this.closed.time[0]! : Number.NaN;
+    let barMs = 0;
+    try {
+      barMs = info(this.timeframe).barMs;
+    } catch {
+      barMs = 0;
+    }
+    this.openInterest.follow(ref ? coinOf(ref.symbol) : '', barMs, first, ref && barMs > 0 ? oiVenues(this.studies) : null);
+  }
+
   destroy(): void {
     clearInterval(this.demo);
     clearTimeout(this.priceTimer);
     this.watchLiquidations([]);
+    this.openInterest.stop();
     this.detach();
     this.engine.free();
   }
@@ -277,6 +305,7 @@ class Slot {
     this.extra = this.extra.filter((b) => b.time > last);
     this.closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
     this.pushCandles();
+    this.syncOpenInterest();
     this.setStatus({ loading: false, error: null, bars: this.closed.time.length, source: series.source, exhausted: series.exhausted });
   }
 
@@ -585,8 +614,7 @@ function handle(msg: ToWorker): void {
       void slot.load(msg.market, msg.timeframe, msg.bars);
       break;
     case 'studies':
-      slot.engine.set_studies(msg.value);
-      slot.markMeta();
+      slot.setStudies(msg.value);
       break;
     case 'hidden':
       slot.engine.set_hidden(msg.value);

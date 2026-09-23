@@ -54,7 +54,8 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
                     <span class="dim">{d.short}</span>
                     <span class="dim">{d.group === 'price' ? 'on price' : 'own pane'}</span>
                     <span class="spacer" />
-                    <For each={d.params}>
+                    {/* Open interest is set in its own dialog, from the legend, once added. */}
+                    <For each={d.kind === 'oi' ? [] : d.params}>
                       {(p, i) => (
                         <label class="field" title={p.name}>
                           {p.name}

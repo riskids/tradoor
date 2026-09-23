@@ -89,6 +89,22 @@ pub fn format_turnover(v: f64) -> String {
     }
 }
 
+/// A large figure to four significant-ish digits: `5.327M`, `106.2K`, `12.35`.
+pub fn format_compact(v: f64) -> String {
+    if !v.is_finite() {
+        return "—".to_string();
+    }
+    let (scaled, unit) = match v.abs() {
+        a if a >= 1e12 => (v / 1e12, "T"),
+        a if a >= 1e9 => (v / 1e9, "B"),
+        a if a >= 1e6 => (v / 1e6, "M"),
+        a if a >= 1e3 => (v / 1e3, "K"),
+        _ => return format!("{v:.2}"),
+    };
+    let decimals = if scaled.abs() >= 100.0 { 1 } else if scaled.abs() >= 10.0 { 2 } else { 3 };
+    format!("{scaled:.decimals$}{unit}")
+}
+
 /// Time left until a bar closes: `04:12`, `2:05:33`, or `3d 04h`.
 pub fn format_countdown(ms: i64) -> String {
     if ms <= 0 {
@@ -107,6 +123,14 @@ pub fn format_countdown(ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_figures() {
+        assert_eq!(super::format_compact(5_327_000.0), "5.327M");
+        assert_eq!(super::format_compact(106_188.6), "106.2K");
+        assert_eq!(super::format_compact(12_345_678_901.0), "12.35B");
+        assert_eq!(super::format_compact(12.345), "12.35");
+    }
+
     use super::*;
 
     #[test]

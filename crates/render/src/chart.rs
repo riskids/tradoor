@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tradoor_core::chart::{engine_series, EngineSeries};
-use tradoor_core::format::{format_countdown, format_price, format_turnover, price_precision};
+use tradoor_core::format::{format_compact, format_countdown, format_price, format_turnover, price_precision};
 use tradoor_core::live::LiveBar;
-use tradoor_core::studies::{compute_study, parse_studies, ComputedStudy, Group, LineStyle, LineType, StudySpec, Tone};
+use tradoor_core::studies::{compute_study_with, parse_studies, ComputedStudy, Group, LineStyle, LineType, StudyInputs, StudyKind, StudySpec, Tone};
 use tradoor_core::time::DAY;
 use tradoor_core::{Candle, ChartTimeframe, Interval};
 
@@ -219,6 +219,8 @@ pub struct Chart {
     engine: EngineSeries,
     ribbon: Vec<RibbonRun>,
     study_specs: Vec<StudySpec>,
+    /// Summed open interest from the server, as `(time, [o, h, l, c])` steps.
+    open_interest: Vec<(i64, [f64; 4])>,
     studies: Vec<ComputedStudy>,
     hidden: BTreeSet<String>,
     log_scale: bool,
@@ -269,6 +271,7 @@ impl Chart {
             engine: engine_series(&[]),
             ribbon: Vec::new(),
             study_specs: Vec::new(),
+            open_interest: Vec::new(),
             studies: Vec::new(),
             hidden: BTreeSet::new(),
             log_scale: false,
@@ -367,7 +370,7 @@ impl Chart {
         self.precision = price_precision(self.candles.iter().rev().take(2000).flat_map(|c| [c.open, c.high, c.low, c.close]));
         self.engine = engine_series(&self.candles);
         self.ribbon = ribbon_runs(&self.engine.ema12, &self.engine.ema25);
-        self.studies = self.study_specs.iter().map(|s| compute_study(s, &self.candles)).collect();
+        self.studies = self.compute_studies(&self.study_specs);
         if self.candles.is_empty() {
             self.view_ready = false;
         }
@@ -384,8 +387,38 @@ impl Chart {
         let live = live.filter(|l| self.candles.last().is_none_or(|c| l.open_time > c.open_time));
         if live != self.live {
             self.live = live;
+            // Open interest runs into the forming bar, and in dollars moves with its price.
+            self.refresh_open_interest();
             self.touch();
         }
+    }
+
+    /// Summed open interest, `(time, [open, high, low, close])` steps oldest first.
+    pub fn set_open_interest(&mut self, steps: Vec<(i64, [f64; 4])>) {
+        self.open_interest = steps;
+        self.refresh_open_interest();
+        self.touch();
+    }
+
+    fn refresh_open_interest(&mut self) {
+        if !self.study_specs.iter().any(|s| s.kind == StudyKind::OpenInterest) {
+            return;
+        }
+        let inputs = StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)) };
+        for (spec, study) in self.study_specs.iter().zip(self.studies.iter_mut()) {
+            if spec.kind == StudyKind::OpenInterest {
+                *study = compute_study_with(spec, &self.candles, &inputs);
+            }
+        }
+    }
+
+    fn study_inputs(&self) -> StudyInputs<'_> {
+        StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)) }
+    }
+
+    fn compute_studies(&self, specs: &[StudySpec]) -> Vec<ComputedStudy> {
+        let inputs = self.study_inputs();
+        specs.iter().map(|s| compute_study_with(s, &self.candles, &inputs)).collect()
     }
 
     /// One liquidation, to ping beside the candles until it fades.
@@ -413,7 +446,7 @@ impl Chart {
     pub fn set_studies(&mut self, raw: &str) {
         let specs = parse_studies(raw, 12);
         if specs != self.study_specs {
-            self.studies = specs.iter().map(|s| compute_study(s, &self.candles)).collect();
+            self.studies = self.compute_studies(&specs);
             self.study_specs = specs;
             self.touch();
         }
@@ -507,6 +540,7 @@ impl Chart {
                 "pct" => Group::Pct,
                 "macd" => Group::Macd,
                 "atr" => Group::Atr,
+                "oi" => Group::Oi,
                 _ => continue,
             };
             if let Ok(w) = weight.trim().parse::<f64>() {
@@ -720,9 +754,10 @@ impl Chart {
                 hi = hi.max(v);
             }
         };
-        let closed_end = i1.min(self.candles.len().saturating_sub(1));
+        // Indicators stop at the last closed bar; a series that runs into the forming one reaches it.
         let series = |values: &[Option<f64>], take: &mut dyn FnMut(f64)| {
-            for v in values.get(i0..=closed_end).into_iter().flatten().flatten() {
+            let end = i1.min(values.len().saturating_sub(1));
+            for v in values.get(i0..=end).into_iter().flatten().flatten() {
                 take(*v);
             }
         };
@@ -747,6 +782,10 @@ impl Chart {
                 if line.kind == LineType::Histogram {
                     take(0.0);
                 }
+            }
+            for bar in study.candles.get(i0..=i1.min(study.candles.len().saturating_sub(1))).into_iter().flatten().flatten() {
+                take(bar[1]);
+                take(bar[2]);
             }
         }
         if lo > hi { (0.0, 1.0) } else { (lo, hi) }
@@ -925,6 +964,7 @@ impl Chart {
         for (index, study) in self.visible_studies() {
             let Some(pane) = self.panes.iter().find(|p| p.group == study.group) else { continue };
             f.clip(Some(pane.plot));
+            self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
             for (li, line) in study.lines.iter().enumerate() {
                 match (line.kind, line.style) {
                     (LineType::Histogram, _) => self.paint_histogram(f, &pane.scale, &line.values, i0, i1, body),
@@ -1081,11 +1121,14 @@ impl Chart {
         for (index, study) in self.visible_studies() {
             let Some(pane_index) = self.panes.iter().position(|pn| pn.group == study.group) else { continue };
             let pane = self.panes[pane_index];
-            let decimals = if study.group == Group::Price { p } else { 2 };
-            for (li, line) in study.lines.iter().enumerate().filter(|(_, l)| l.kind == LineType::Line) {
+            for (li, line) in study.lines.iter().enumerate().filter(|(_, l)| l.kind == LineType::Line && l.badge) {
                 if let Some(v) = last_value(&line.values) {
-                    let color = self.line_color(line, index, li);
-                    badges.push(Badge { pane: pane_index, y: pane.scale.y(v) as f32, text: format_price(v, Some(decimals)), bg: color, fg: color.contrast_text() });
+                    // Candles take the colour of the last one, as the price badge does.
+                    let color = match study.candles.iter().rev().flatten().next() {
+                        Some(b) => if b[3] >= b[0] { t.bull } else { t.bear },
+                        None => self.line_color(line, index, li),
+                    };
+                    badges.push(Badge { pane: pane_index, y: pane.scale.y(v) as f32, text: self.format_value(study.group, v), bg: color, fg: color.contrast_text() });
                 }
             }
         }
@@ -1109,6 +1152,7 @@ impl Chart {
                 Group::Pct => 2,
                 _ => ticks::step_decimals(&ticks).max(2),
             };
+            let label = |v: f64| if pane.group == Group::Oi { format_compact(v) } else { format_price(v, Some(decimals)) };
             for v in ticks {
                 let y = pane.scale.y(v) as f32;
                 let near_badge = badges.iter().any(|b| b.pane == pi && (b.y - y).abs() < badge_h);
@@ -1116,7 +1160,7 @@ impl Chart {
                 if y < pane.plot.y + 6.0 || y > pane.plot.bottom() - 6.0 || near_badge || near_cross {
                     continue;
                 }
-                f.text(plot_w + 6.0, y, format_price(v, Some(decimals)), t.text, Align::Left, Baseline::Middle, font, None, Some(axis));
+                f.text(plot_w + 6.0, y, label(v), t.text, Align::Left, Baseline::Middle, font, None, Some(axis));
             }
             if pane.group == Group::Pct {
                 for level in [20.0, 80.0] {
@@ -1137,9 +1181,8 @@ impl Chart {
         }
         if let Some((pi, cy)) = crosshair_price {
             let pane = self.panes[pi];
-            let decimals = if pane.group == Group::Price { p } else { 2 };
             f.crisp_rect(plot_w + 1.0, cy - badge_h / 2.0, self.axis_width - 1.0, badge_h, t.label_background);
-            f.text(plot_w + 6.0, cy, format_price(pane.scale.price(f64::from(cy)), Some(decimals)), t.countdown_text, Align::Left, Baseline::Middle, font, None, None);
+            f.text(plot_w + 6.0, cy, self.format_value(pane.group, pane.scale.price(f64::from(cy))), t.countdown_text, Align::Left, Baseline::Middle, font, None, None);
         }
 
         // ---- time labels
@@ -1198,6 +1241,23 @@ impl Chart {
         f.polyline(&pts, width, color);
     }
 
+    /// A study's own candles — open interest — in its pane, coloured by whether it rose.
+    fn paint_study_candles(&self, f: &mut Frame, scale: &PriceScale, bars: &[Option<[f64; 4]>], i0: usize, i1: usize, body: f32) {
+        let t = &self.theme;
+        let wick = (1.0 / f.dpr).max(1.0);
+        for i in i0..=i1.min(bars.len().saturating_sub(1)) {
+            let Some([o, h, l, c]) = bars[i] else { continue };
+            let x = f.snap(self.time.x(i as f64) as f32);
+            let color = if c >= o { t.bull } else { t.bear };
+            let (yh, yl, yo, yc) = (scale.y(h) as f32, scale.y(l) as f32, scale.y(o) as f32, scale.y(c) as f32);
+            let (top, bottom) = (yo.min(yc), yo.max(yc));
+            f.vline(x, yh, yl, wick, color);
+            if body >= 2.0 {
+                f.crisp_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / f.dpr), color);
+            }
+        }
+    }
+
     fn paint_histogram(&self, f: &mut Frame, scale: &PriceScale, values: &[Option<f64>], i0: usize, i1: usize, body: f32) {
         let zero = scale.y(0.0) as f32;
         let w = (body * 0.7).max(1.0 / f.dpr);
@@ -1251,8 +1311,9 @@ impl Chart {
             .visible_studies()
             .flat_map(|(_, s)| {
                 s.lines.iter().map(move |l| {
-                    let decimals = if s.group == Group::Price { p } else { 2 };
-                    (format!("{}:{}", s.id, l.key), l.values.get(at).copied().flatten().map_or("—".to_string(), |v| format_price(v, Some(decimals))))
+                    // A series that runs into the forming bar is read there.
+                    let i = if l.values.len() > self.candles.len() { index } else { at };
+                    (format!("{}:{}", s.id, l.key), l.values.get(i).copied().flatten().map_or("—".to_string(), |v| self.format_value(s.group, v)))
                 })
             })
             .collect();
@@ -1264,6 +1325,16 @@ impl Chart {
             up: diff >= 0.0,
             volume: format!("Vol {}", format_turnover(b.volume)),
             values,
+        }
+    }
+
+    /// A study's figure as its pane labels it: the instrument's decimals for
+    /// price, two for the rest, and `5.327M` for open interest.
+    fn format_value(&self, group: Group, v: f64) -> String {
+        match group {
+            Group::Price => format_price(v, Some(self.precision())),
+            Group::Oi => format_compact(v),
+            _ => format_price(v, Some(2)),
         }
     }
 
