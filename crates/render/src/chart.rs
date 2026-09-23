@@ -1071,7 +1071,10 @@ impl Chart {
         let last_y = price.scale.y(last.close) as f32;
         f.dashed_line(0.0, last_y, plot_w, last_y, 1.0, last_color, 2.0, 2.0);
 
-        for placed in self.drawings.iter().map(|d| (d, false)).chain(self.draft.iter().map(|d| (d, true))).filter_map(|(d, draft)| self.place(d, draft)) {
+        // The drawing under the pointer, for what shows only on hover.
+        let hovered = self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.drawing_at(x, y));
+        for mut placed in self.drawings.iter().map(|d| (d, false)).chain(self.draft.iter().map(|d| (d, true))).filter_map(|(d, draft)| self.place(d, draft)) {
+            placed.hovered = placed.shape.id.is_some() && placed.shape.id == hovered;
             drawings::paint(f, &placed, price.plot, t);
         }
 
@@ -1287,7 +1290,7 @@ impl Chart {
             _ => 0,
         };
         let last = self.candles.last().map(|c| c.close);
-        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, bars, scale: pane.scale, precision: self.precision(), last })
+        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, hovered: false, bars, scale: pane.scale, precision: self.precision(), last })
     }
 
     // ------------------------------------------------------------------ legend
@@ -2456,6 +2459,27 @@ mod tests {
         assert!(shape.points[1].price < stop.price);
         assert_eq!((shape.points[0], shape.points[2].price), (entry, target.price));
         assert_eq!(shape.points[1].time, stop.time, "a price handle leaves the width alone");
+    }
+
+    #[test]
+    fn a_positions_figures_show_on_hover_and_selection_only() {
+        let mut c = chart();
+        c.set_tool(Some(DrawingKind::Long));
+        c.pointer_down(300.0, 200.0, 0);
+        c.pointer_up(300.0, 200.0);
+        let Some(Event::DrawingCreated { points, .. }) = c.take_events().into_iter().next() else { panic!() };
+        c.set_drawings(vec![DrawingShape::new(Some(5), DrawingKind::Long, points)]);
+        let figures = |c: &mut Chart| c.render(0).texts.iter().any(|t| t.text.starts_with("Target"));
+        c.pointer_move(50.0, 400.0);
+        assert!(!figures(&mut c), "hidden away from it");
+        c.pointer_move(310.0, 190.0);
+        assert!(figures(&mut c), "shown under the pointer");
+        c.pointer_move(50.0, 400.0);
+        c.set_selected(Some(5));
+        assert!(figures(&mut c), "shown while selected");
+        c.set_selected(None);
+        c.drawings[0].style = DrawingStyle::from_pairs([("alwaysStats", "1")]);
+        assert!(figures(&mut c), "or always, when asked");
     }
 
     #[test]

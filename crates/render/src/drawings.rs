@@ -155,7 +155,8 @@ pub struct DrawingStyle {
     pub leverage: Option<f64>,
     pub qty_decimals: Option<usize>,
     pub compact: bool,
-    pub hide_stats: bool,
+    /// A position's figures stay up; otherwise they show on hover or selection.
+    pub always_stats: bool,
 }
 
 impl DrawingStyle {
@@ -202,7 +203,7 @@ impl DrawingStyle {
             "leverage" => self.leverage = num().filter(|v| *v > 0.0),
             "qtyDecimals" => self.qty_decimals = num().map(|v| v.clamp(0.0, 10.0) as usize),
             "compact" => self.compact = flag(),
-            "hideStats" => self.hide_stats = flag(),
+            "alwaysStats" => self.always_stats = flag(),
             _ => {}
         }
     }
@@ -286,6 +287,8 @@ pub struct Placed<'a> {
     pub points: Vec<(f32, f32)>,
     pub selected: bool,
     pub draft: bool,
+    /// The pointer is over it.
+    pub hovered: bool,
     /// Bars between the first two anchors, for the measure readout.
     pub bars: i64,
     pub scale: PriceScale,
@@ -611,7 +614,8 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
         frame.hline(left, right, target_y, 1.0, profit_line);
         frame.hline(left, right, stop_y, 1.0, stop_line);
     }
-    if style.hide_stats && !d.selected {
+    // As on TradingView: the figures come up under the pointer, or once selected.
+    if !(style.always_stats || d.selected || d.hovered || d.draft) {
         return;
     }
 

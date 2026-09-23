@@ -168,7 +168,7 @@ export function DrawingSettings(props: {
               <SizeSelect value={num('textSize', 11)} onChange={(v) => set('textSize', v)} />
             </Row>
             <Check label="Compact stats mode" checked={flag('compact')} onChange={(v) => set('compact', v)} />
-            <Check label="Always show stats" checked={!flag('hideStats')} onChange={(v) => set('hideStats', !v)} />
+            <Check label="Always show stats" checked={flag('alwaysStats')} onChange={(v) => set('alwaysStats', v)} />
           </Show>
 
           <Show when={kind === 'text'}>
