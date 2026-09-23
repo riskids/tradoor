@@ -205,6 +205,10 @@ impl ChartEngine {
         self.chart.set_shift(shift);
     }
 
+    pub fn set_ctrl(&mut self, ctrl: bool) {
+        self.chart.set_ctrl(ctrl);
+    }
+
     /// `off`, `weak` or `strong`.
     pub fn set_magnet(&mut self, mode: &str) {
         self.chart.set_magnet(match mode {

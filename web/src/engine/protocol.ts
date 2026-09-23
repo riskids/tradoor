@@ -145,8 +145,8 @@ export type ToWorker =
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }
   | { t: 'range'; id: string; days: number | null }
-  /** `shift`: held, so lines being drawn stay level. */
-  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean }
+  /** `shift`: held, so lines being drawn stay level. `ctrl` (or Cmd): a weak magnet while held. */
+  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean; ctrl?: boolean }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
   /** Every exchange's mark, as `markSpec` writes it, numbered by MARK_ORDER. */

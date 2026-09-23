@@ -55,7 +55,7 @@ const toolTip = (t: { kind: string; title: string }): string => {
 };
 
 const MAGNET_TIP: Record<MagnetMode, string> = {
-  off: 'Magnet off (Alt+G) — click for a weak magnet',
+  off: 'Magnet off (Alt+G) — click for a weak magnet, or hold Ctrl while drawing for one',
   weak: 'Weak magnet (Alt+G) — anchors near a bar take its open, high, low or close; elsewhere a whole tick. Click for strong',
   strong: 'Strong magnet (Alt+G) — anchors always take the nearest open, high, low or close. Click to turn it off',
 };
@@ -164,7 +164,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   };
   const pointer = (kind: PointerKind, e: MouseEvent) => {
     const p = local(e);
-    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey });
+    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
   };
 
   onMount(() => {

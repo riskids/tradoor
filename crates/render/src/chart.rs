@@ -252,6 +252,8 @@ pub struct Chart {
     shift: bool,
     /// Where drawing anchors are pulled: nowhere, a bar's price when near it, or always.
     magnet: Magnet,
+    /// Ctrl held: a weak magnet for as long as it is, when the magnet is off.
+    ctrl: bool,
     placed: Vec<Anchor>,
     draft: Option<DrawingShape>,
     events: Vec<Event>,
@@ -300,6 +302,7 @@ impl Chart {
             tool_style: DrawingStyle::default(),
             shift: false,
             magnet: Magnet::Off,
+            ctrl: false,
             selected: None,
             tool: None,
             placed: Vec::new(),
@@ -601,6 +604,18 @@ impl Chart {
 
     pub fn set_shift(&mut self, shift: bool) {
         self.shift = shift;
+    }
+
+    pub fn set_ctrl(&mut self, ctrl: bool) {
+        self.ctrl = ctrl;
+    }
+
+    /// The magnet in force: the chosen one, or a weak one while Ctrl is held over none.
+    fn magnet_now(&self) -> Magnet {
+        match self.magnet {
+            Magnet::Off if self.ctrl => Magnet::Weak,
+            m => m,
+        }
     }
 
     pub fn set_magnet(&mut self, magnet: Magnet) {
@@ -1417,7 +1432,8 @@ impl Chart {
     /// An anchor where the pointer is, pulled by the magnet when it is on.
     fn point_at(&self, x: f32, y: f32) -> Option<Anchor> {
         let raw = self.anchor_at(x, y)?;
-        if self.magnet == Magnet::Off {
+        let magnet = self.magnet_now();
+        if magnet == Magnet::Off {
             return Some(raw);
         }
         let pane = self.panes.first()?;
@@ -1432,7 +1448,7 @@ impl Chart {
         let Some(bar) = self.bar(slot as usize) else { return Some(on_tick) };
         let distance = |p: f64| (pane.scale.y(p) as f32 - y).abs();
         let nearest = [bar.open, bar.high, bar.low, bar.close].into_iter().min_by(|a, b| distance(*a).total_cmp(&distance(*b))).unwrap_or(raw.price);
-        let price = if self.magnet == Magnet::Strong || distance(nearest) <= MAGNET_PX { nearest } else { on_tick.price };
+        let price = if magnet == Magnet::Strong || distance(nearest) <= MAGNET_PX { nearest } else { on_tick.price };
         Some(Anchor { time: bar.time as f64, price })
     }
 
@@ -2477,6 +2493,11 @@ mod tests {
         assert_eq!(c.point_at(x, far_y).unwrap().price, bar.high, "a strong magnet always takes the nearest");
         c.set_magnet(Magnet::Off);
         assert_eq!(c.point_at(x, far_y), c.anchor_at(x, far_y));
+        // Ctrl held over no magnet: a weak one while it is.
+        c.set_ctrl(true);
+        assert_eq!(c.point_at(x, y_close + 3.0).unwrap().price, bar.close);
+        c.set_ctrl(false);
+        assert_ne!(c.point_at(x, y_close + 3.0).unwrap().price, bar.close);
     }
 
     #[test]

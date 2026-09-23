@@ -40,6 +40,7 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
       ['Alt C / F / N / M', 'Parallel channel, fib, note, measure'],
       ['Alt L / S / B / P', 'Long, short, brush, path'],
       ['Alt G', 'Magnet: off, weak, strong'],
+      ['hold Ctrl', 'A weak magnet while drawing, when it is off'],
     ],
   },
   {
