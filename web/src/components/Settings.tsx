@@ -67,6 +67,9 @@ export function Settings(props: { onClose(): void }) {
           </button>
         </header>
         <div class="form">
+          <h3 class="caps">Browser id</h3>
+          <OwnerRow />
+
           <h3 class="caps">Workspace</h3>
           <label class="swatch">
             <span class="name">Name</span>
@@ -135,9 +138,6 @@ export function Settings(props: { onClose(): void }) {
               )}
             </For>
           </div>
-
-          <h3 class="caps">Browser id</h3>
-          <OwnerRow />
 
           <h3 class="caps">Server</h3>
           <label class="swatch">
