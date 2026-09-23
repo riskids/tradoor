@@ -6,6 +6,7 @@
 //! None of it is on the request path: an exchange that is down only shows in the
 //! status the API reports next to the totals.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,7 +15,7 @@ use axum::Json;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::{sleep, sleep_until, Instant};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -51,41 +52,158 @@ pub struct Hit {
     pub long: bool,
 }
 
+/// What an exchange's stream needs looked up before it is subscribed to:
+/// contract sizes, where a liquidation is counted in contracts, and Lighter's
+/// market numbers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lookup {
+    /// Coins per contract, by the exchange's symbol.
+    pub sizes: HashMap<String, f64>,
+    /// Lighter's market id by coin, and back.
+    pub markets: HashMap<String, u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Prepare {
+    Nothing,
+    OkxSizes,
+    GateSizes,
+    LighterMarkets,
+}
+
 /// An exchange's liquidation stream: where it is and how it speaks.
 #[derive(Clone, Copy)]
 pub struct Venue {
     pub id: &'static str,
     pub url: &'static str,
-    subscribe: fn(&[String]) -> Vec<String>,
-    parse: fn(&str) -> Vec<Hit>,
+    subscribe: fn(&[String], &Lookup) -> Vec<String>,
+    parse: fn(&str, &Lookup) -> Vec<Hit>,
+    /// An answer the exchange expects to a frame of its own — its ping.
+    reply: fn(&str) -> Option<String>,
     /// A frame to send this often, for exchanges that close a socket nobody talks on.
-    ping: Option<(&'static str, Duration)>,
+    ping: Option<(fn() -> String, Duration)>,
     /// Reconnect when not a single frame has arrived for this long.
     silence: Duration,
+    prepare: Prepare,
+    /// Frames arrive gzipped, as binary.
+    gzip: bool,
 }
 
-pub const VENUES: [Venue; 2] = [
+const fn venue(id: &'static str, url: &'static str, subscribe: fn(&[String], &Lookup) -> Vec<String>, parse: fn(&str, &Lookup) -> Vec<Hit>) -> Venue {
+    Venue { id, url, subscribe, parse, reply: no_reply, ping: None, silence: Duration::from_secs(600), prepare: Prepare::Nothing, gzip: false }
+}
+
+fn no_reply(_: &str) -> Option<String> {
+    None
+}
+
+const fn secs(s: u64) -> Duration {
+    Duration::from_secs(s)
+}
+
+/// Every exchange with a public feed of its liquidations — the set rsalianto
+/// follows, and Deribit and Kraken, whose trade feeds mark them. Hyperliquid
+/// publishes none. Where a feed carries every market, the hits are matched to
+/// the followed tickers by coin.
+pub const VENUES: [Venue; 12] = [
     // Binance pings every three minutes and drops a socket after a day.
-    Venue { id: "binance-perp", url: "wss://fstream.binance.com/market/ws", subscribe: binance_subscribe, parse: parse_binance, ping: None, silence: Duration::from_secs(600) },
+    venue("binance-perp", "wss://fstream.binance.com/market/ws", binance_subscribe, parse_binance_venue),
     // Bybit closes a socket that has not pinged in twenty seconds.
-    Venue {
-        id: "bybit-perp",
-        url: "wss://stream.bybit.com/v5/public/linear",
-        subscribe: bybit_subscribe,
-        parse: parse_bybit,
-        ping: Some((r#"{"op":"ping"}"#, Duration::from_secs(15))),
-        silence: Duration::from_secs(60),
-    },
+    Venue { ping: Some((|| r#"{"op":"ping"}"#.into(), secs(15))), silence: secs(60), ..venue("bybit-perp", "wss://stream.bybit.com/v5/public/linear", bybit_subscribe, parse_bybit_venue) },
+    Venue { ping: Some((|| "ping".into(), secs(25))), silence: secs(90), prepare: Prepare::OkxSizes, ..venue("okx-perp", "wss://ws.okx.com:8443/ws/v5/public", okx_subscribe, parse_okx) },
+    Venue { ping: Some((|| "ping".into(), secs(25))), silence: secs(90), ..venue("bitget-perp", "wss://ws.bitget.com/v3/ws/public", bitget_subscribe, parse_bitget) },
+    Venue { ping: Some((gate_ping, secs(18))), silence: secs(60), prepare: Prepare::GateSizes, ..venue("gate-perp", "wss://fx-ws.gateio.ws/v4/ws/usdt", gate_subscribe, parse_gate) },
+    Venue { reply: htx_reply, silence: secs(60), gzip: true, ..venue("htx-perp", "wss://api.hbdm.com/linear-swap-notification", htx_subscribe, parse_htx) },
+    Venue { ping: Some((|| "ping".into(), secs(20))), silence: secs(90), ..venue("bitmex-perp", "wss://www.bitmex.com/realtime", bitmex_subscribe, parse_bitmex) },
+    venue("bitfinex-perp", "wss://api-pub.bitfinex.com/ws/2", bitfinex_subscribe, parse_bitfinex),
+    Venue { ping: Some((|| r#"{"type":"ping"}"#.into(), secs(30))), silence: secs(120), prepare: Prepare::LighterMarkets, ..venue("lighter-perp", "wss://mainnet.zklighter.elliot.ai/stream", lighter_subscribe, parse_lighter) },
+    venue("aster-perp", "wss://fstream.asterdex.com/ws", binance_subscribe, parse_aster),
+    Venue { reply: deribit_reply, silence: secs(90), ..venue("deribit-perp", "wss://www.deribit.com/ws/api/v2", deribit_subscribe, parse_deribit) },
+    Venue { silence: secs(120), ..venue("kraken-perp", "wss://futures.kraken.com/ws/v1", kraken_subscribe, parse_kraken) },
 ];
 
-fn binance_subscribe(tickers: &[String]) -> Vec<String> {
+/// The coin a ticker trades: `BTCUSDT` is BTC.
+pub fn coin_of(ticker: &str) -> &str {
+    ["USDT", "USDC", "USD"].iter().find_map(|q| ticker.strip_suffix(q)).filter(|c| !c.is_empty()).unwrap_or(ticker)
+}
+
+fn binance_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
     let params: Vec<String> = tickers.iter().map(|t| format!("{}@forceOrder", t.to_lowercase())).collect();
     vec![json!({ "method": "SUBSCRIBE", "params": params, "id": 1 }).to_string()]
 }
 
 /// One topic a frame: Bybit refuses a whole frame over one topic it does not know.
-fn bybit_subscribe(tickers: &[String]) -> Vec<String> {
+fn bybit_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
     tickers.iter().map(|t| json!({ "op": "subscribe", "args": [format!("allLiquidation.{t}")] }).to_string()).collect()
+}
+
+/// OKX and Bitget send every market's liquidations on one channel.
+fn okx_subscribe(_: &[String], _: &Lookup) -> Vec<String> {
+    vec![json!({ "op": "subscribe", "args": [{ "channel": "liquidation-orders", "instType": "SWAP" }] }).to_string()]
+}
+
+fn bitget_subscribe(_: &[String], _: &Lookup) -> Vec<String> {
+    vec![json!({ "op": "subscribe", "args": [{ "instType": "usdt-futures", "topic": "liquidation" }] }).to_string()]
+}
+
+fn gate_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
+    let contracts: Vec<String> = tickers.iter().map(|t| format!("{}_USDT", coin_of(t))).collect();
+    vec![json!({ "time": now_ms() / 1000, "channel": "futures.public_liquidates", "event": "subscribe", "payload": contracts }).to_string()]
+}
+
+/// Gate's ping carries the time; one without it is dropped, and so is the socket.
+fn gate_ping() -> String {
+    json!({ "time": now_ms() / 1000, "channel": "futures.ping" }).to_string()
+}
+
+fn htx_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
+    tickers.iter().map(|t| json!({ "op": "sub", "topic": format!("public.{}-USDT.liquidation_orders", coin_of(t)) }).to_string()).collect()
+}
+
+/// HTX pings with `{"op":"ping","ts":…}` and closes a socket that does not answer.
+fn htx_reply(text: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    (v["op"] == "ping").then(|| json!({ "op": "pong", "ts": v["ts"] }).to_string())
+}
+
+/// BitMEX's liquidation table covers every instrument.
+fn bitmex_subscribe(_: &[String], _: &Lookup) -> Vec<String> {
+    vec![json!({ "op": "subscribe", "args": ["liquidation"] }).to_string()]
+}
+
+fn bitfinex_subscribe(_: &[String], _: &Lookup) -> Vec<String> {
+    vec![json!({ "event": "subscribe", "channel": "status", "key": "liq:global" }).to_string()]
+}
+
+fn lighter_subscribe(tickers: &[String], lookup: &Lookup) -> Vec<String> {
+    tickers.iter().filter_map(|t| lookup.markets.get(coin_of(t))).map(|id| json!({ "type": "subscribe", "channel": format!("trade/{id}") }).to_string()).collect()
+}
+
+fn deribit_instruments(tickers: &[String]) -> Vec<String> {
+    tickers.iter().map(|t| coin_of(t)).filter(|c| matches!(*c, "BTC" | "ETH")).map(|c| format!("trades.{c}-PERPETUAL.100ms")).collect()
+}
+
+/// Deribit drops a socket that does not answer its heartbeat's test requests.
+fn deribit_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
+    vec![
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat", "params": { "interval": 30 } }).to_string(),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "public/subscribe", "params": { "channels": deribit_instruments(tickers) } }).to_string(),
+    ]
+}
+
+fn deribit_reply(text: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    (v["method"] == "heartbeat" && v["params"]["type"] == "test_request").then(|| json!({ "jsonrpc": "2.0", "id": 3, "method": "public/test", "params": {} }).to_string())
+}
+
+/// Kraken spells bitcoin XBT.
+fn kraken_product(coin: &str) -> String {
+    format!("PF_{}USD", if coin == "BTC" { "XBT" } else { coin })
+}
+
+fn kraken_subscribe(tickers: &[String], _: &Lookup) -> Vec<String> {
+    let products: Vec<String> = tickers.iter().map(|t| kraken_product(coin_of(t))).collect();
+    vec![json!({ "event": "subscribe", "feed": "trade", "product_ids": products }).to_string(), json!({ "event": "subscribe", "feed": "heartbeat" }).to_string()]
 }
 
 /// Exchanges send numbers as strings; a number is taken as well.
@@ -97,6 +215,19 @@ fn num(v: &Value) -> Option<f64> {
 /// pushed through the book at, a percent or more off the market; `ap` is what
 /// it filled at, and is the price kept. A forced SELL closes a long.
 pub fn parse_binance(text: &str) -> Vec<Hit> {
+    parse_force_order(text, "binance-perp")
+}
+
+fn parse_binance_venue(text: &str, _: &Lookup) -> Vec<Hit> {
+    parse_binance(text)
+}
+
+/// Aster is a Binance clone down to the stream.
+fn parse_aster(text: &str, _: &Lookup) -> Vec<Hit> {
+    parse_force_order(text, "aster-perp")
+}
+
+fn parse_force_order(text: &str, venue: &'static str) -> Vec<Hit> {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return Vec::new() };
     if v["e"] != "forceOrder" {
         return Vec::new();
@@ -105,7 +236,7 @@ pub fn parse_binance(text: &str) -> Vec<Hit> {
     let price = num(&o["ap"]).filter(|p| *p > 0.0).or_else(|| num(&o["p"]));
     match (o["s"].as_str(), o["T"].as_i64(), price, num(&o["q"])) {
         (Some(symbol), Some(time), Some(price), Some(qty)) if price > 0.0 && qty > 0.0 => {
-            vec![Hit { venue: "binance-perp", symbol: symbol.to_string(), time, price, qty, long: o["S"] == "SELL" }]
+            vec![Hit { venue, symbol: symbol.to_string(), time, price, qty, long: o["S"] == "SELL" }]
         }
         _ => Vec::new(),
     }
@@ -113,6 +244,10 @@ pub fn parse_binance(text: &str) -> Vec<Hit> {
 
 /// Bybit's `allLiquidation`: a batch a message. `S` is the side of the position
 /// that was closed, so `Buy` is a long.
+fn parse_bybit_venue(text: &str, _: &Lookup) -> Vec<Hit> {
+    parse_bybit(text)
+}
+
 pub fn parse_bybit(text: &str) -> Vec<Hit> {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return Vec::new() };
     if !v["topic"].as_str().is_some_and(|t| t.starts_with("allLiquidation.")) {
@@ -127,6 +262,197 @@ pub fn parse_bybit(text: &str) -> Vec<Hit> {
             _ => None,
         })
         .collect()
+}
+
+fn json(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or(Value::Null)
+}
+
+/// A hit, when it has a price and a size.
+fn hit(venue: &'static str, symbol: impl Into<String>, time: Option<i64>, price: Option<f64>, qty: Option<f64>, long: bool) -> Option<Hit> {
+    match (time, price, qty) {
+        (Some(time), Some(price), Some(qty)) if price > 0.0 && qty > 0.0 => Some(Hit { venue, symbol: symbol.into(), time, price, qty, long }),
+        _ => None,
+    }
+}
+
+fn int(v: &Value) -> Option<i64> {
+    v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64()).or_else(|| v.as_f64().map(|f| f as i64))
+}
+
+/// OKX's `liquidation-orders`: every swap, sizes in contracts. A `sell` closes
+/// a long; `bkPx` is the bankruptcy price. Only USDT swaps, named by coin.
+pub fn parse_okx(text: &str, lookup: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["arg"]["channel"] != "liquidation-orders" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for pair in v["data"].as_array().into_iter().flatten() {
+        let Some(inst) = pair["instId"].as_str() else { continue };
+        let (Some(coin), Some(&size)) = (inst.strip_suffix("-USDT-SWAP"), lookup.sizes.get(inst)) else { continue };
+        for d in pair["details"].as_array().into_iter().flatten() {
+            out.extend(hit("okx-perp", coin, int(&d["ts"]), num(&d["bkPx"]), num(&d["sz"]).map(|c| c * size), d["side"] == "sell"));
+        }
+    }
+    out
+}
+
+/// Bitget's `liquidation`: every USDT perpetual; `amount` is in USDT and a
+/// `buy` closes a long.
+pub fn parse_bitget(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["arg"]["topic"] != "liquidation" {
+        return Vec::new();
+    }
+    v["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            let price = num(&d["price"])?;
+            hit("bitget-perp", d["symbol"].as_str()?, int(&d["ts"]), Some(price), num(&d["amount"]).map(|usd| usd / price), d["side"] == "buy")
+        })
+        .collect()
+}
+
+/// Gate's `futures.public_liquidates`: `size` is signed contracts — negative
+/// is a forced sell, closing a long.
+pub fn parse_gate(text: &str, lookup: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["channel"] != "futures.public_liquidates" || v["event"] != "update" {
+        return Vec::new();
+    }
+    let items: Vec<&Value> = match &v["result"] {
+        Value::Array(a) => a.iter().collect(),
+        one @ Value::Object(_) => vec![one],
+        _ => Vec::new(),
+    };
+    items
+        .into_iter()
+        .filter_map(|d| {
+            let contract = d["contract"].as_str()?;
+            let coin = contract.strip_suffix("_USDT")?;
+            let size = num(&d["size"])?;
+            let per = lookup.sizes.get(contract)?;
+            // `time_ms` when present; `time` is seconds on some pushes and milliseconds on others.
+            let time = int(&d["time_ms"]).or_else(|| int(&d["time"]).map(|t| if t >= 1_000_000_000_000 { t } else { t * 1000 }));
+            hit("gate-perp", coin, time, num(&d["price"]), Some(size.abs() * per), size < 0.0)
+        })
+        .collect()
+}
+
+/// HTX's liquidation notification: `amount` in coins, a `sell` closes a long.
+pub fn parse_htx(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    let Some(coin) = v["topic"].as_str().and_then(|t| t.strip_prefix("public.")).and_then(|t| t.strip_suffix("-USDT.liquidation_orders")) else { return Vec::new() };
+    v["data"].as_array().into_iter().flatten().filter_map(|d| hit("htx-perp", coin, int(&d["created_at"]), num(&d["price"]), num(&d["amount"]), d["direction"] == "sell")).collect()
+}
+
+/// BitMEX's liquidation table. XBTUSD is inverse — a contract is a dollar — so
+/// its size is converted to coins; the other contracts are left out. It sends
+/// no time, so the hit is stamped on arrival.
+pub fn parse_bitmex(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["table"] != "liquidation" || v["action"] != "insert" {
+        return Vec::new();
+    }
+    v["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| d["symbol"] == "XBTUSD")
+        .filter_map(|d| {
+            let price = num(&d["price"])?;
+            hit("bitmex-perp", "BTC", Some(now_ms()), Some(price), num(&d["leavesQty"]).map(|usd| usd / price), d["side"] == "Sell")
+        })
+        .collect()
+}
+
+/// Bitfinex's global liquidation feed: `[chan, ["pos", id, mts, _, symbol,
+/// amount, basePrice, _, isMatch, isMarketSold, _, priceAcquired]]`, or a
+/// list of those. Only a position's first announcement counts; the snapshot
+/// sent on subscribing is older than a minute and left out. A positive amount
+/// was a long. Perpetuals are `tBTCF0:USTF0`.
+pub fn parse_bitfinex(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    let Some(payload) = v.get(1) else { return Vec::new() };
+    let rows: Vec<&Value> = match payload.get(0) {
+        Some(Value::Array(_)) => payload.as_array().into_iter().flatten().collect(),
+        Some(Value::String(_)) => vec![payload],
+        _ => Vec::new(),
+    };
+    let now = now_ms();
+    rows.into_iter()
+        .filter(|a| a[0] == "pos" && !truthy(&a[8]) && !truthy(&a[10]) && !truthy(&a[11]))
+        .filter_map(|a| {
+            let coin = a[4].as_str()?.strip_prefix('t')?.strip_suffix("F0:USTF0")?;
+            let amount = num(&a[5])?;
+            let time = int(&a[2]).filter(|t| now - t < 60_000);
+            hit("bitfinex-perp", coin, time, num(&a[6]), Some(amount.abs()), amount > 0.0)
+        })
+        .collect()
+}
+
+fn truthy(v: &Value) -> bool {
+    !(v.is_null() || v == &json!(0) || v == &json!(false))
+}
+
+/// Lighter's trade channel carries `liquidation_trades` apart from the rest.
+/// The liquidated account is the taker: a position that was short before is a
+/// short closed out.
+pub fn parse_lighter(text: &str, lookup: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["type"] != "update/trade" {
+        return Vec::new();
+    }
+    v["liquidation_trades"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let id = t["market_id"].as_u64()? as u32;
+            let coin = lookup.markets.iter().find(|(_, m)| **m == id)?.0.clone();
+            // Milliseconds, or seconds on older pushes.
+            let time = int(&t["timestamp"]).map(|ts| if ts >= 1_000_000_000_000 { ts } else { ts * 1000 });
+            hit("lighter-perp", coin, time, num(&t["price"]), num(&t["size"]), num(&t["taker_position_size_before"]).is_some_and(|p| p > 0.0))
+        })
+        .collect()
+}
+
+/// Deribit marks a liquidation on the trade itself: `T` when the taker was
+/// liquidated, `M` the maker. The perpetual is inverse — `amount` is dollars.
+/// A taker selling, or a maker on the buy side of a sell, was long.
+pub fn parse_deribit(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["method"] != "subscription" {
+        return Vec::new();
+    }
+    v["params"]["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let liquidated = t["liquidation"].as_str()?;
+            let coin = t["instrument_name"].as_str()?.strip_suffix("-PERPETUAL")?;
+            let price = num(&t["price"])?;
+            let sold = t["direction"] == "sell";
+            let long = if liquidated.contains('T') { sold } else { !sold };
+            hit("deribit-perp", coin, int(&t["timestamp"]), Some(price), num(&t["amount"]).map(|usd| usd / price), long)
+        })
+        .collect()
+}
+
+/// Kraken's trade feed types each trade; a `liquidation` is the forced order
+/// taking liquidity, so a `sell` closes a long. Sizes are in coins.
+pub fn parse_kraken(text: &str, _: &Lookup) -> Vec<Hit> {
+    let v = json(text);
+    if v["feed"] != "trade" || v["type"] != "liquidation" {
+        return Vec::new();
+    }
+    let Some(coin) = v["product_id"].as_str().and_then(|p| p.strip_prefix("PF_")).and_then(|p| p.strip_suffix("USD")) else { return Vec::new() };
+    let coin = if coin == "XBT" { "BTC" } else { coin };
+    hit("kraken-perp", coin, int(&v["time"]), num(&v["price"]), num(&v["qty"]), v["side"] == "sell").into_iter().collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +473,10 @@ pub struct Collector {
     states: Mutex<Vec<VenueState>>,
     /// Exchange names looked up over HTTPS, past networks that block them.
     doh: Option<Arc<crate::dns::Doh>>,
+    /// For the contract sizes some exchanges need looked up first.
+    http: Option<reqwest::Client>,
+    /// Every hit as it arrives, for the live feed.
+    pub live: broadcast::Sender<(String, Hit)>,
 }
 
 impl Collector {
@@ -155,7 +485,8 @@ impl Collector {
     pub fn start(pool: deadpool_postgres::Pool, tickers: Vec<String>, doh: Arc<crate::dns::Doh>) -> Arc<Self> {
         let started = now_ms();
         let states = VENUES.iter().map(|v| VenueState { venue: v.id, state: "connecting", since: started, error: None }).collect();
-        let collector = Arc::new(Self { tickers, started, states: Mutex::new(states), doh: Some(doh) });
+        let http = reqwest::Client::builder().dns_resolver(doh.resolver()).timeout(Duration::from_secs(20)).build().ok();
+        let collector = Arc::new(Self { tickers, started, states: Mutex::new(states), doh: Some(doh), http, live: broadcast::channel(1024).0 });
         let (tx, rx) = mpsc::channel(8_192);
         tokio::spawn(write(pool, rx));
         for venue in VENUES {
@@ -213,8 +544,9 @@ async fn session(venue: &Venue, url: &str, collector: &Collector, tx: &Tx) -> an
             None => Ok(tokio_tungstenite::connect_async(url).await?.0),
         }
     };
+    let lookup = prepare(venue.prepare, collector).await?;
     let mut ws = tokio::time::timeout(Duration::from_secs(15), connect).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
-    for frame in (venue.subscribe)(&collector.tickers) {
+    for frame in (venue.subscribe)(&collector.tickers, &lookup) {
         ws.send(Message::text(frame)).await?;
     }
     collector.set(venue.id, "connected", None);
@@ -226,23 +558,30 @@ async fn session(venue: &Venue, url: &str, collector: &Collector, tx: &Tx) -> an
             frame = ws.next() => {
                 let Some(frame) = frame else { return Ok(true) };
                 heard = Instant::now();
-                match frame? {
-                    Message::Text(text) => {
-                        for hit in (venue.parse)(&text) {
-                            // The exchange spells the ticker as it was asked for.
-                            let Some(ticker) = collector.tickers.iter().find(|t| **t == hit.symbol) else { continue };
-                            if tx.send((ticker.clone(), hit)).await.is_err() {
-                                return Ok(false);
-                            }
-                        }
-                    }
+                let text = match frame? {
+                    Message::Text(text) => text.to_string(),
+                    Message::Binary(bytes) if venue.gzip => match tradoor_codec::partition::gunzip(&bytes) {
+                        Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+                        Err(_) => continue,
+                    },
                     Message::Close(_) => return Ok(true),
-                    _ => {}
+                    _ => continue,
+                };
+                if let Some(answer) = (venue.reply)(&text) {
+                    ws.send(Message::text(answer)).await?;
+                }
+                for hit in (venue.parse)(&text, &lookup) {
+                    // Spelled as asked for, or by coin where one feed carries every market.
+                    let Some(ticker) = collector.tickers.iter().find(|t| **t == hit.symbol || coin_of(t) == hit.symbol) else { continue };
+                    let _ = collector.live.send((ticker.clone(), hit.clone()));
+                    if tx.send((ticker.clone(), hit)).await.is_err() {
+                        return Ok(false);
+                    }
                 }
             }
             () = tick(&mut ping) => {
                 if let Some((frame, _)) = venue.ping {
-                    ws.send(Message::text(frame)).await?;
+                    ws.send(Message::text(frame())).await?;
                 }
             }
             () = sleep_until(heard + venue.silence) => {
@@ -250,6 +589,36 @@ async fn session(venue: &Venue, url: &str, collector: &Collector, tx: &Tx) -> an
             }
         }
     }
+}
+
+/// Contract sizes and market numbers, fetched before subscribing — fresh on
+/// every connection, so a new listing is picked up on the next reconnect.
+async fn prepare(what: Prepare, collector: &Collector) -> anyhow::Result<Lookup> {
+    let mut lookup = Lookup::default();
+    let Some(http) = collector.http.as_ref().filter(|_| what != Prepare::Nothing) else { return Ok(lookup) };
+    let get = |url: &'static str| async move { anyhow::Ok(serde_json::from_str::<Value>(&http.get(url).send().await?.error_for_status()?.text().await?)?) };
+    match what {
+        Prepare::OkxSizes => lookup.sizes = parse_okx_sizes(&get("https://www.okx.com/api/v5/public/instruments?instType=SWAP").await?),
+        Prepare::GateSizes => lookup.sizes = parse_gate_sizes(&get("https://api.gateio.ws/api/v4/futures/usdt/contracts").await?),
+        Prepare::LighterMarkets => lookup.markets = parse_lighter_markets(&get("https://mainnet.zklighter.elliot.ai/api/v1/orderBooks").await?),
+        Prepare::Nothing => {}
+    }
+    Ok(lookup)
+}
+
+/// OKX linear swaps' `ctVal`, the coins in a contract.
+pub fn parse_okx_sizes(v: &Value) -> HashMap<String, f64> {
+    v["data"].as_array().into_iter().flatten().filter(|i| i["ctType"] == "linear").filter_map(|i| Some((i["instId"].as_str()?.to_string(), num(&i["ctVal"])?))).collect()
+}
+
+/// Gate's `quanto_multiplier`, the coins in a contract.
+pub fn parse_gate_sizes(v: &Value) -> HashMap<String, f64> {
+    v.as_array().into_iter().flatten().filter_map(|c| Some((c["name"].as_str()?.to_string(), num(&c["quanto_multiplier"])?))).collect()
+}
+
+/// Lighter's perpetual markets by coin.
+pub fn parse_lighter_markets(v: &Value) -> HashMap<String, u32> {
+    v["order_books"].as_array().into_iter().flatten().filter(|o| o["market_type"] == "perp").filter_map(|o| Some((o["symbol"].as_str()?.to_string(), o["market_id"].as_u64()? as u32))).collect()
 }
 
 async fn tick(interval: &mut Option<tokio::time::Interval>) {
@@ -398,6 +767,36 @@ pub async fn stats(State(state): State<AppState>, Path(ticker): Path<String>) ->
     })))
 }
 
+/// `GET /api/liquidations/{ticker}/live`: every hit on every exchange as it
+/// arrives, as server-sent events — one `hit` event each, and a `venues` event
+/// with the exchanges' connections every ten seconds.
+pub async fn live(State(state): State<AppState>, Path(ticker): Path<String>) -> Result<impl axum::response::IntoResponse, ApiError> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    let collector = state.liquidations.as_ref().filter(|c| c.tickers.contains(&ticker)).ok_or_else(|| ApiError::not_found(format!("{ticker} is not followed on this server")))?.clone();
+    let rx = collector.live.subscribe();
+    let venues = tokio::time::interval(Duration::from_secs(10));
+    let stream = futures_util::stream::unfold((rx, venues, collector, ticker), |(mut rx, mut venues, collector, ticker)| async move {
+        loop {
+            tokio::select! {
+                got = rx.recv() => match got {
+                    Ok((t, hit)) if t == ticker => {
+                        let data = json!({ "venue": hit.venue, "time": hit.time, "price": hit.price, "qty": hit.qty, "usd": hit.price * hit.qty, "long": hit.long });
+                        return Some((Ok::<Event, std::convert::Infallible>(Event::default().event("hit").data(data.to_string())), (rx, venues, collector, ticker)));
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                },
+                _ = venues.tick() => {
+                    let data = serde_json::to_string(&collector.states()).unwrap_or_default();
+                    return Some((Ok(Event::default().event("venues").data(data)), (rx, venues, collector, ticker)));
+                }
+            }
+        }
+    });
+    // nginx would otherwise hold the stream back in its buffer.
+    Ok(([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,9 +829,103 @@ mod tests {
     #[test]
     fn subscriptions_ask_for_every_ticker() {
         let tickers = ["BTCUSDT".to_string(), "SOLUSDT".to_string()];
-        assert_eq!(binance_subscribe(&tickers), [r#"{"id":1,"method":"SUBSCRIBE","params":["btcusdt@forceOrder","solusdt@forceOrder"]}"#]);
-        assert_eq!(bybit_subscribe(&tickers).len(), 2, "one Bybit topic a frame");
-        assert!(bybit_subscribe(&tickers)[1].contains("allLiquidation.SOLUSDT"));
+        let none = Lookup::default();
+        assert_eq!(binance_subscribe(&tickers, &none), [r#"{"id":1,"method":"SUBSCRIBE","params":["btcusdt@forceOrder","solusdt@forceOrder"]}"#]);
+        assert_eq!(bybit_subscribe(&tickers, &none).len(), 2, "one Bybit topic a frame");
+        assert!(bybit_subscribe(&tickers, &none)[1].contains("allLiquidation.SOLUSDT"));
+    }
+
+    // Captured 2026-09-23 unless marked otherwise.
+    #[test]
+    fn okx_counts_contracts_in_coins_and_names_the_coin() {
+        let text = r#"{"arg":{"channel":"liquidation-orders","instType":"SWAP"},"data":[{"details":[{"bkLoss":"0","bkPx":"0.068886","ccy":"","posSide":"long","side":"sell","sz":"22","ts":"1790139669517"}],"instFamily":"MUBARAK-USDT","instId":"MUBARAK-USDT-SWAP","instType":"SWAP","uly":"MUBARAK-USDT"}]}"#;
+        let lookup = Lookup { sizes: HashMap::from([("MUBARAK-USDT-SWAP".to_string(), 10.0)]), ..Lookup::default() };
+        assert_eq!(parse_okx(text, &lookup), [Hit { venue: "okx-perp", symbol: "MUBARAK".into(), time: 1790139669517, price: 0.068886, qty: 220.0, long: true }]);
+        assert!(parse_okx(text, &Lookup::default()).is_empty(), "no contract size, no hit");
+        let sizes = parse_okx_sizes(&serde_json::from_str(r#"{"data":[{"instId":"BTC-USDT-SWAP","ctType":"linear","ctVal":"0.01"},{"instId":"BTC-USD-SWAP","ctType":"inverse","ctVal":"100"}]}"#).unwrap());
+        assert_eq!(sizes, HashMap::from([("BTC-USDT-SWAP".to_string(), 0.01)]));
+    }
+
+    #[test]
+    fn bitget_amount_is_dollars() {
+        let hits = parse_bitget(r#"{"action":"update","arg":{"instType":"usdt-futures","topic":"liquidation"},"data":[{"symbol":"XAGUSDT","side":"buy","price":"66.04535931559","amount":"198.13607794677","ts":"1790141913473"}],"ts":1790141914550}"#, &Lookup::default());
+        assert_eq!((hits[0].symbol.as_str(), hits[0].long, hits[0].time), ("XAGUSDT", true, 1790141913473));
+        assert!((hits[0].qty * hits[0].price - 198.136).abs() < 0.001);
+        assert!(parse_bitget("pong", &Lookup::default()).is_empty());
+    }
+
+    #[test]
+    fn gate_sizes_are_signed_contracts() {
+        // Shape from Gate's documentation.
+        let lookup = Lookup { sizes: HashMap::from([("BTC_USDT".to_string(), 0.0001)]), ..Lookup::default() };
+        let hits = parse_gate(r#"{"channel":"futures.public_liquidates","event":"update","time":1790141905,"result":[{"price":86800.1,"size":-1200,"time_ms":1790141905119,"contract":"BTC_USDT"}]}"#, &lookup);
+        assert_eq!((hits[0].symbol.as_str(), hits[0].time, hits[0].price, hits[0].long), ("BTC", 1790141905119, 86800.1, true));
+        assert!((hits[0].qty - 0.12).abs() < 1e-12);
+        assert!(gate_ping().contains("futures.ping") && gate_ping().contains("time"));
+    }
+
+    #[test]
+    fn htx_answers_its_ping_and_reads_coins() {
+        assert_eq!(htx_reply(r#"{"op":"ping","ts":"1790141909985"}"#).as_deref(), Some(r#"{"op":"pong","ts":"1790141909985"}"#));
+        assert_eq!(htx_reply(r#"{"op":"notify"}"#), None);
+        // Shape from HTX's documentation.
+        let hits = parse_htx(r#"{"op":"notify","topic":"public.BTC-USDT.liquidation_orders","ts":1790141909985,"data":[{"contract_code":"BTC-USDT","symbol":"BTC","direction":"sell","offset":"close","volume":12,"amount":0.012,"trade_turnover":1041.6,"price":86800,"created_at":1790141909000}]}"#, &Lookup::default());
+        assert_eq!(hits, [Hit { venue: "htx-perp", symbol: "BTC".into(), time: 1790141909000, price: 86800.0, qty: 0.012, long: true }]);
+    }
+
+    #[test]
+    fn bitmex_counts_dollars_on_the_inverse_contract() {
+        let hits = parse_bitmex(r#"{"table":"liquidation","action":"insert","data":[{"orderID":"a","symbol":"XBTUSD","side":"Buy","price":86800,"leavesQty":8680},{"orderID":"b","symbol":"ETHUSD","side":"Sell","price":2700,"leavesQty":5}]}"#, &Lookup::default());
+        assert_eq!(hits.len(), 1, "only the inverse bitcoin contract");
+        assert_eq!((hits[0].symbol.as_str(), hits[0].qty, hits[0].long), ("BTC", 0.1, false));
+        assert!(parse_bitmex(r#"{"table":"liquidation","action":"partial","data":[]}"#, &Lookup::default()).is_empty());
+    }
+
+    #[test]
+    fn bitfinex_skips_the_old_snapshot_and_repeats() {
+        let old = r#"[33170,[["pos",194168355,1790140803684,null,"tARBF0:USTF0",-550,0.243825454545,null,0,1,null,null]]]"#;
+        assert!(parse_bitfinex(old, &Lookup::default()).is_empty(), "the snapshot is older than a minute");
+        let now = now_ms();
+        let fresh = format!(r#"[33170,["pos",194168356,{now},null,"tBTCF0:USTF0",0.5,86800,null,0,1,null,null]]"#);
+        let hits = parse_bitfinex(&fresh, &Lookup::default());
+        assert_eq!((hits[0].symbol.as_str(), hits[0].qty, hits[0].long), ("BTC", 0.5, true));
+        let matched = format!(r#"[33170,["pos",194168356,{now},null,"tBTCF0:USTF0",0.5,86800,null,1,1,null,86790]]"#);
+        assert!(parse_bitfinex(&matched, &Lookup::default()).is_empty(), "the follow-up once it is matched");
+        assert!(parse_bitfinex(r#"[33170,"hb"]"#, &Lookup::default()).is_empty());
+    }
+
+    #[test]
+    fn lighter_reads_the_taker_position_before() {
+        let text = r#"{"channel":"trade:1","liquidation_trades":[{"trade_id":31627652389,"type":"liquidation","market_id":1,"market_kind":"perps","size":"0.00521","price":"87249.8","usd_amount":"454.571458","is_maker_ask":true,"timestamp":1790138063949,"taker_position_size_before":"-0.00521"}],"trades":[],"type":"update/trade"}"#;
+        let lookup = Lookup { markets: HashMap::from([("BTC".to_string(), 1)]), ..Lookup::default() };
+        assert_eq!(parse_lighter(text, &lookup), [Hit { venue: "lighter-perp", symbol: "BTC".into(), time: 1790138063949, price: 87249.8, qty: 0.00521, long: false }]);
+        assert!(parse_lighter(&text.replace("update/trade", "subscribed/trade"), &lookup).is_empty(), "the snapshot on subscribing");
+        assert_eq!(lighter_subscribe(&["BTCUSDT".to_string(), "DOGEUSDT".to_string()], &lookup), [r#"{"channel":"trade/1","type":"subscribe"}"#]);
+    }
+
+    #[test]
+    fn deribit_marks_the_liquidated_side() {
+        let trade = |liq: &str, dir: &str| format!(r#"{{"jsonrpc":"2.0","method":"subscription","params":{{"channel":"trades.BTC-PERPETUAL.100ms","data":[{{"timestamp":1790141905728,"price":86800.0,"amount":8680.0,"direction":"{dir}","instrument_name":"BTC-PERPETUAL","liquidation":"{liq}"}}]}}}}"#);
+        let taker_sold = parse_deribit(&trade("T", "sell"), &Lookup::default());
+        assert_eq!((taker_sold[0].symbol.as_str(), taker_sold[0].qty, taker_sold[0].long), ("BTC", 0.1, true));
+        assert!(!parse_deribit(&trade("M", "sell"), &Lookup::default())[0].long, "the maker bought: a short closed out");
+        let plain = r#"{"jsonrpc":"2.0","method":"subscription","params":{"channel":"trades.BTC-PERPETUAL.100ms","data":[{"timestamp":1790141905728,"price":86819.0,"amount":10.0,"direction":"sell","instrument_name":"BTC-PERPETUAL"}]}}"#;
+        assert!(parse_deribit(plain, &Lookup::default()).is_empty(), "an ordinary trade");
+        assert!(deribit_reply(r#"{"jsonrpc":"2.0","method":"heartbeat","params":{"type":"test_request"}}"#).is_some());
+    }
+
+    #[test]
+    fn kraken_keeps_only_liquidation_trades() {
+        let fill = r#"{"feed":"trade","product_id":"PF_XBTUSD","uid":"x","side":"sell","type":"fill","time":1790141853843,"qty":0.02,"price":86800,"seq":1}"#;
+        assert!(parse_kraken(fill, &Lookup::default()).is_empty());
+        let hits = parse_kraken(&fill.replace("\"fill\"", "\"liquidation\""), &Lookup::default());
+        assert_eq!(hits, [Hit { venue: "kraken-perp", symbol: "BTC".into(), time: 1790141853843, price: 86800.0, qty: 0.02, long: true }]);
+        assert!(parse_kraken(r#"{"feed":"trade_snapshot","product_id":"PF_SOLUSD","trades":[]}"#, &Lookup::default()).is_empty());
+    }
+
+    #[test]
+    fn coins_of_tickers() {
+        assert_eq!([coin_of("BTCUSDT"), coin_of("ETHUSDC"), coin_of("SOLUSD"), coin_of("USDT")], ["BTC", "ETH", "SOL", "USDT"]);
     }
 
     #[test]
@@ -495,7 +988,14 @@ mod tests {
             subscribe.to_string()
         });
 
-        let collector = Collector { tickers: vec!["BTCUSDT".into()], started: now_ms(), states: Mutex::new(vec![VenueState { venue: "binance-perp", state: "connecting", since: 0, error: None }]), doh: None };
+        let collector = Collector {
+            tickers: vec!["BTCUSDT".into()],
+            started: now_ms(),
+            states: Mutex::new(vec![VenueState { venue: "binance-perp", state: "connecting", since: 0, error: None }]),
+            doh: None,
+            http: None,
+            live: broadcast::channel(8).0,
+        };
         let (tx, mut rx) = mpsc::channel(8);
         let reconnect = session(&VENUES[0], &url, &collector, &tx).await.unwrap();
 

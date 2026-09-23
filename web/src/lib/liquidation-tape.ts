@@ -1,5 +1,7 @@
 /**
  * A ticker's liquidation tape, owned by the page rather than by a panel.
+ * Where the server follows the ticker the tape is its live feed, every
+ * exchange it listens to; elsewhere the page listens to Binance and Bybit.
  * Switching tabs unmounts a panel; its tape must still be there when it comes
  * back, with what happened meanwhile. Once no panel has shown a tape for half
  * an hour its sockets close. A reload starts every tape over — the server keeps
@@ -10,8 +12,9 @@ import { createStore } from 'solid-js/store';
 import { StreamHub, type SocketState } from '../engine/streams';
 import { catalog, type LiquidationRow } from './api';
 import { demoHit, demoRate } from './demo';
-import { liquidationVenues, PERP_VENUES, type LiquidationVenue } from './liquidation-venues';
-import { parseMarket, symbolOf, type Venue } from './markets';
+import { followLiquidations, type ServerVenue } from './liquidation-feed';
+import { liquidationVenues, type LiquidationVenue } from './liquidation-venues';
+import { parseMarket, symbolOf } from './markets';
 
 /** Tapes keep their own sockets: liquidations are few and the engine thread is busy. */
 const hub = new StreamHub();
@@ -24,7 +27,8 @@ const LINGER_MS = 30 * 60_000;
 export interface TapeHit {
   /** The same hit from the server and from the stream has the same key. */
   key: string;
-  venue: Venue;
+  /** `okx-perp` and the like: the exchange it happened on. */
+  venue: string;
   time: number;
   price: number;
   qty: number;
@@ -40,7 +44,9 @@ export interface Tape {
   hits: Accessor<TapeHit[]>;
   /** Every perpetual exchange, and the ticker's market there or null. */
   venues: Accessor<LiquidationVenue[]>;
-  status: Partial<Record<Venue, VenueStatus>>;
+  status: Partial<Record<string, VenueStatus>>;
+  /** Hits come from the server's feed rather than the page's own sockets. */
+  fromServer: Accessor<boolean>;
   /** Hits the server kept, merged under the ones streamed since. */
   seed(rows: readonly LiquidationRow[]): void;
 }
@@ -60,7 +66,8 @@ function open(market: string): Entry {
   const ticker = symbolOf(market);
   const [hits, setHits] = createSignal<TapeHit[]>([]);
   const [venues, setVenues] = createSignal<LiquidationVenue[]>([]);
-  const [status, setStatus] = createStore<Partial<Record<Venue, VenueStatus>>>({});
+  const [status, setStatus] = createStore<Partial<Record<string, VenueStatus>>>({});
+  const [fromServer, setFromServer] = createSignal(false);
   const offs: (() => void)[] = [];
   let closed = false;
 
@@ -72,10 +79,33 @@ function open(market: string): Entry {
       return [...fresh, ...rows].sort((a, b) => b.time - a.time).slice(0, MAX_ROWS);
     });
 
-  const add = (venue: Venue, time: number, price: number, qty: number, long: boolean) =>
+  const add = (venue: string, time: number, price: number, qty: number, long: boolean) =>
     merge([{ key: keyOf(venue, time, price, qty), venue, time, price, qty, usd: price * qty, long }]);
 
-  void catalog()
+  const SERVER_STATE: Record<string, VenueStatus> = { connected: 'live', connecting: 'connecting', retrying: 'retrying' };
+  const showServerVenues = (list: ServerVenue[]) => {
+    setVenues(list.map((v) => ({ venue: v.venue, market: `${v.venue}:${ticker}` })));
+    for (const v of list) setStatus(v.venue, SERVER_STATE[v.state] ?? 'connecting');
+  };
+
+  // The server first: one feed for every exchange it follows.
+  offs.push(
+    followLiquidations(ticker, {
+      hit: (h) => {
+        setFromServer(true);
+        add(h.venue, h.time, h.price, h.qty, h.long);
+      },
+      venues: (list) => {
+        setFromServer(true);
+        showServerVenues(list);
+      },
+      unavailable: () => {
+        if (!closed) listenDirectly();
+      },
+    }),
+  );
+
+  const listenDirectly = () => void catalog()
     .then(
       (c) => ({ list: liquidationVenues(market, c.products), last: c.byMarket.get(market)?.lastPrice ?? 0 }),
       () => ({ list: liquidationVenues(market, null), last: 0 }),
@@ -119,14 +149,8 @@ function open(market: string): Entry {
     hits,
     venues,
     status,
-    seed: (rows) =>
-      merge(
-        rows.flatMap((r) => {
-          if (!(PERP_VENUES as readonly string[]).includes(r.venue)) return [];
-          const venue = r.venue as Venue;
-          return [{ key: keyOf(venue, r.time, r.price, r.qty), venue, time: r.time, price: r.price, qty: r.qty, usd: r.usd, long: r.long }];
-        }),
-      ),
+    fromServer,
+    seed: (rows) => merge(rows.filter((r) => r.venue.endsWith('-perp')).map((r) => ({ key: keyOf(r.venue, r.time, r.price, r.qty), venue: r.venue, time: r.time, price: r.price, qty: r.qty, usd: r.usd, long: r.long }))),
   };
   return {
     tape,

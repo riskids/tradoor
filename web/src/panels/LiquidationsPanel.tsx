@@ -9,7 +9,7 @@ import { api, catalog, type LiquidationStats, type LiquidationWindow } from '../
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { holdTape, releaseTape, type Tape, type TapeHit, type VenueStatus } from '../lib/liquidation-tape';
-import { symbolOf, type Venue } from '../lib/markets';
+import { parseMarket, symbolOf } from '../lib/markets';
 import { formatClock, formatHm, zoneLabel } from '../lib/timezone';
 import type { LiquidationsPanelState } from '../workspace/model';
 import { marketOf, patchPanel } from '../workspace/store';
@@ -89,7 +89,7 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
 
   const min = () => props.panel.minUsd;
   const hits = (): TapeHit[] => (tape()?.hits() ?? []).filter((h) => h.usd >= min());
-  const perVenue = (venue: Venue) => hits().filter((h) => h.venue === venue);
+  const perVenue = (venue: string) => hits().filter((h) => h.venue === venue);
   const sum = (rows: TapeHit[]) => rows.reduce((total, h) => total + h.usd, 0);
 
   const tracked = () => {
@@ -180,7 +180,7 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
                         <ExchangeLogo exchange={exchange} size={12} />
                         <span>{exchange.name}</span>
                         {/* Named only where the exchange spells the ticker its own way. */}
-                        <Show when={v.market && symbolOf(v.market) !== ticker() ? symbolOf(v.market) : null}>{(sym) => <span class="dim">{sym()}</span>}</Show>
+                        <Show when={v.market && parseMarket(v.market) && symbolOf(v.market) !== ticker() ? symbolOf(v.market) : null}>{(sym) => <span class="dim">{sym()}</span>}</Show>
                       </td>
                       <td>
                         <span class={`conn ${state()}`}>{STATUS_LABEL[state()]}</span>

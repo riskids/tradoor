@@ -145,6 +145,8 @@ export type ToWorker =
   | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
+  /** Every exchange's mark, as `markSpec` writes it, numbered by MARK_ORDER. */
+  | { t: 'marks'; list: { index: number; box: number; spec: string }[] }
   /** The reader's time zone, minutes east of UTC, for every chart. */
   | { t: 'timeZone'; offsetMinutes: number }
   /** Development only: fake liquidations, so the ping design can be judged. */

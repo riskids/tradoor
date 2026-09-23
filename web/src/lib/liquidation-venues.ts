@@ -11,7 +11,8 @@ import { parseMarket, VENUES, type Venue } from './markets';
 export const PERP_VENUES: readonly Venue[] = VENUES.filter((v) => v.endsWith('perp'));
 
 export interface LiquidationVenue {
-  venue: Venue;
+  /** A chart venue, or any exchange the server's feed names. */
+  venue: Venue | string;
   /** The ticker's perpetual there, or null when that exchange does not list it. */
   market: string | null;
 }

@@ -7,10 +7,11 @@ import init, { ChartEngine, LiveFeedEngine, fold_candles, indicator_values, prof
 import wasmUrl from '../wasm/pkg/tradoor_wasm_bg.wasm?url';
 import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
-import { MARK_ORDER, MARKS, markIndex, markSpec } from '../lib/exchange-marks';
+import { MARK_ORDER, markIndex } from '../lib/mark-order';
 import { parseMarket } from '../lib/markets';
 import { concatCols, emptyCols, openSeries, sliceCols, type Cols, type Series } from './history';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
+import { followLiquidations } from '../lib/liquidation-feed';
 import { coinOf, oiVenues, OpenInterestFeed } from './open-interest';
 import { StreamHub, type SocketState, type StreamListener, type StreamMsg } from './streams';
 
@@ -59,6 +60,8 @@ const theme = new Map<string, string>();
 /** The reader's time zone, minutes east of UTC; charts write intraday times in it. */
 let utcOffset = 0;
 const slots = new Map<string, Slot>();
+/** The exchanges' marks, as the page sent them. */
+let marks: { index: number; box: number; spec: string }[] = [];
 
 const info = (tf: string): TfInfo => timeframe_info(tf) as unknown as TfInfo;
 
@@ -132,10 +135,7 @@ class Slot {
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
     // Every exchange's mark, once: a liquidation names the one it came from.
-    MARK_ORDER.forEach((id, i) => {
-      const mark = MARKS[id];
-      if (mark) this.engine.set_mark(i, mark.box, markSpec(mark));
-    });
+    for (const m of marks) this.engine.set_mark(m.index, m.box, m.spec);
   }
 
   /**
@@ -196,6 +196,24 @@ class Slot {
     for (const off of this.liquidationOff.splice(0)) off();
     this.liquidationMarkets = markets;
     this.engine.clear_liquidations();
+    const ticker = markets.map((m) => parseMarket(m)?.symbol).find(Boolean);
+    if (!ticker) return;
+    // The server's feed carries every exchange it follows; without it, the chart's own sockets.
+    let direct = false;
+    this.liquidationOff.push(
+      followLiquidations(ticker, {
+        hit: (h) => this.engine.push_liquidation(h.usd, h.long, markIndex(h.venue), Date.now()),
+        venues: () => {},
+        unavailable: () => {
+          if (direct || this.liquidationMarkets !== markets) return;
+          direct = true;
+          this.watchDirectly(markets);
+        },
+      }),
+    );
+  }
+
+  private watchDirectly(markets: string[]): void {
     for (const market of markets) {
       const ref = parseMarket(market);
       if (!ref?.venue.endsWith('perp')) continue;
@@ -214,6 +232,7 @@ class Slot {
       );
     }
   }
+
 
   /**
    * Development only: liquidations that never happened, at a given rate, so the
@@ -570,6 +589,11 @@ function handle(msg: ToWorker): void {
   if (msg.t === 'timeZone') {
     utcOffset = msg.offsetMinutes;
     for (const slot of slots.values()) slot.engine.set_utc_offset(utcOffset);
+    return;
+  }
+  if (msg.t === 'marks') {
+    marks = msg.list;
+    for (const slot of slots.values()) for (const m of marks) slot.engine.set_mark(m.index, m.box, m.spec);
     return;
   }
   if (msg.t === 'theme') {

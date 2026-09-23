@@ -9,6 +9,7 @@ import { SymbolSearch } from '../components/SymbolSearch';
 import { lastPrice, onEngineFailure, send } from '../engine/client';
 import { api } from '../lib/api';
 import { deviceZone, formatClock, LOCAL_ZONE, offsetMinutes, timeZone, zoneLabel } from '../lib/timezone';
+import { MARK_ORDER, MARKS, markSpec } from '../lib/exchange-marks';
 import { Icon } from '../lib/icons';
 import { tabTitle } from '../lib/tab-title';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
@@ -179,6 +180,8 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 function applyTheme(): void {
+  // The marks travel from here so the worker does not carry their artwork.
+  send({ t: 'marks', list: MARK_ORDER.map((id, index) => ({ index, box: MARKS[id].box, spec: markSpec(MARKS[id]) })) });
   for (const t of CHART_THEME) createEffect(() => send({ t: 'theme', key: t.name, value: doc.theme[t.name] ?? t.value }));
   // The zone's offset, again every minute: daylight saving moves it under a running page.
   createEffect(() => {

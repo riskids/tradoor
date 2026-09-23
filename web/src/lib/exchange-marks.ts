@@ -21,8 +21,10 @@ export interface ExchangeMark {
 
 /** The black disc every mark sits on, as a path rather than a <circle>. */
 const DISC = { d: 'M0 16a16 16 0 1 0 32 0a16 16 0 1 0-32 0', fill: '#000' };
+/** The same disc for a mark drawn in a 16-unit box. */
+const DISC16 = { d: 'M0 8a8 8 0 1 0 16 0a8 8 0 1 0-16 0', fill: '#000' };
 
-export const MARKS: Partial<Record<ExchangeId, ExchangeMark>> = {
+export const MARKS: Record<ExchangeId, ExchangeMark> = {
   binance: {
     box: 32,
     paths: [
@@ -53,13 +55,91 @@ export const MARKS: Partial<Record<ExchangeId, ExchangeMark>> = {
       { t: [-5, -5, 1.75], fill: '#FFF', d: 'M18.8933 11.2707V14.6663H18.0678V11.2707H16.9611V10.555H20V11.2707H18.8933Z' },
     ],
   },
+  okx: {
+    box: 32,
+    paths: [DISC, { t: [2, 2, 1.16667], fill: '#FFF', d: 'M3 3h6v6H3zm12 6H9v6H3v6h6v-6h6v6h6v-6h-6zm0 0V3h6v6z' }],
+  },
+  bitget: {
+    box: 32,
+    paths: [
+      DISC,
+      { t: [2, 2, 1.16667], fill: '#00F0FF', d: 'M11.121 9.46h4.283l4.381 4.555a.785.785 0 0 1 .003 1.076L14.17 21H9.757l1.334-1.357l4.898-5.092l-4.836-5.092' },
+      { t: [2, 2, 1.16667], fill: '#00F0FF', d: 'M12.879 14.54H8.596L4.215 9.986a.785.785 0 0 1-.003-1.076L9.83 3h4.412l-1.334 1.357L8.01 9.449l4.836 5.092' },
+    ],
+  },
+  gate: {
+    box: 32,
+    paths: [
+      DISC,
+      { t: [5, 5, 0.036667], fill: '#2354E6', d: 'M300 465a165 165 0 0 1 0-330V0a300 300 0 1 0 300 300H465a165 165 0 0 1-165 165' },
+      { t: [5, 5, 0.036667], fill: '#17E6A1', d: 'M300 300h165V135H300z' },
+    ],
+  },
+  htx: {
+    box: 16,
+    paths: [
+      DISC16,
+      { t: [1.2, 1.2, 0.85], fill: '#1b2143', d: 'M9.8 4.92A6.73 6.73 0 0 0 7.83 0h-.06C7.7 4.5 5.43 5.7 4.2 7.32a5.43 5.43 0 0 0 2.52 8.59c1.52.42-.35-.75-.6-3.23-.3-3 3.7-5.28 3.7-7.76z' },
+      { t: [1.2, 1.2, 0.85], fill: '#2ca6e0', d: 'M11.1 6.43h-.06A8.17 8.17 0 0 1 9.7 9.29c-2.45 3.72-1 5.5-.26 6.48.45.56 0 0 1.13-.57a5.16 5.16 0 0 0 2.46-4 5.77 5.77 0 0 0-1.93-4.8z' },
+    ],
+  },
+  bitmex: {
+    box: 16,
+    paths: [
+      DISC16,
+      {
+        t: [1.2, 1.2, 0.85],
+        fill: '#eb4a60',
+        d: 'M5.5 3h6.05a.42.42 0 0 1-.08.22L9.46 6.88h-3.7a3.39 3.39 0 0 1-.2.38l-.26.45c-.1.2-.22.37-.3.56s-.38.67-.57 1l-.58 1a3 3 0 0 0-.22.39l-1.2 2.1a.67.67 0 0 1-.13.21h-2A1 1 0 0 0 0 13a1.08 1.08 0 0 1 .21-.49c.1-.22.24-.4.34-.63Q1.78 9.7 3 7.5c.2-.3.34-.64.53-1l.7-1.23c.07-.17.18-.33.26-.5l.9-1.6A.79.79 0 0 1 5.51 3z',
+      },
+      { t: [1.2, 1.2, 0.85], fill: '#595fb5', d: 'M12.52 5.14l1.2-2.12h2.2L16 3l-.2.34-1.57 2.88-.65 1.16v.05l-3.07 5.53h-6c.1-.24.25-.47.37-.7L6.6 9.1h3.7l2.27-4z' },
+    ],
+  },
+  bitfinex: {
+    box: 16,
+    paths: [
+      DISC16,
+      { t: [1.2, 1.2, 0.85], fill: '#97c554', d: 'M.6 13.73c.73.8 4.8 4.57 11.15.2 4.6-3.62 4.48-11.46 4-13.83C15.64.43 10.3 12.25.6 13.73z' },
+      { t: [1.2, 1.2, 0.85], fill: '#719b37', d: 'M15.8.1A18.59 18.59 0 0 0 4 3.06a8.49 8.49 0 0 0-4 8.12C8.53 10.22 15.6.36 15.8.1z' },
+    ],
+  },
+  aster: {
+    box: 32,
+    paths: [
+      DISC,
+      // The official mark is a gradient; the engine fills flat, so its middle colour.
+      { t: [6.1, 6.1, 0.62], fill: '#F9D3A8', d: 'm9.13 30.44.75-3.45a6.19 6.19 0 0 0-6.06-7.5H.4a16.04 16.04 0 0 0 8.74 10.95Z' },
+      { t: [6.1, 6.1, 0.62], fill: '#F9D3A8', d: 'M10.64 31.07A16.08 16.08 0 0 0 31.73 19.5H21.25c-4.73 0-8.81 3.28-9.81 7.88l-.8 3.69Z' },
+      { t: [6.1, 6.1, 0.62], fill: '#F9D3A8', d: 'M32 17.9A16.03 16.03 0 0 0 17.37.05l-2.24 10.36a6.19 6.19 0 0 0 6.06 7.49H32Z' },
+      { t: [6.1, 6.1, 0.62], fill: '#F9D3A8', d: 'M15.75 0A16.03 16.03 0 0 0 .1 17.9h3.65c4.73 0 8.81-3.28 9.81-7.89L15.75 0Z' },
+    ],
+  },
+  lighter: {
+    box: 32,
+    paths: [DISC, { t: [10.6, 5.9, 0.78], fill: '#FFF', d: 'M5.989 20.388 0 25.498V5.888L5.989.502v19.886Zm7.811.012-5.989 5.098V17.85l5.989-5.37v7.92Z' }],
+  },
+  kraken: {
+    box: 32,
+    paths: [
+      { d: DISC.d, fill: '#7132F5' },
+      // A dome on four legs.
+      {
+        fill: '#FFF',
+        d: 'M7 22.4V17A9 9 0 0 1 25 17V22.4A1.6 1.6 0 0 1 21.8 22.4V18A.865.865 0 0 0 20.07 18V22.4A1.6 1.6 0 0 1 16.87 22.4V18A.865.865 0 0 0 15.13 18V22.4A1.6 1.6 0 0 1 11.93 22.4V18A.865.865 0 0 0 10.2 18V22.4A1.6 1.6 0 0 1 7 22.4Z',
+      },
+    ],
+  },
+  deribit: {
+    box: 32,
+    paths: [DISC, { fill: '#00CFBE', d: 'M10 9H16.5A7 7 0 0 1 16.5 23H10ZM13 12V20H16.5A4 4 0 0 0 16.5 12Z' }],
+  },
+  hyperliquid: {
+    box: 32,
+    paths: [DISC, { fill: '#97FCE4', d: 'M8 16c0-4 2.5-6 5-6 3 0 3.5 3 5.5 3S21 10 23.5 10 24 13 24 16s-.5 6-3 6-3-3-5-3-2.5 3-5.5 3S8 20 8 16z' }],
+  },
 };
 
-/** The order the engine numbers marks in: a liquidation names its exchange by index. */
-export const MARK_ORDER = Object.keys(MARKS) as ExchangeId[];
-
-/** The engine's number for the exchange behind `binance-perp` and the like. */
-export const markIndex = (venue: string): number => Math.max(0, MARK_ORDER.indexOf(venue.split('-')[0] as ExchangeId));
+export { MARK_ORDER, markIndex } from './mark-order';
 
 /**
  * The mark as the engine takes it: one path a line, `tx|ty|scale|fill|d`.

@@ -76,6 +76,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
         .route("/liquidations/{ticker}", get(liquidations::stats))
+        .route("/liquidations/{ticker}/live", get(liquidations::live))
         .route("/open-interest", get(open_interest::candles))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
