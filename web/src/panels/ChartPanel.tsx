@@ -3,11 +3,14 @@
  * the DOM around them — toolbar, drawing rail, legend, menus — and forwards
  * pointer input.
  */
-import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
+import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, setOverlay } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
+import { ColorField, DrawingSettings, type DrawingPatch } from '../components/DrawingSettings';
+import { defaultStyle, KIND_NAMES, visibleOn, type Style } from '../lib/drawing-style';
+import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
@@ -29,11 +32,12 @@ const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: 'horizontal', icon: 'horizontal', title: 'Horizontal level — one click, drawn edge to edge' },
   { kind: 'ray', icon: 'ray', title: 'Ray — one click; the level starts where you put it' },
   { kind: 'rect', icon: 'rect', title: 'Zone — click opposite corners' },
+  { kind: 'channel', icon: 'channel', title: 'Parallel channel — click the two ends of one line, then where the parallel line runs' },
   { kind: 'fib', icon: 'fib', title: 'Fib retracement — click the 100% end first, then the 0% end' },
   { kind: 'text', icon: 'text', title: 'Note — click where it goes, then type it' },
   { kind: 'measure', icon: 'measure', title: 'Measure — click from and to; reports the move, percent and bars' },
-  { kind: 'long', icon: 'long', title: 'Long position — click entry, stop, then target' },
-  { kind: 'short', icon: 'short', title: 'Short position — click entry, stop, then target' },
+  { kind: 'long', icon: 'long', title: 'Long position — click the entry; drag its handles to set stop, target and width' },
+  { kind: 'short', icon: 'short', title: 'Short position — click the entry; drag its handles to set stop, target and width' },
   { kind: 'brush', icon: 'brush', title: 'Brush — drag to draw freehand' },
 ];
 
@@ -48,8 +52,9 @@ const TOOL_STEPS: Record<string, string> = {
   fib: 'Fib: click the 100% end — where the move started — then the 0% end · esc cancels',
   text: 'Note: click where the note goes',
   measure: 'Measure: click from, then to · esc cancels',
-  long: 'Long: click entry, then stop, then target · esc cancels',
-  short: 'Short: click entry, then stop, then target · esc cancels',
+  channel: 'Channel: click both ends of the first line, then where the parallel line runs · shift keeps it level · esc cancels',
+  long: 'Long: click where the entry goes',
+  short: 'Short: click where the entry goes',
 };
 
 const LAYERS = [
@@ -103,6 +108,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [drawings, setDrawings] = createSignal<Drawing[]>([]);
   const [offline, setOffline] = createSignal<string | null>(null);
   const [drawError, setDrawError] = createSignal<string | null>(null);
+  /** The drawing whose settings dialog is open. */
+  const [editing, setEditing] = createSignal<number | null>(null);
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [tfMenu, setTfMenu] = createSignal<number | null>(null);
   /** The TPO quick access menu, open at this x in the toolbar. */
@@ -134,7 +141,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   };
   const pointer = (kind: PointerKind, e: MouseEvent) => {
     const p = local(e);
-    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button });
+    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey });
   };
 
   onMount(() => {
@@ -171,6 +178,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       key: (key) => call('key', { id: sid, key }),
       resetView: () => send({ t: 'resetView', id: sid }),
       showRange: (days) => send({ t: 'range', id: sid, days }),
+      undo,
+      redo,
     });
     onCleanup(() => {
       observer.disconnect();
@@ -211,9 +220,19 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const tpoSet = (key: string, value: string) => patchPanel(id, { tpoSettings: withTpoValue(props.panel.tpoSettings, key, value) });
   const tpoOn = (key: string) => tpoValue(props.panel.tpoSettings, key) === '1';
   createEffect(() => send({ t: 'paneWeights', id: sid, value: props.panel.paneWeights }));
-  createEffect(() => send({ t: 'tool', id: sid, value: tool() }));
+  createEffect(() => send({ t: 'tool', id: sid, value: tool(), style: tool() ? defaultStyle(tool()) : {} }));
   createEffect(() => send({ t: 'selected', id: sid, value: selected() }));
-  createEffect(() => send({ t: 'drawings', id: sid, list: drawings().map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label })) }));
+  // Every timeframe shows the market's drawings, bar those hidden on this one.
+  createEffect(() => {
+    const tf = timeframe();
+    send({
+      t: 'drawings',
+      id: sid,
+      list: drawings()
+        .filter((d) => visibleOn(d.style, tf))
+        .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style })),
+    });
+  });
 
   // ---------------------------------------------------------------- drawings
 
@@ -236,15 +255,21 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     }
   }
 
-  // A tool armed on one chart must not start drawing on the next.
+  // A tool armed on one chart must not start drawing on the next. Drawings
+  // belong to the market, so a new timeframe keeps them without a refetch.
   createEffect(
-    on([market, timeframe], () => {
+    on([market, timeframe], ([m], prev) => {
       batch(() => {
         setTool('');
         setSelected(null);
         setDrawError(null);
+        setEditing(null);
       });
-      void loadDrawings();
+      if (!prev || prev[0] !== m) {
+        // Steps are about this market's drawings.
+        history.reset();
+        void loadDrawings();
+      }
     }),
   );
 
@@ -252,39 +277,61 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
      under the pointer the moment it is placed rather than a round trip later. A
      rejected change is rolled back and the server's list is re-read. */
   let pending = 0;
-  const onSameChart = (m: string, tf: string) => m === market() && tf === timeframe();
+  const onSameChart = (m: string) => m === market();
+  const history = new DrawingHistory();
 
-  async function createDrawing(kind: string, points: DrawingPoint[], label?: string): Promise<void> {
-    const [m, tf] = [market(), timeframe()];
-    const temporary: Drawing = { id: --pending, market: m, timeframe: tf, kind, points, style: {}, label: label ?? null, createdAt: Date.now() };
+  /** Save a drawing. `ref`: one undo is bringing back, which keeps its steps. */
+  async function saveDrawing(input: { kind: string; points: DrawingPoint[]; label?: string | null; style: Style; timeframe?: string }, ref?: DrawingRef): Promise<void> {
+    const m = market();
+    const tf = input.timeframe ?? timeframe();
+    const temporary: Drawing = { id: --pending, market: m, timeframe: tf, kind: input.kind, points: input.points, style: input.style, label: input.label ?? null, createdAt: Date.now() };
+    const r = ref ?? history.ref(temporary.id);
+    history.rekey(r, temporary.id);
+    if (!ref) history.record({ kind: 'create', ref: r, drawing: temporary });
     setDrawings((list) => [...list, temporary]);
     try {
-      const { drawing } = await api.createDrawing(m, tf, { kind, points, label });
+      const { drawing } = await api.createDrawing(m, tf, { kind: input.kind, points: input.points, label: input.label ?? undefined, style: input.style });
       setDrawError(null);
-      if (onSameChart(m, tf)) setDrawings((list) => list.map((d) => (d.id === temporary.id ? drawing : d)));
+      const kept = onSameChart(m) && drawings().some((d) => d.id === temporary.id);
+      if (!kept) {
+        // Undone, or the chart moved on, before the server answered.
+        void api.deleteDrawing(drawing.id).catch(() => {});
+        return;
+      }
+      history.rekey(r, drawing.id);
+      setDrawings((list) => list.map((d) => (d.id === temporary.id ? drawing : d)));
     } catch (e) {
       setDrawError(errorText(e));
-      if (onSameChart(m, tf)) setDrawings((list) => list.filter((d) => d.id !== temporary.id));
+      history.forget(r);
+      if (onSameChart(m)) setDrawings((list) => list.filter((d) => d.id !== temporary.id));
     }
   }
 
-  async function changeDrawing(drawingId: number, patch: { points?: DrawingPoint[]; label?: string }): Promise<void> {
-    const [m, tf] = [market(), timeframe()];
+  const createDrawing = (kind: string, points: DrawingPoint[], label?: string) => saveDrawing({ kind, points, label, style: defaultStyle(kind) });
+
+  /** `previous`: what the change replaces, when the list already shows it (a dialog's preview). */
+  async function changeDrawing(drawingId: number, patch: DrawingChange, record = true, previous?: DrawingChange): Promise<void> {
+    const m = market();
+    const current = drawings().find((d) => d.id === drawingId);
+    if (record && current) history.record({ kind: 'change', ref: history.ref(drawingId), before: previous ?? before(current, patch), after: patch });
     setDrawings((list) => list.map((d) => (d.id === drawingId ? { ...d, ...patch } : d)));
     if (drawingId < 0) return; // still being created; its own request carries the points
     try {
       const { drawing } = await api.updateDrawing(drawingId, patch);
       setDrawError(null);
-      if (onSameChart(m, tf)) setDrawings((list) => list.map((d) => (d.id === drawingId ? drawing : d)));
+      if (onSameChart(m)) setDrawings((list) => list.map((d) => (d.id === drawingId ? drawing : d)));
     } catch (e) {
       setDrawError(errorText(e));
-      if (onSameChart(m, tf)) void loadDrawings();
+      if (onSameChart(m)) void loadDrawings();
     }
   }
 
-  async function deleteDrawing(drawingId: number): Promise<void> {
+  async function deleteDrawing(drawingId: number, record = true): Promise<void> {
+    const current = drawings().find((d) => d.id === drawingId);
+    if (record && current) history.record({ kind: 'delete', ref: history.ref(drawingId), drawing: current });
     setDrawings((list) => list.filter((d) => d.id !== drawingId));
     if (selected() === drawingId) setSelected(null);
+    if (editing() === drawingId) setEditing(null);
     if (drawingId < 0) return;
     try {
       await api.deleteDrawing(drawingId);
@@ -295,9 +342,64 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     }
   }
 
-  async function clearDrawings(): Promise<void> {
-    const n = drawings().length;
-    if (n === 0 || !confirm(`Remove all ${n} drawings on ${symbolOf(market())} ${tfLabel(timeframe())}?`)) return;
+  /** Put a removed drawing back as it was, under the ref its steps know it by. */
+  const restore = (ref: DrawingRef, d: Drawing) => saveDrawing({ kind: d.kind, points: d.points, label: d.label, style: d.style, timeframe: d.timeframe }, ref);
+
+  function replay(step: Step, back: boolean): void {
+    switch (step.kind) {
+      case 'create':
+        if (back) void deleteDrawing(step.ref.id, false);
+        else void restore(step.ref, step.drawing);
+        break;
+      case 'delete':
+        if (back) void restore(step.ref, step.drawing);
+        else void deleteDrawing(step.ref.id, false);
+        break;
+      case 'change':
+        void changeDrawing(step.ref.id, back ? step.before : step.after, false);
+        break;
+      case 'clear':
+        if (back) for (const item of step.items) void restore(item.ref, item.drawing);
+        else void clearDrawings(false);
+        break;
+    }
+  }
+
+  const undo = () => {
+    const step = history.takeUndo();
+    if (step) replay(step, true);
+    return step !== undefined;
+  };
+  const redo = () => {
+    const step = history.takeRedo();
+    if (step) replay(step, false);
+    return step !== undefined;
+  };
+
+  const selectedDrawing = () => {
+    const s = selected();
+    const d = s === null ? undefined : drawings().find((x) => x.id === s);
+    return d ?? null;
+  };
+  const restyle = (d: Drawing, patch: Style) => void changeDrawing(d.id, { style: { ...d.style, ...patch } });
+
+  /** The settings dialog shows each change on the chart before it is saved. */
+  const previewDrawing = (drawingId: number, patch: DrawingPatch) =>
+    setDrawings((list) => list.map((d) => (d.id === drawingId ? { ...d, style: patch.style, label: patch.label, points: patch.points } : d)));
+
+  function commitDrawing(d: Drawing, patch: DrawingPatch): void {
+    setEditing(null);
+    // A note cannot lose its text: an emptied one keeps what it had.
+    const label = d.kind === 'text' && patch.label === null ? d.label : patch.label;
+    // `d` is the drawing as the dialog opened on it: what undo goes back to.
+    void changeDrawing(d.id, { style: patch.style, points: patch.points, label }, true, { style: d.style, points: d.points, label: d.label });
+  }
+
+  async function clearDrawings(record = true): Promise<void> {
+    const list = drawings();
+    const n = list.length;
+    if (n === 0 || (record && !confirm(`Remove all ${n} drawings on ${symbolOf(market())}, on every timeframe? Ctrl+Z brings them back.`))) return;
+    if (record) history.record({ kind: 'clear', items: list.map((d) => ({ ref: history.ref(d.id), drawing: d })) });
     setDrawings([]);
     setSelected(null);
     try {
@@ -323,12 +425,11 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       case 'drawingChanged':
         void changeDrawing(e.id, { points: e.points });
         break;
-      case 'editRequested': {
-        const note = drawings().find((d) => d.id === e.id && d.kind === 'text');
-        if (note) setOverlay({ kind: 'note', initial: note.label ?? '', save: (label) => void changeDrawing(e.id, { label }) });
+      case 'editRequested':
+        if (e.id >= 0) setEditing(e.id);
         break;
-      }
       case 'delete':
+        if (editing() === e.id) setEditing(null);
         void deleteDrawing(e.id);
         break;
       case 'toolFinished':
@@ -542,7 +643,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           >
             <Icon name="trash" />
           </button>
-          <button class="del" disabled={drawings().length === 0} title={`Remove all ${drawings().length} drawings on this timeframe`} onClick={() => void clearDrawings()}>
+          <button class="del" disabled={drawings().length === 0} title={`Remove all ${drawings().length} drawings on this market, on every timeframe`} onClick={() => void clearDrawings()}>
             <Icon name="eraser" />
           </button>
           <Show when={drawings().length > 0}>
@@ -574,9 +675,31 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         >
           <Show when={tool() !== '' || selected() !== null || drawError()}>
             <div class="hint">
-              {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · Delete removes it, esc deselects' : ''}
+              {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · double-click for settings · Delete removes it, esc deselects' : ''}
               <Show when={drawError()}>{(err) => <span class="warn"> ▲ {err()}</span>}</Show>
             </div>
+          </Show>
+          <Show when={editing() === null && selectedDrawing()}>
+            {(current) => {
+              const d = () => current();
+              return (
+              <div class="dtoolbar" onPointerDown={(e) => e.stopPropagation()} onDblClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+                <span class="name">{KIND_NAMES[d().kind] ?? d().kind}</span>
+                <Show when={!['long', 'short', 'text', 'measure'].includes(d().kind)}>
+                  <ColorField value={String(d().style.color ?? defaultStyle(d().kind).color ?? '#2962ff')} onChange={(v) => restyle(d(), { color: v })} title="Line colour" />
+                  <select class="dinput narrow" title="Thickness" value={String(d().style.width ?? defaultStyle(d().kind).width ?? 1.5)} onChange={(e) => restyle(d(), { width: Number(e.currentTarget.value) })}>
+                    <For each={[1, 1.5, 2, 3, 4]}>{(w) => <option value={w}>{w}px</option>}</For>
+                  </select>
+                </Show>
+                <button title="Settings (double-click the drawing)" disabled={d().id < 0} onClick={() => setEditing(d().id)}>
+                  <Icon name="settings" size={13} />
+                </button>
+                <button class="del" title="Delete (Delete)" onClick={() => void deleteDrawing(d().id)}>
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+              );
+            }}
           </Show>
           <div class="legend">
             <div class="line">
@@ -663,6 +786,26 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
         </div>
       </div>
+
+      {/* Keyed on the id alone: each previewed change must not remount the dialog. */}
+      <Show when={editing()} keyed>
+        {(editId) => {
+          const d = untrack(() => drawings().find((x) => x.id === editId));
+          return (
+            <Show when={d}>
+              {(drawing) => (
+                <DrawingSettings
+                  drawing={drawing()}
+                  precision={untrack(() => price()?.precision ?? 2)}
+                  onPreview={(patch) => previewDrawing(editId, patch)}
+                  onCommit={(patch) => commitDrawing(drawing(), patch)}
+                  onCancel={() => setEditing(null)}
+                />
+              )}
+            </Show>
+          );
+        }}
+      </Show>
 
       <div class="rangebar">
         <For each={RANGES}>

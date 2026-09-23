@@ -1,9 +1,11 @@
-//! Drawing tools: what each kind is, and how it is painted.
+//! Drawing tools: what each kind is, how it is styled, and how it is painted.
 
 use tradoor_core::format::format_price;
 
 use crate::color::Color;
+use crate::geometry::{distance_to_drawing, distance_to_segment};
 use crate::paint::{Align, Baseline, Frame, Rect};
+use crate::scale::PriceScale;
 use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -19,10 +21,12 @@ pub enum DrawingKind {
     Measure,
     Long,
     Short,
+    Channel,
 }
 
 impl DrawingKind {
-    pub const ALL: [DrawingKind; 11] = [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short];
+    pub const ALL: [DrawingKind; 12] =
+        [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short, Self::Channel];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -37,6 +41,7 @@ impl DrawingKind {
             Self::Measure => "measure",
             Self::Long => "long",
             Self::Short => "short",
+            Self::Channel => "channel",
         }
     }
 
@@ -48,7 +53,7 @@ impl DrawingKind {
     pub fn arity(self) -> usize {
         match self {
             Self::Horizontal | Self::Ray | Self::Text => 1,
-            Self::Long | Self::Short => 3,
+            Self::Long | Self::Short | Self::Channel => 3,
             _ => 2,
         }
     }
@@ -56,16 +61,177 @@ impl DrawingKind {
     pub fn open_ended(self) -> bool {
         matches!(self, Self::Path | Self::Brush)
     }
+
+    pub fn is_position(self) -> bool {
+        matches!(self, Self::Long | Self::Short)
+    }
 }
 
 pub const FIB_LEVELS: [f64; 7] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
 pub const MAX_POINTS: usize = 2000;
+/// The narrowest a position box is drawn, so a fresh one is never a sliver.
+const MIN_POSITION_WIDTH: f32 = 40.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Anchor {
     /// Epoch ms, on the candles' time axis.
     pub time: f64,
     pub price: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Dash {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl Dash {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "dashed" => Self::Dashed,
+            "dotted" => Self::Dotted,
+            _ => Self::Solid,
+        }
+    }
+}
+
+/// One line of a fib or a channel: where it sits between the two main lines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Level {
+    pub value: f64,
+    pub on: bool,
+    pub color: Option<Color>,
+    pub dash: Dash,
+}
+
+impl Level {
+    const fn new(value: f64, on: bool, dash: Dash) -> Self {
+        Self { value, on, color: None, dash }
+    }
+
+    /// `value,on,color,dash` lines joined by `|` — `0.5,1,#ff6d00,dashed|…`.
+    pub fn parse_list(s: &str) -> Vec<Level> {
+        s.split('|')
+            .filter_map(|item| {
+                let mut parts = item.split(',');
+                let value = parts.next()?.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
+                let on = parts.next().is_none_or(|p| p.trim() != "0");
+                let color = parts.next().and_then(Color::parse);
+                let dash = parts.next().map_or(Dash::Solid, |d| Dash::parse(d.trim()));
+                Some(Level { value, on, color, dash })
+            })
+            .collect()
+    }
+}
+
+/// How a drawing looks — every field optional, falling back to the theme and to
+/// what suits its kind. Keys and values come from the page as strings.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct DrawingStyle {
+    pub color: Option<Color>,
+    pub width: Option<f32>,
+    pub dash: Dash,
+    pub fill: Option<Color>,
+    pub fill_on: Option<bool>,
+    pub extend_left: Option<bool>,
+    pub extend_right: Option<bool>,
+    pub left_arrow: bool,
+    pub right_arrow: bool,
+    pub text_color: Option<Color>,
+    pub text_size: Option<f32>,
+    pub text_bg: Option<Color>,
+    pub middle: bool,
+    pub price_labels: bool,
+    pub stats: bool,
+    pub levels: Option<Vec<Level>>,
+    pub level_labels: Option<bool>,
+    // Positions.
+    pub profit_fill: Option<Color>,
+    pub stop_fill: Option<Color>,
+    pub profit_line: Option<Color>,
+    pub stop_line: Option<Color>,
+    pub account: Option<f64>,
+    pub risk: Option<f64>,
+    pub risk_cash: bool,
+    pub lot: Option<f64>,
+    pub leverage: Option<f64>,
+    pub qty_decimals: Option<usize>,
+    pub compact: bool,
+    pub hide_stats: bool,
+}
+
+impl DrawingStyle {
+    /// Read `(key, value)` pairs; unknown keys and unreadable values are skipped.
+    pub fn from_pairs<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        let mut s = Self::default();
+        for (key, value) in pairs {
+            s.set(key, value);
+        }
+        s
+    }
+
+    pub fn set(&mut self, key: &str, value: &str) {
+        let flag = || matches!(value, "1" | "true");
+        let color = || Color::parse(value);
+        let num = || value.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+        let size = || num().map(|v| v as f32).filter(|v| *v > 0.0);
+        match key {
+            "color" => self.color = color(),
+            "width" => self.width = size().map(|w| w.min(8.0)),
+            "dash" => self.dash = Dash::parse(value),
+            "fill" => self.fill = color(),
+            "fillOn" => self.fill_on = Some(flag()),
+            "extendLeft" => self.extend_left = Some(flag()),
+            "extendRight" => self.extend_right = Some(flag()),
+            "leftArrow" => self.left_arrow = flag(),
+            "rightArrow" => self.right_arrow = flag(),
+            "textColor" => self.text_color = color(),
+            "textSize" => self.text_size = size().map(|s| s.clamp(6.0, 40.0)),
+            "textBg" => self.text_bg = color(),
+            "middle" => self.middle = flag(),
+            "priceLabels" => self.price_labels = flag(),
+            "stats" => self.stats = flag(),
+            "levels" => self.levels = Some(Level::parse_list(value)),
+            "levelLabels" => self.level_labels = Some(flag()),
+            "profitFill" => self.profit_fill = color(),
+            "stopFill" => self.stop_fill = color(),
+            "profitLine" => self.profit_line = color(),
+            "stopLine" => self.stop_line = color(),
+            "account" => self.account = num().filter(|v| *v > 0.0),
+            "risk" => self.risk = num().filter(|v| *v > 0.0),
+            "riskUnit" => self.risk_cash = value != "%",
+            "lot" => self.lot = num().filter(|v| *v > 0.0),
+            "leverage" => self.leverage = num().filter(|v| *v > 0.0),
+            "qtyDecimals" => self.qty_decimals = num().map(|v| v.clamp(0.0, 10.0) as usize),
+            "compact" => self.compact = flag(),
+            "hideStats" => self.hide_stats = flag(),
+            _ => {}
+        }
+    }
+
+    fn levels_for(&self, kind: DrawingKind) -> Vec<Level> {
+        if let Some(levels) = &self.levels {
+            return levels.clone();
+        }
+        match kind {
+            DrawingKind::Channel => vec![
+                Level::new(-0.25, false, Dash::Solid),
+                Level::new(0.0, true, Dash::Solid),
+                Level::new(0.25, false, Dash::Solid),
+                Level::new(0.5, true, Dash::Dashed),
+                Level::new(0.75, false, Dash::Solid),
+                Level::new(1.0, true, Dash::Solid),
+                Level::new(1.25, false, Dash::Solid),
+            ],
+            _ => FIB_LEVELS.iter().map(|v| Level::new(*v, true, Dash::Solid)).collect(),
+        }
+    }
+
+    fn extends(&self, kind: DrawingKind) -> (bool, bool) {
+        (self.extend_left.unwrap_or(false), self.extend_right.unwrap_or(kind == DrawingKind::Fib))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +241,13 @@ pub struct DrawingShape {
     pub kind: DrawingKind,
     pub points: Vec<Anchor>,
     pub label: Option<String>,
+    pub style: DrawingStyle,
+}
+
+impl DrawingShape {
+    pub fn new(id: Option<i64>, kind: DrawingKind, points: Vec<Anchor>) -> Self {
+        Self { id, kind, points, label: None, style: DrawingStyle::default() }
+    }
 }
 
 /// A drawing's own numbers use significant digits rather than the instrument's
@@ -100,96 +273,439 @@ pub struct Placed<'a> {
     pub draft: bool,
     /// Bars between the first two anchors, for the measure readout.
     pub bars: i64,
+    pub scale: PriceScale,
+    /// The instrument's price decimals: one tick is `10^-precision`.
+    pub precision: usize,
+    /// The last close, for a position's open P&L.
+    pub last: Option<f64>,
 }
 
-fn line(frame: &mut Frame, a: (f32, f32), b: (f32, f32), width: f32, color: Color, dashed: bool) {
-    if dashed {
-        frame.dashed_line(a.0, a.1, b.0, b.1, width, color, 4.0, 3.0);
-    } else if a.1 == b.1 {
-        frame.hline(a.0, b.0, a.1, width, color);
+impl Placed<'_> {
+    fn y(&self, price: f64) -> f32 {
+        self.scale.y(price) as f32
+    }
+
+    fn price(&self, i: usize) -> f64 {
+        self.shape.points.get(i).map_or(f64::NAN, |p| p.price)
+    }
+
+    /// A channel's offset from its first line to its second, in price, and the
+    /// price of level `f` at each end of the first line.
+    fn channel_line(&self, f: f64) -> Option<((f32, f32), (f32, f32))> {
+        let (a, b, c) = (self.points.first()?, self.points.get(1)?, self.points.get(2)?);
+        let (pa, pb, pc) = (self.price(0), self.price(1), self.price(2));
+        let t = if (b.0 - a.0).abs() > f32::EPSILON { f64::from((c.0 - a.0) / (b.0 - a.0)) } else { 0.0 };
+        let offset = pc - (pa + (pb - pa) * t);
+        Some(((a.0, self.y(pa + offset * f)), (b.0, self.y(pb + offset * f))))
+    }
+
+    /// A position box: left and right edges, and the entry, stop and target rows.
+    fn position_box(&self) -> Option<(f32, f32, f32, f32, f32)> {
+        let (a, b, c) = (self.points.first()?, self.points.get(1)?, self.points.get(2)?);
+        let left = a.0.min(b.0).min(c.0);
+        let right = a.0.max(b.0).max(c.0).max(left + MIN_POSITION_WIDTH);
+        Some((left, right, a.1, b.1, c.1))
+    }
+}
+
+/// Where the grab handles sit. For most kinds these are the anchors; a position
+/// has handles on its left edge for the three prices and one on the right for
+/// its width, and a channel's third handle rides the middle of its second line.
+pub fn handles(d: &Placed<'_>) -> Vec<(f32, f32)> {
+    match d.shape.kind {
+        DrawingKind::Brush => Vec::new(),
+        DrawingKind::Long | DrawingKind::Short => match d.position_box() {
+            Some((left, right, entry, stop, target)) => vec![(left, entry), (left, stop), (left, target), (right, entry)],
+            None => d.points.clone(),
+        },
+        DrawingKind::Channel => match d.channel_line(1.0) {
+            Some((p, q)) => vec![d.points[0], d.points[1], ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0)],
+            None => d.points.clone(),
+        },
+        _ => d.points.clone(),
+    }
+}
+
+/// A segment carried out to the plot's edges on the sides asked for.
+fn extend(a: (f32, f32), b: (f32, f32), plot: Rect, left: bool, right: bool) -> ((f32, f32), (f32, f32)) {
+    let dx = b.0 - a.0;
+    if dx.abs() < f32::EPSILON {
+        return (a, b);
+    }
+    let slope = (b.1 - a.1) / dx;
+    let at = |x: f32| (x, a.1 + (x - a.0) * slope);
+    let (l, r) = if a.0 <= b.0 { (a, b) } else { (b, a) };
+    (if left { at(plot.x) } else { l }, if right { at(plot.right()) } else { r })
+}
+
+fn stroke(frame: &mut Frame, a: (f32, f32), b: (f32, f32), width: f32, color: Color, dash: Dash) {
+    match dash {
+        Dash::Dashed => frame.dashed_line(a.0, a.1, b.0, b.1, width, color, 6.0, 4.0),
+        Dash::Dotted => frame.dashed_line(a.0, a.1, b.0, b.1, width, color, width.max(1.5), 3.0),
+        Dash::Solid if a.1 == b.1 => frame.hline(a.0, b.0, a.1, width, color),
+        Dash::Solid => frame.line(a.0, a.1, b.0, b.1, width, color),
+    }
+}
+
+fn arrow(frame: &mut Frame, from: (f32, f32), tip: (f32, f32), width: f32, color: Color) {
+    let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
+    let len = dx.hypot(dy);
+    if len < 1.0 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let size = 7.0 + width * 1.5;
+    let back = (tip.0 - ux * size, tip.1 - uy * size);
+    frame.line(tip.0, tip.1, back.0 - uy * size * 0.5, back.1 + ux * size * 0.5, width, color);
+    frame.line(tip.0, tip.1, back.0 + uy * size * 0.5, back.1 - ux * size * 0.5, width, color);
+}
+
+fn pct(from: f64, to: f64) -> f64 {
+    if from == 0.0 {
+        0.0
     } else {
-        frame.line(a.0, a.1, b.0, b.1, width, color);
+        (to - from) / from * 100.0
+    }
+}
+
+fn qty_text(qty: f64, decimals: Option<usize>) -> String {
+    match decimals {
+        Some(d) => format!("{qty:.d$}"),
+        None => significant(qty),
     }
 }
 
 pub fn paint(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme) {
     let Some(&a) = d.points.first() else { return };
-    let color = if d.selected { theme.drawing_selected } else { theme.drawing };
-    let width = if d.selected { 2.0 } else { 1.5 };
+    let style = &d.shape.style;
+    let kind = d.shape.kind;
+    let base = style.color.unwrap_or(theme.drawing);
+    let color = if d.selected && style.color.is_none() { theme.drawing_selected } else { base };
+    let width = style.width.unwrap_or(1.5) + if d.selected { 0.5 } else { 0.0 };
+    let dash = if d.draft && style.dash == Dash::Solid { Dash::Dashed } else { style.dash };
+    let font = style.text_size.unwrap_or(theme.font_px - 1.0);
+    let text_color = style.text_color.unwrap_or(color);
+    let fill = if style.fill_on.unwrap_or(true) { Some(style.fill.unwrap_or(base.with_alpha(26))) } else { None };
     let prices: Vec<f64> = d.shape.points.iter().map(|p| p.price).collect();
-    let font = theme.font_px - 1.0;
-    let label = |frame: &mut Frame, x: f32, y: f32, text: String| frame.text(x, y, text, color, Align::Left, Baseline::Bottom, font, None, Some(plot));
+    let digits = Some(d.precision);
+    let label = |frame: &mut Frame, x: f32, y: f32, text: String, align: Align, baseline: Baseline| {
+        frame.text(x, y, text, text_color, align, baseline, font, style.text_bg, Some(plot));
+    };
     let (b, c) = (d.points.get(1).copied(), d.points.get(2).copied());
+    let (ext_left, ext_right) = style.extends(kind);
 
-    match (d.shape.kind, b, c) {
-        (crate::DrawingKind::Path | crate::DrawingKind::Brush, _, _) => {
-            let w = if d.shape.kind == crate::DrawingKind::Brush { width + 0.5 } else { width };
-            if d.draft {
+    match (kind, b, c) {
+        (DrawingKind::Path | DrawingKind::Brush, _, _) => {
+            let w = if kind == DrawingKind::Brush { width + 0.5 } else { width };
+            if d.draft || dash != Dash::Solid {
                 for pair in d.points.windows(2) {
-                    line(frame, pair[0], pair[1], w, color, true);
+                    stroke(frame, pair[0], pair[1], w, color, dash);
                 }
             } else {
                 frame.polyline(&d.points, w, color);
             }
-        }
-        (crate::DrawingKind::Horizontal, _, _) => line(frame, (plot.x, a.1), (plot.right(), a.1), width, color, d.draft),
-        (crate::DrawingKind::Ray, _, _) => line(frame, a, (plot.right(), a.1), width, color, d.draft),
-        (crate::DrawingKind::Text, _, _) => {
-            frame.vline(a.0, a.1 - 4.0, a.1 + 4.0, width, color);
-            label(frame, a.0 + 6.0, a.1 - 2.0, d.shape.label.clone().unwrap_or_default());
-        }
-        (crate::DrawingKind::Rect, Some(b), _) => {
-            frame.rect(a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs(), theme.drawing_fill);
-            frame.stroke_rect(a.0, a.1, b.0 - a.0, b.1 - a.1, width, color);
-        }
-        (crate::DrawingKind::Fib, Some(b), _) => {
-            let left = a.0.min(b.0);
-            for level in FIB_LEVELS {
-                let y = a.1 + (b.1 - a.1) * level as f32;
-                let price = prices[0] + (prices[1] - prices[0]) * level;
-                let c = if level == 0.0 || level == 1.0 { color } else { color.with_alpha(166) };
-                line(frame, (left, y), (plot.right(), y), width, c, d.draft);
-                label(frame, left + 4.0, y - 2.0, format!("{:.1}%  {}", level * 100.0, significant(price)));
+            if let (Some(pair), true) = (d.points.windows(2).last(), style.right_arrow) {
+                arrow(frame, pair[0], pair[1], w, color);
             }
         }
-        (crate::DrawingKind::Measure, Some(b), _) => {
-            frame.rect(a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs(), theme.drawing_fill);
-            frame.stroke_rect(a.0, a.1, b.0 - a.0, b.1 - a.1, width, color);
-            let mid = (a.1 + b.1) / 2.0;
-            line(frame, (a.0, mid), (b.0, mid), width, color, false);
-            let dir = if b.0 >= a.0 { 1.0 } else { -1.0 };
-            frame.line(b.0, mid, b.0 - 5.0 * dir, mid - 3.0, width, color);
-            frame.line(b.0, mid, b.0 - 5.0 * dir, mid + 3.0, width, color);
+        (DrawingKind::Horizontal, _, _) => {
+            stroke(frame, (plot.x, a.1), (plot.right(), a.1), width, color, dash);
+            if let Some(text) = &d.shape.label {
+                label(frame, plot.x + 6.0, a.1 - 3.0, text.clone(), Align::Left, Baseline::Bottom);
+            }
+            if style.price_labels {
+                frame.text(plot.right() - 4.0, a.1 - 2.0, format_price(prices[0], digits), text_color, Align::Right, Baseline::Bottom, font, None, Some(plot));
+            }
+        }
+        (DrawingKind::Ray, _, _) => {
+            stroke(frame, a, (plot.right(), a.1), width, color, dash);
+            if let Some(text) = &d.shape.label {
+                label(frame, a.0 + 6.0, a.1 - 3.0, text.clone(), Align::Left, Baseline::Bottom);
+            }
+            if style.price_labels {
+                frame.text(a.0 + 6.0, a.1 + 2.0, format_price(prices[0], digits), text_color, Align::Left, Baseline::Top, font, None, Some(plot));
+            }
+        }
+        (DrawingKind::Text, _, _) => {
+            if d.selected || d.draft {
+                frame.vline(a.0, a.1 - 4.0, a.1 + 4.0, width, color);
+            }
+            let text = d.shape.label.clone().unwrap_or_default();
+            let size = style.text_size.unwrap_or(theme.font_px + 1.0);
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let y = a.1 - 2.0 - (lines.len() - 1 - i) as f32 * (size + 4.0);
+                frame.text(a.0 + 6.0, y, *line, style.text_color.unwrap_or(color), Align::Left, Baseline::Bottom, size, style.text_bg, Some(plot));
+            }
+        }
+        (DrawingKind::Rect, Some(b), _) => {
+            if let Some(fill) = fill {
+                frame.rect(a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs(), fill);
+            }
+            let (l, r, t, btm) = (a.0.min(b.0), a.0.max(b.0), a.1.min(b.1), a.1.max(b.1));
+            let (l2, r2) = (if ext_left { plot.x } else { l }, if ext_right { plot.right() } else { r });
+            stroke(frame, (l2, t), (r2, t), width, color, dash);
+            stroke(frame, (l2, btm), (r2, btm), width, color, dash);
+            stroke(frame, (l, t), (l, btm), width, color, dash);
+            stroke(frame, (r, t), (r, btm), width, color, dash);
+            if style.middle {
+                stroke(frame, (l2, (t + btm) / 2.0), (r2, (t + btm) / 2.0), width.min(1.0), color, Dash::Dashed);
+            }
+            if let Some(text) = &d.shape.label {
+                label(frame, l + 4.0, t + 3.0, text.clone(), Align::Left, Baseline::Top);
+            }
+        }
+        (DrawingKind::Fib, Some(b), _) => {
+            let (left, right) = (a.0.min(b.0), a.0.max(b.0));
+            let (x0, x1) = (if ext_left { plot.x } else { left }, if ext_right { plot.right() } else { right });
+            let levels = style.levels_for(kind);
+            let mut on: Vec<&Level> = levels.iter().filter(|l| l.on).collect();
+            on.sort_by(|p, q| p.value.total_cmp(&q.value));
+            if let Some(fill) = fill.filter(|_| style.fill_on == Some(true)) {
+                for pair in on.windows(2) {
+                    let y0 = a.1 + (b.1 - a.1) * pair[0].value as f32;
+                    let y1 = a.1 + (b.1 - a.1) * pair[1].value as f32;
+                    frame.rect(x0, y0.min(y1), x1 - x0, (y1 - y0).abs(), pair[0].color.unwrap_or(fill).with_alpha(fill.a));
+                }
+            }
+            if !d.draft {
+                stroke(frame, a, b, 1.0, color.with_alpha(110), Dash::Dashed);
+            }
+            for level in on {
+                let y = a.1 + (b.1 - a.1) * level.value as f32;
+                let price = prices[0] + (prices[1] - prices[0]) * level.value;
+                let c = level.color.unwrap_or(if level.value == 0.0 || level.value == 1.0 { color } else { color.with_alpha(180) });
+                stroke(frame, (x0, y), (x1, y), width, c, if d.draft { Dash::Dashed } else { level.dash });
+                if style.level_labels.unwrap_or(true) {
+                    frame.text(x0 + 4.0, y - 2.0, format!("{}  ({})", trim_level(level.value), format_price(price, digits)), style.text_color.unwrap_or(c), Align::Left, Baseline::Bottom, font, None, Some(plot));
+                }
+            }
+        }
+        (DrawingKind::Measure, Some(b), _) => {
+            let up = prices[1] >= prices[0];
+            let tone = style.color.unwrap_or(if up { theme.reward } else { theme.risk });
+            frame.rect(a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs(), style.fill.unwrap_or(tone.with_alpha(40)));
+            let mid_y = (a.1 + b.1) / 2.0;
+            let mid_x = (a.0 + b.0) / 2.0;
+            stroke(frame, (a.0, mid_y), (b.0, mid_y), 1.0, tone, Dash::Solid);
+            stroke(frame, (mid_x, a.1), (mid_x, b.1), 1.0, tone, Dash::Solid);
+            arrow(frame, (a.0, mid_y), (b.0, mid_y), 1.0, tone);
+            arrow(frame, (mid_x, a.1), (mid_x, b.1), 1.0, tone);
             let (from, to) = (prices[0], prices[1]);
-            let pct = if from == 0.0 { 0.0 } else { (to - from) / from * 100.0 };
-            let sign = if to >= from { "+" } else { "" };
+            let sign = if up { "+" } else { "" };
             let bars = d.bars.abs();
-            label(frame, a.0.min(b.0) + 4.0, a.1.min(b.1) - 3.0, format!("{sign}{}  {sign}{pct:.2}%  {bars} bar{}", significant(to - from), if bars == 1 { "" } else { "s" }));
+            let ticks = ((to - from) / 10f64.powi(-(d.precision as i32))).round();
+            let text = format!("{sign}{} ({sign}{:.2}%) {sign}{ticks:.0}, {bars} bar{}", format_price(to - from, digits), pct(from, to), if bars == 1 { "" } else { "s" });
+            let y = if up { a.1.min(b.1) - 6.0 } else { a.1.max(b.1) + 6.0 };
+            frame.text(mid_x, y, text, tone.contrast_text(), Align::Center, if up { Baseline::Bottom } else { Baseline::Top }, font, Some(tone), Some(plot));
         }
-        (crate::DrawingKind::Long | crate::DrawingKind::Short, Some(b), Some(c)) => {
-            let left = a.0.min(b.0).min(c.0);
-            let w = (a.0.max(b.0).max(c.0) - left).max(40.0);
-            frame.rect(left, a.1.min(b.1), w, (b.1 - a.1).abs(), theme.risk_fill);
-            frame.stroke_rect(left, a.1, w, b.1 - a.1, 1.0, theme.risk);
-            frame.rect(left, a.1.min(c.1), w, (c.1 - a.1).abs(), theme.reward_fill);
-            frame.stroke_rect(left, a.1, w, c.1 - a.1, 1.0, theme.reward);
-            let (entry, stop, target) = (prices[0], prices[1], prices.get(2).copied().unwrap_or(prices[0]));
-            let risk = (entry - stop).abs();
-            let rr = if risk == 0.0 { 0.0 } else { (target - entry).abs() / risk };
-            let side = if d.shape.kind == crate::DrawingKind::Long { "LONG" } else { "SHORT" };
-            label(frame, left + 4.0, a.1.min(b.1).min(c.1) - 3.0, format!("{side}  R:R {rr:.2}  risk {}", significant(risk)));
+        (DrawingKind::Long | DrawingKind::Short, Some(_), Some(_)) => paint_position(frame, d, plot, theme, font),
+        (DrawingKind::Channel, Some(b), None) => stroke(frame, a, b, width, color, dash),
+        (DrawingKind::Channel, Some(_), Some(_)) => {
+            let levels = style.levels_for(kind);
+            let line = |f: f64| d.channel_line(f).map(|(p, q)| extend(p, q, plot, ext_left, ext_right));
+            if let (Some(fill), Some((p0, q0)), Some((p1, q1))) = (fill, line(0.0), line(1.0)) {
+                // Two triangles: the band between the main lines.
+                frame.triangle(p0, q0, q1, fill);
+                frame.triangle(p0, q1, p1, fill);
+            }
+            for level in levels.iter().filter(|l| l.on || l.value == 0.0 || l.value == 1.0) {
+                let Some((p, q)) = line(level.value) else { continue };
+                let main = level.value == 0.0 || level.value == 1.0;
+                let c = level.color.unwrap_or(if main { color } else { theme.drawing_selected.with_alpha(200) });
+                stroke(frame, p, q, if main { width } else { width.min(1.5) }, c, if d.draft { Dash::Dashed } else { level.dash });
+            }
+            if let (Some(text), Some((p, q))) = (&d.shape.label, line(1.0)) {
+                label(frame, (p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0 - 4.0, text.clone(), Align::Center, Baseline::Bottom);
+            }
         }
-        (_, Some(b), _) => line(frame, a, b, width, color, d.draft),
+        (_, Some(b), _) => {
+            // Trendline.
+            let (p, q) = extend(a, b, plot, ext_left, ext_right);
+            stroke(frame, p, q, width, color, dash);
+            if style.left_arrow {
+                arrow(frame, b, a, width, color);
+            }
+            if style.right_arrow {
+                arrow(frame, a, b, width, color);
+            }
+            if style.middle {
+                let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                frame.circle(m.0, m.1, 3.0 + width / 2.0, color);
+            }
+            if style.price_labels {
+                for (i, pt) in [a, b].iter().enumerate() {
+                    let above = pt.1 <= [a, b][1 - i].1;
+                    frame.text(pt.0, pt.1 + if above { -6.0 } else { 6.0 }, format_price(prices[i], digits), color.contrast_text(), Align::Center, if above { Baseline::Bottom } else { Baseline::Top }, font, Some(color), Some(plot));
+                }
+            }
+            if let Some(text) = &d.shape.label {
+                label(frame, (a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0 - 4.0, text.clone(), Align::Center, Baseline::Bottom);
+            }
+            if style.stats && !d.draft {
+                let (from, to) = (prices[0], prices[1]);
+                let sign = if to >= from { "+" } else { "" };
+                let bars = d.bars.abs();
+                let text = format!("{sign}{} ({sign}{:.2}%), {bars} bar{}", format_price(to - from, digits), pct(from, to), if bars == 1 { "" } else { "s" });
+                let right = if b.0 >= a.0 { b } else { a };
+                frame.text(right.0 + 8.0, right.1, text, text_color, Align::Left, Baseline::Middle, font, Some(theme.background.with_alpha(210)), Some(plot));
+            }
+        }
         _ => {}
     }
 
-    if d.selected && d.shape.kind != crate::DrawingKind::Brush {
-        for &p in &d.points {
-            frame.circle(p.0, p.1, 4.5, color);
-            frame.circle(p.0, p.1, 4.0, theme.handle);
+    if d.selected {
+        for p in handles(d) {
+            frame.circle(p.0, p.1, 5.0, theme.drawing_selected);
+            frame.circle(p.0, p.1, 3.5, theme.handle);
         }
     }
-    let _ = format_price;
+}
+
+/// `0.618` rather than `0.6180000`, `1` rather than `1.0`.
+fn trim_level(v: f64) -> String {
+    let s = format!("{v:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// TradingView's long and short position: a target box and a stop box either
+/// side of the entry, with the quantity a fixed risk buys and what it makes.
+fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, font: f32) {
+    let Some((left, right, entry_y, stop_y, target_y)) = d.position_box() else { return };
+    let style = &d.shape.style;
+    let long = d.shape.kind == DrawingKind::Long;
+    let (entry, stop, target) = (d.price(0), d.price(1), d.price(2));
+    let profit_line = style.profit_line.unwrap_or(theme.reward);
+    let stop_line = style.stop_line.unwrap_or(theme.risk);
+    let profit_fill = style.profit_fill.unwrap_or(profit_line.with_alpha(56));
+    let stop_fill = style.stop_fill.unwrap_or(stop_line.with_alpha(56));
+    let w = right - left;
+
+    frame.rect(left, target_y.min(entry_y), w, (target_y - entry_y).abs(), profit_fill);
+    frame.rect(left, stop_y.min(entry_y), w, (stop_y - entry_y).abs(), stop_fill);
+    // How far the last price has run: a deeper shade from entry to the last close.
+    if let Some(last) = d.last.filter(|_| !d.draft) {
+        let y = d.y(last).clamp(stop_y.min(target_y), stop_y.max(target_y));
+        let winning = if long { last >= entry } else { last <= entry };
+        let tone = if winning { profit_line } else { stop_line };
+        frame.rect(left, y.min(entry_y), w, (y - entry_y).abs(), tone.with_alpha(40));
+    }
+    let entry_line = style.color.unwrap_or(Color::hex(0x9598a1));
+    frame.hline(left, right, entry_y, 1.0, entry_line);
+    if d.selected {
+        frame.hline(left, right, target_y, 1.0, profit_line);
+        frame.hline(left, right, stop_y, 1.0, stop_line);
+    }
+    if style.hide_stats && !d.selected {
+        return;
+    }
+
+    let tick = 10f64.powi(-(d.precision as i32));
+    let risk_per = (entry - stop).abs();
+    let reward_per = (target - entry).abs();
+    let account = style.account.unwrap_or(1000.0);
+    let risk_amount = if style.risk_cash { style.risk.unwrap_or(10.0) } else { account * style.risk.unwrap_or(1.0) / 100.0 };
+    let lot = style.lot.unwrap_or(1.0);
+    let qty = if risk_per > 0.0 { risk_amount / (risk_per * lot) } else { 0.0 };
+    let rr = if risk_per > 0.0 { reward_per / risk_per } else { 0.0 };
+    let digits = Some(d.precision);
+    let cx = left + w / 2.0;
+    let text = style.text_color;
+    let tag = |frame: &mut Frame, y: f32, s: String, bg: Color, baseline: Baseline| {
+        frame.text(cx, y, s, text.unwrap_or(bg.contrast_text()), Align::Center, baseline, font, Some(bg), Some(plot));
+    };
+    let line = |name: &str, price: f64, amount: f64| {
+        let move_pct = pct(entry, price).abs();
+        let ticks = ((price - entry).abs() / tick).round();
+        if style.compact {
+            format!("{} ({move_pct:.2}%) {}", format_price(price, digits), significant(amount))
+        } else {
+            format!("{name}: {} ({move_pct:.2}%) {ticks:.0}, Amount: {}", format_price(price, digits), significant(amount))
+        }
+    };
+    let target_above = target_y <= entry_y;
+    tag(frame, target_y + if target_above { -5.0 } else { 5.0 }, line("Target", target, qty * lot * reward_per), profit_line, if target_above { Baseline::Bottom } else { Baseline::Top });
+    tag(frame, stop_y + if target_above { 5.0 } else { -5.0 }, line("Stop", stop, qty * lot * risk_per), stop_line, if target_above { Baseline::Top } else { Baseline::Bottom });
+
+    let qty = qty_text(qty, style.qty_decimals);
+    let (first, second) = match d.last.filter(|_| !d.draft) {
+        Some(last) if !style.compact => {
+            let pnl = (last - entry) * if long { 1.0 } else { -1.0 } * lot;
+            let q: f64 = qty.parse().unwrap_or(0.0);
+            (format!("Open P&L: {}, Qty: {qty}", significant(pnl * q)), format!("Risk/Reward Ratio: {rr:.2}"))
+        }
+        _ if style.compact => (format!("{qty}"), format!("{rr:.2}")),
+        _ => (format!("Qty: {qty}"), format!("Risk/Reward Ratio: {rr:.2}")),
+    };
+    let grey = Color::hex(0x9598a1);
+    let (up, down) = if target_above { (Baseline::Top, Baseline::Top) } else { (Baseline::Bottom, Baseline::Bottom) };
+    let row = font + 5.0;
+    if target_above {
+        tag(frame, entry_y + 4.0, first, grey, up);
+        tag(frame, entry_y + 4.0 + row, second, grey, up);
+    } else {
+        tag(frame, entry_y - 4.0 - row, first, grey, down);
+        tag(frame, entry_y - 4.0, second, grey, down);
+    }
+}
+
+/// How far the pointer is from a drawing, in pixels — zero inside a filled
+/// shape that is picked by its body.
+pub fn distance(d: &Placed<'_>, cursor: (f32, f32), plot: Rect) -> f32 {
+    let style = &d.shape.style;
+    let kind = d.shape.kind;
+    let (ext_left, ext_right) = style.extends(kind);
+    match kind {
+        DrawingKind::Long | DrawingKind::Short => match d.position_box() {
+            Some((left, right, _, stop, target)) => {
+                let (top, bottom) = (stop.min(target), stop.max(target));
+                if cursor.0 >= left && cursor.0 <= right && cursor.1 >= top && cursor.1 <= bottom {
+                    0.0
+                } else {
+                    let dx = (left - cursor.0).max(cursor.0 - right).max(0.0);
+                    let dy = (top - cursor.1).max(cursor.1 - bottom).max(0.0);
+                    dx.hypot(dy)
+                }
+            }
+            None => f32::INFINITY,
+        },
+        DrawingKind::Channel if d.points.len() >= 3 => {
+            let levels = style.levels_for(kind);
+            let line = |f: f64| d.channel_line(f).map(|(p, q)| extend(p, q, plot, ext_left, ext_right));
+            let mut best = levels
+                .iter()
+                .filter(|l| l.on || l.value == 0.0 || l.value == 1.0)
+                .filter_map(|l| line(l.value))
+                .map(|(p, q)| distance_to_segment(cursor, p, q))
+                .fold(f32::INFINITY, f32::min);
+            if let (true, Some((p0, q0)), Some((p1, _))) = (style.fill_on.unwrap_or(true), line(0.0), line(1.0)) {
+                let span = q0.0 - p0.0;
+                if span.abs() > f32::EPSILON && (cursor.0 - p0.0) / span >= 0.0 && (cursor.0 - p0.0) / span <= 1.0 {
+                    let t = (cursor.0 - p0.0) / span;
+                    let y0 = p0.1 + (q0.1 - p0.1) * t;
+                    let y1 = y0 + (p1.1 - p0.1);
+                    if cursor.1 >= y0.min(y1) && cursor.1 <= y0.max(y1) {
+                        best = 0.0;
+                    }
+                }
+            }
+            best
+        }
+        DrawingKind::Fib if d.points.len() >= 2 => {
+            let (a, b) = (d.points[0], d.points[1]);
+            let (left, right) = (a.0.min(b.0), a.0.max(b.0));
+            let (x0, x1) = (if ext_left { plot.x } else { left }, if ext_right { plot.right() } else { right });
+            if cursor.0 < x0 - 4.0 || cursor.0 > x1 + 4.0 {
+                return f32::INFINITY;
+            }
+            style.levels_for(kind).iter().filter(|l| l.on).map(|l| (cursor.1 - (a.1 + (b.1 - a.1) * l.value as f32)).abs()).fold(f32::INFINITY, f32::min)
+        }
+        DrawingKind::Trendline if d.points.len() >= 2 => {
+            let (p, q) = extend(d.points[0], d.points[1], plot, ext_left, ext_right);
+            distance_to_segment(cursor, p, q)
+        }
+        _ => distance_to_drawing(kind.as_str(), &d.points, cursor, &FIB_LEVELS),
+    }
 }
 
 #[cfg(test)]
@@ -206,5 +722,17 @@ mod tests {
         assert_eq!(significant(12.345), "12.35");
         assert_eq!(significant(0.000012345), "0.0000123");
         assert_eq!(significant(-0.5), "-0.500");
+    }
+
+    #[test]
+    fn styles_read_from_strings() {
+        let s = DrawingStyle::from_pairs([("color", "#ff0000"), ("width", "3"), ("dash", "dotted"), ("extendRight", "1"), ("levels", "0,1|0.5,0,#00ff00,dashed|bad"), ("riskUnit", "cash"), ("nope", "x")]);
+        assert_eq!(s.color, Some(Color::hex(0xff0000)));
+        assert_eq!((s.width, s.dash, s.extend_right, s.risk_cash), (Some(3.0), Dash::Dotted, Some(true), true));
+        let levels = s.levels.unwrap();
+        assert_eq!(levels.len(), 2);
+        assert_eq!(levels[1], Level { value: 0.5, on: false, color: Some(Color::hex(0x00ff00)), dash: Dash::Dashed });
+        assert_eq!(trim_level(0.618), "0.618");
+        assert_eq!(trim_level(1.0), "1");
     }
 }

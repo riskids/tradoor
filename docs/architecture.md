@@ -85,8 +85,8 @@ The file format is described in [format.md](format.md).
 | `GET /api/health` | `{ok, db}` |
 | `GET /api/markets` | every market on four venues with 24h stats, cached 30 minutes |
 | `GET /api/history` | archived markets and what each base covers |
-| `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear |
-| `DELETE /api/drawings/{id}` | |
+| `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
+| `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 
@@ -96,7 +96,7 @@ Writes require `Authorization: Bearer` when `TRADOOR_API_TOKEN` is set.
 
 | Table | |
 |---|---|
-| `drawing` | hand-drawn markup per market and timeframe; points as `[{time, price}]` |
+| `drawing` | hand-drawn markup per market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `workspace` | the terminal layout, whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |

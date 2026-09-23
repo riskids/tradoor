@@ -14,7 +14,7 @@ import { tabTitle } from '../lib/tab-title';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { Layout, panelTitle } from '../workspace/Layout';
-import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type PanelType } from '../workspace/model';
+import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
 import {
   doc,
   focusedPanel,
@@ -25,6 +25,7 @@ import {
   saveState,
   setPanelLink,
   setPanelMarket,
+  setLinkMarket,
   setPanelTimeframe,
   syncWithServer,
   targetChart,
@@ -104,10 +105,42 @@ function commands(): Command[] {
   return list;
 }
 
+/**
+ * Up and Down walk a watchlist, switching the chart to the next market in it:
+ * the focused watchlist, else the one linked with this panel, else any.
+ */
+function stepWatchlist(panel: Panel, step: number): boolean {
+  const lists = Object.values(doc.panels).filter((p): p is WatchlistPanelState => p.type === 'watchlist' && p.markets.length > 0);
+  const list = panel.type === 'watchlist' ? panel : (lists.find((w) => panel.link && w.link === panel.link) ?? lists.find((w) => !w.link) ?? lists[0]);
+  if (!list || list.markets.length === 0) return false;
+  // What the list drives: its link, the panel asked from, or the last chart.
+  const target = panel.type === 'watchlist' ? targetChart() : panel;
+  const current = list.link ? doc.links[list.link].market : target ? marketOf(target) : null;
+  const at = current ? list.markets.indexOf(current) : -1;
+  const next = list.markets[at === -1 ? (step > 0 ? 0 : list.markets.length - 1) : (at + step + list.markets.length) % list.markets.length]!;
+  if (panel.type === 'watchlist' && list.link) setLinkMarket(list.link, next);
+  else if (target) setPanelMarket(target.id, next);
+  return true;
+}
+
 function onKeyDown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     setOverlay(overlay()?.kind === 'palette' ? null : { kind: 'palette' });
+    return;
+  }
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: undo and redo drawings on the chart in use.
+  const mod = e.metaKey || e.ctrlKey;
+  const k = e.key.toLowerCase();
+  if (mod && !e.altKey && (k === 'z' || k === 'y') && !overlay() && !isTypingTarget(e.target)) {
+    const focus = focusedPanel();
+    const chart = focus?.type === 'chart' ? focus : targetChart();
+    const control = chart && chartControllers.get(chart.id);
+    if (control) {
+      e.preventDefault();
+      if (k === 'y' || e.shiftKey) control.redo();
+      else control.undo();
+    }
     return;
   }
   // Dialogs own the keyboard while open; modifiers belong to the browser.
@@ -127,6 +160,10 @@ function onKeyDown(e: KeyboardEvent): void {
   if (panel.type === 'chart' && (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace')) {
     if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
     void chartControllers.get(panel.id)?.key(e.key);
+    return;
+  }
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && stepWatchlist(panel, e.key === 'ArrowUp' ? -1 : 1)) {
+    e.preventDefault();
     return;
   }
   if (panel.type !== 'watchlist' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {

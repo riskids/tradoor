@@ -1,4 +1,6 @@
-//! Hand-drawn markup, stored per market and timeframe.
+//! Hand-drawn markup, stored per market. The timeframe it was drawn on is kept,
+//! but every timeframe of the market shows it: anchors are epoch ms and price,
+//! which mean the same thing on any bar length — as on TradingView.
 //!
 //! Strict about the SHAPE of what goes in: `points` is JSONB, so Postgres would
 //! accept any JSON at all, and a row that cannot be rendered cannot be selected
@@ -14,7 +16,9 @@ use tradoor_venues::MarketRef;
 
 use crate::api::{ApiError, ApiResult, AppState};
 
-pub const KINDS: [&str; 11] = ["path", "trendline", "horizontal", "ray", "rect", "fib", "text", "measure", "long", "short", "brush"];
+pub const KINDS: [&str; 12] = ["path", "trendline", "horizontal", "ray", "rect", "fib", "text", "measure", "long", "short", "brush", "channel"];
+/// A style is a flat object of short settings; this bounds what one row may carry.
+pub const MAX_STYLE_BYTES: usize = 8 * 1024;
 pub const MAX_POINTS: usize = 2000;
 
 /// Anchors each kind needs, and whether that is a minimum (path, brush) rather
@@ -23,7 +27,7 @@ pub fn arity(kind: &str) -> Option<(usize, bool)> {
     Some(match kind {
         "horizontal" | "ray" | "text" => (1, false),
         "trendline" | "rect" | "fib" | "measure" => (2, false),
-        "long" | "short" => (3, false),
+        "long" | "short" | "channel" => (3, false),
         "path" | "brush" => (2, true),
         _ => return None,
     })
@@ -51,12 +55,25 @@ pub fn parse_body(body: &Value) -> Result<DrawingInput, String> {
         format!("invalid kind: '{}'. Valid: {}", b.get("kind").map_or("undefined".into(), |k| k.as_str().map_or(k.to_string(), str::to_string)), KINDS.join(", "))
     })?;
     let points = parse_points(kind, b.get("points"))?;
-    let style = b.get("style").and_then(Value::as_object).cloned().unwrap_or_default();
+    let style = parse_style(b.get("style"))?.unwrap_or_default();
     let label = b.get("label").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
     if kind == "text" && label.is_none() {
         return Err("a text drawing needs a label".into());
     }
     Ok(DrawingInput { kind: kind.to_string(), points, style, label })
+}
+
+/// A style object: flat, scalar values only, and small. `None` when absent; a
+/// non-object is read as no style, as before.
+pub fn parse_style(value: Option<&Value>) -> Result<Option<Map<String, Value>>, String> {
+    let Some(style) = value.and_then(Value::as_object) else { return Ok(None) };
+    if let Some((key, _)) = style.iter().find(|(_, v)| v.is_object() || v.is_array()) {
+        return Err(format!("style.{key} must be a string, number, boolean or null"));
+    }
+    if serde_json::to_string(style).map_or(0, |s| s.len()) > MAX_STYLE_BYTES {
+        return Err(format!("style may be at most {MAX_STYLE_BYTES} bytes"));
+    }
+    Ok(Some(style.clone()))
 }
 
 /// The anchors of a `kind`, counted and checked.
@@ -111,9 +128,9 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
 }
 
 pub async fn list(State(state): State<AppState>, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
-    let (market, timeframe) = scope.validated()?;
+    let (market, _) = scope.validated()?;
     let client = state.pool.get().await?;
-    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE market = $1 AND timeframe = $2 ORDER BY id"), &[&market, &timeframe]).await?;
+    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE market = $1 ORDER BY id"), &[&market]).await?;
     // Kinds this version no longer draws are left out rather than shipped to a
     // renderer that cannot show — or delete — them.
     let drawings: Vec<Value> = rows.iter().filter(|r| KINDS.contains(&r.get::<_, &str>(3))).map(row_json).collect();
@@ -139,8 +156,7 @@ pub async fn create(State(state): State<AppState>, Query(scope): Query<Scope>, J
     Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
 }
 
-/// Move or relabel one drawing. Its kind and its chart never change: those are
-/// what it IS, and anchors from one timeframe mean nothing on another.
+/// Move, relabel or restyle one drawing. Its kind and its market never change.
 pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
     let b = body.as_object().ok_or_else(|| ApiError::bad_request("body must be a JSON object"))?;
     let client = state.pool.get().await?;
@@ -163,8 +179,13 @@ pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(bod
             Some(Some(text.to_string()))
         }
     };
-    if points.is_none() && label.is_none() {
-        return Err(ApiError::bad_request("nothing to change: send points, label, or both"));
+    let style = match b.get("style") {
+        None => None,
+        Some(value) if value.is_object() => parse_style(Some(value)).map_err(ApiError::bad_request)?.map(Value::Object),
+        Some(_) => return Err(ApiError::bad_request("style must be an object")),
+    };
+    if points.is_none() && label.is_none() && style.is_none() {
+        return Err(ApiError::bad_request("nothing to change: send points, label or style"));
     }
     if kind == "text" && matches!(label, Some(None)) {
         return Err(ApiError::bad_request("a text drawing needs a label"));
@@ -172,7 +193,10 @@ pub async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(bod
     let label = label.unwrap_or_else(|| row.get(1));
 
     let row = client
-        .query_one(&format!("UPDATE drawing SET points = COALESCE($2::jsonb, points), label = $3 WHERE id = $1 RETURNING {COLUMNS}"), &[&id, &points, &label])
+        .query_one(
+            &format!("UPDATE drawing SET points = COALESCE($2::jsonb, points), label = $3, style = COALESCE($4::jsonb, style) WHERE id = $1 RETURNING {COLUMNS}"),
+            &[&id, &points, &label, &style],
+        )
         .await?;
     Ok(Json(json!({ "drawing": row_json(&row) })))
 }
@@ -185,12 +209,11 @@ pub async fn delete_one(State(state): State<AppState>, Path(id): Path<i64>) -> A
     }
 }
 
-/// Every drawing on one chart — scoped by timeframe, so clearing the daily chart
-/// never wipes the weekly one.
+/// Every drawing on one market — on every timeframe, since each shows them all.
 pub async fn clear(State(state): State<AppState>, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
-    let (market, timeframe) = scope.validated()?;
+    let (market, _) = scope.validated()?;
     let client = state.pool.get().await?;
-    let deleted = client.execute("DELETE FROM drawing WHERE market = $1 AND timeframe = $2", &[&market, &timeframe]).await?;
+    let deleted = client.execute("DELETE FROM drawing WHERE market = $1", &[&market]).await?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 
@@ -236,6 +259,9 @@ mod tests {
     #[test]
     fn style_and_label_normalise() {
         assert!(parse_body(&json!({ "kind": "horizontal", "points": [point()], "style": [1, 2] })).unwrap().style.is_empty());
+        assert_eq!(parse_body(&json!({ "kind": "horizontal", "points": [point()], "style": { "color": "#fff", "width": 2 } })).unwrap().style.len(), 2);
+        rejects(json!({ "kind": "horizontal", "points": [point()], "style": { "levels": [1] } }), "style.levels must be");
+        rejects(json!({ "kind": "channel", "points": [point(), point()] }), "needs exactly 3 points");
         assert_eq!(parse_body(&json!({ "kind": "horizontal", "points": [point()], "label": " R1 " })).unwrap().label.as_deref(), Some("R1"));
         assert_eq!(parse_body(&json!({ "kind": "horizontal", "points": [point()], "label": "  " })).unwrap().label, None);
         for kind in KINDS {

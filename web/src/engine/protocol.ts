@@ -55,6 +55,7 @@ export interface DrawingShape {
   kind: string;
   points: DrawingPoint[];
   label: string | null;
+  style: Record<string, string | number | boolean>;
 }
 
 export type ChartEvent =
@@ -133,13 +134,15 @@ export type ToWorker =
   /** TPO options, `key=value;key=value`. */
   | { t: 'tpoSettings'; id: string; value: string }
   | { t: 'paneWeights'; id: string; value: string }
-  | { t: 'tool'; id: string; value: string }
+  /** `style`: what the new drawing will look like, so its draft matches. */
+  | { t: 'tool'; id: string; value: string; style: Record<string, string | number | boolean> }
   | { t: 'drawings'; id: string; list: DrawingShape[] }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }
   | { t: 'range'; id: string; days: number | null }
-  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number }
+  /** `shift`: held, so lines being drawn stay level. */
+  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
   /** The reader's time zone, minutes east of UTC, for every chart. */

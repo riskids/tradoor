@@ -18,6 +18,9 @@ export interface ChartController {
   key(key: string): Promise<boolean>;
   resetView(): void;
   showRange(days: number | null): void;
+  /** Undo or redo the last drawing change; false when there was none. */
+  undo(): boolean;
+  redo(): boolean;
 }
 
 export const chartControllers = new Map<string, ChartController>();

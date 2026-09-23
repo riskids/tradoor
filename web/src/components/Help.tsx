@@ -16,6 +16,7 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
     keys: [
       ['a–z', 'Search for a symbol'],
       ['←  →', 'Shorter / longer timeframe'],
+      ['↑  ↓', 'Previous / next market in the watchlist'],
       ['wheel', 'Zoom time'],
       ['drag', 'Pan time; up or down moves price'],
       ['wheel or drag price axis', 'Scale price'],
@@ -27,10 +28,14 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
   {
     title: 'Drawing',
     keys: [
+      ['Ctrl Z', 'Undo the last drawing change'],
+      ['Ctrl Shift Z  Ctrl Y', 'Redo'],
       ['esc', 'Cancel the tool, or deselect'],
       ['Delete', 'Remove the selected drawing'],
       ['Enter', 'Finish a path'],
       ['double-click', 'Finish a path'],
+      ['double-click a drawing', 'Its settings: style, text, coordinates, visibility'],
+      ['shift', 'Keep a line level while drawing or dragging it'],
     ],
   },
   {

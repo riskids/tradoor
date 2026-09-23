@@ -18,7 +18,7 @@ use tradoor_core::live::{Kline, LiveBar, LiveFeed};
 use tradoor_core::studies::STUDIES;
 use tradoor_core::timeframe::fold;
 use tradoor_core::{ChartTimeframe, Interval};
-use tradoor_render::{Anchor, Chart, DrawingKind, DrawingShape, Event};
+use tradoor_render::{Anchor, Chart, DrawingKind, DrawingShape, DrawingStyle, Event};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{candles, columns, get, obj, opt, set};
@@ -30,6 +30,22 @@ pub fn start() {
 
 fn timeframe(tf: &str) -> Result<ChartTimeframe, JsValue> {
     ChartTimeframe::parse(tf).ok_or_else(|| JsValue::from_str(&format!("unknown timeframe: {tf}")))
+}
+
+/// A drawing's style: a flat object of strings (numbers and booleans are read too).
+fn style(value: &JsValue) -> DrawingStyle {
+    let entries = Object::entries(&Object::from(value.clone()));
+    let pairs: Vec<(String, String)> = entries
+        .iter()
+        .filter_map(|e| {
+            let e = Array::from(&e);
+            let key = e.get(0).as_string()?;
+            let v = e.get(1);
+            let text = v.as_string().or_else(|| v.as_f64().map(|n| n.to_string())).or_else(|| v.as_bool().map(|b| if b { "1".into() } else { "0".into() }))?;
+            Some((key, text))
+        })
+        .collect();
+    DrawingStyle::from_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
 }
 
 #[wasm_bindgen]
@@ -146,7 +162,7 @@ impl ChartEngine {
         self.chart.set_message((!message.is_empty()).then(|| message.to_string()));
     }
 
-    /// `[{id, kind, points: [{time, price}], label}]`.
+    /// `[{id, kind, points: [{time, price}], label, style: {key: string}}]`.
     pub fn set_drawings(&mut self, list: &Array) {
         let shapes = list
             .iter()
@@ -156,7 +172,13 @@ impl ChartEngine {
                     .iter()
                     .filter_map(|p| Some(Anchor { time: get(&p, "time")?.as_f64()?, price: get(&p, "price")?.as_f64()? }))
                     .collect();
-                Some(DrawingShape { id: get(&v, "id").and_then(|i| i.as_f64()).map(|i| i as i64), kind, points, label: get(&v, "label").and_then(|l| l.as_string()) })
+                Some(DrawingShape {
+                    id: get(&v, "id").and_then(|i| i.as_f64()).map(|i| i as i64),
+                    kind,
+                    points,
+                    label: get(&v, "label").and_then(|l| l.as_string()),
+                    style: get(&v, "style").map_or_else(DrawingStyle::default, |s| style(&s)),
+                })
             })
             .collect();
         self.chart.set_drawings(shapes);
@@ -167,9 +189,14 @@ impl ChartEngine {
         self.chart.set_selected((!id.is_nan()).then_some(id as i64));
     }
 
-    /// An empty string selects the pointer.
-    pub fn set_tool(&mut self, tool: &str) {
-        self.chart.set_tool(DrawingKind::parse(tool));
+    /// An empty string selects the pointer; `style` is what the new drawing will get.
+    pub fn set_tool(&mut self, tool: &str, tool_style: &JsValue) {
+        let s = if tool_style.is_object() { style(tool_style) } else { DrawingStyle::default() };
+        self.chart.set_tool_styled(DrawingKind::parse(tool), s);
+    }
+
+    pub fn set_shift(&mut self, shift: bool) {
+        self.chart.set_shift(shift);
     }
 
     pub fn reset_view(&mut self) {

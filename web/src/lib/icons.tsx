@@ -8,6 +8,7 @@ const PATHS = {
   ray: 'M5 12h16M17 8l4 4-4 4',
   rect: 'M4 6h16v12H4z',
   fib: 'M3 5h18M3 9.5h18M3 12h18M3 14.5h18M3 19h18',
+  channel: 'M3 15L15 5M9 19L21 9',
   text: 'M5 5h14M12 5v14M9 19h6',
   measure: 'M4 17L17 4l3 3L7 20zM8 13l2 2M11 10l2 2M14 7l2 2',
   long: 'M12 20V5M6 11l6-6 6 6',

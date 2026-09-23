@@ -1,6 +1,7 @@
 /** The tradoor server: the market catalogue, drawings and workspaces. Candles
  *  do not come through here — they are files under /data and exchange REST. */
 import type { DrawingPoint } from '../engine/protocol';
+import type { Style } from './drawing-style';
 import { readPref } from './prefs';
 
 export class ApiError extends Error {
@@ -95,7 +96,7 @@ export interface Drawing {
   timeframe: string;
   kind: string;
   points: DrawingPoint[];
-  style: Record<string, unknown>;
+  style: Style;
   label: string | null;
   createdAt: number;
 }
@@ -139,9 +140,9 @@ export const api = {
     return body ?? { ok: false, db: false };
   },
   drawings: (market: string, timeframe: string) => json<{ count: number; drawings: Drawing[] }>(`/api/drawings?${scope(market, timeframe)}`),
-  createDrawing: (market: string, timeframe: string, input: { kind: string; points: DrawingPoint[]; label?: string }) =>
+  createDrawing: (market: string, timeframe: string, input: { kind: string; points: DrawingPoint[]; label?: string; style?: Style }) =>
     json<{ drawing: Drawing }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'POST', body: input }),
-  updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
+  updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null; style?: Style }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),

@@ -377,8 +377,9 @@ class Slot {
     post({ t: 'status', id: this.id, value: next });
   }
 
-  pointer(kind: PointerKind, x: number, y: number, button: number): void {
+  pointer(kind: PointerKind, x: number, y: number, button: number, shift = false): void {
     const e = this.engine;
+    e.set_shift(shift);
     if (kind === 'move') e.pointer_move(x, y);
     else if (kind === 'down') e.pointer_down(x, y, button);
     else if (kind === 'up') e.pointer_up(x, y);
@@ -605,7 +606,7 @@ function handle(msg: ToWorker): void {
       slot.engine.set_pane_weights(msg.value);
       break;
     case 'tool':
-      slot.engine.set_tool(msg.value);
+      slot.engine.set_tool(msg.value, msg.style);
       break;
     case 'drawings':
       slot.engine.set_drawings(msg.list);
@@ -624,7 +625,7 @@ function handle(msg: ToWorker): void {
       slot.engine.show_range(msg.days ?? Number.NaN);
       break;
     case 'pointer':
-      slot.pointer(msg.kind, msg.x, msg.y, msg.button);
+      slot.pointer(msg.kind, msg.x, msg.y, msg.button, msg.shift);
       break;
     case 'wheel':
       slot.engine.wheel(msg.x, msg.y, msg.dx, msg.dy);

@@ -10,8 +10,8 @@ use tradoor_core::time::DAY;
 use tradoor_core::{Candle, ChartTimeframe, Interval};
 
 use crate::color::Color;
-use crate::drawings::{self, Anchor, DrawingKind, DrawingShape, Placed, FIB_LEVELS, MAX_POINTS};
-use crate::geometry::{distance_to_drawing, logical_to_time, ribbon_runs, time_to_logical, visible_slice, RibbonRun};
+use crate::drawings::{self, Anchor, DrawingKind, DrawingShape, DrawingStyle, Placed, MAX_POINTS};
+use crate::geometry::{logical_to_time, ribbon_runs, time_to_logical, visible_slice, RibbonRun};
 use crate::paint::{Align, Baseline, Frame, Rect};
 use crate::scale::{PriceScale, ScaleMode, TimeScale, MIN_BAR_SPACING};
 use crate::tpo;
@@ -232,6 +232,10 @@ pub struct Chart {
     drawings: Vec<DrawingShape>,
     selected: Option<i64>,
     tool: Option<DrawingKind>,
+    /// The style a new drawing of the armed tool gets, so its draft looks the part.
+    tool_style: DrawingStyle,
+    /// Shift held: lines being drawn or reshaped stay level.
+    shift: bool,
     placed: Vec<Anchor>,
     draft: Option<DrawingShape>,
     events: Vec<Event>,
@@ -276,6 +280,8 @@ impl Chart {
             crosshair: None,
             drag: Drag::None,
             drawings: Vec::new(),
+            tool_style: DrawingStyle::default(),
+            shift: false,
             selected: None,
             tool: None,
             placed: Vec::new(),
@@ -532,11 +538,20 @@ impl Chart {
     }
 
     pub fn set_tool(&mut self, tool: Option<DrawingKind>) {
+        self.set_tool_styled(tool, DrawingStyle::default());
+    }
+
+    pub fn set_tool_styled(&mut self, tool: Option<DrawingKind>, style: DrawingStyle) {
         self.tool = tool;
+        self.tool_style = style;
         self.placed.clear();
         self.draft = None;
         self.drag = Drag::None;
         self.touch();
+    }
+
+    pub fn set_shift(&mut self, shift: bool) {
+        self.shift = shift;
     }
 
     pub fn tool(&self) -> Option<DrawingKind> {
@@ -1210,7 +1225,8 @@ impl Chart {
             (Some(a), Some(b)) => (time_to_logical(&self.times, b.time)? - time_to_logical(&self.times, a.time)?).round() as i64,
             _ => 0,
         };
-        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, bars })
+        let last = self.candles.last().map(|c| c.close);
+        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, bars, scale: pane.scale, precision: self.precision(), last })
     }
 
     // ------------------------------------------------------------------ legend
@@ -1309,7 +1325,7 @@ impl Chart {
         let id = self.selected?;
         let shape = self.drawings.iter().find(|d| d.id == Some(id)).filter(|d| d.kind != DrawingKind::Brush)?;
         let placed = self.place(shape, false)?;
-        let hit = placed.points.iter().position(|p| (p.0 - x).hypot(p.1 - y) <= HANDLE_HIT)?;
+        let hit = drawings::handles(&placed).iter().position(|p| (p.0 - x).hypot(p.1 - y) <= HANDLE_HIT)?;
         Some((id, hit))
     }
 
@@ -1322,13 +1338,53 @@ impl Chart {
     }
 
     fn move_anchor(&mut self, id: i64, index: usize, x: f32, y: f32) {
-        let Some(anchor) = self.anchor_at(x, y) else { return };
+        let Some(mut anchor) = self.anchor_at(x, y) else { return };
+        let shift = self.shift;
         if let Some(shape) = self.drawings.iter_mut().find(|d| d.id == Some(id)) {
-            if let Some(point) = shape.points.get_mut(index) {
-                *point = anchor;
+            if shape.kind.is_position() && shape.points.len() == 3 {
+                // Left-edge handles set the three prices, the right one the width.
+                let p = &mut shape.points;
+                let mut left = p.iter().map(|a| a.time).fold(f64::INFINITY, f64::min);
+                let mut right = p.iter().map(|a| a.time).fold(f64::NEG_INFINITY, f64::max);
+                match index {
+                    0 => {
+                        p[0].price = anchor.price;
+                        if anchor.time < right {
+                            left = anchor.time;
+                        }
+                    }
+                    1 => p[1].price = anchor.price,
+                    2 => p[2].price = anchor.price,
+                    _ if anchor.time > left => right = anchor.time,
+                    _ => {}
+                }
+                p[0].time = left;
+                p[1].time = right;
+                p[2].time = right;
+            } else {
+                // Shift keeps a line level with its other end.
+                if shift && index < 2 && matches!(shape.kind, DrawingKind::Trendline | DrawingKind::Channel | DrawingKind::Measure | DrawingKind::Fib) {
+                    if let Some(other) = shape.points.get(1 - index) {
+                        anchor.price = other.price;
+                    }
+                }
+                if let Some(point) = shape.points.get_mut(index) {
+                    *point = anchor;
+                }
             }
         }
         self.touch();
+    }
+
+    /// With Shift held, the next anchor of a line sits level with the one before.
+    fn constrain(&self, kind: DrawingKind, before: &[Anchor], mut a: Anchor) -> Anchor {
+        let lines = matches!(kind, DrawingKind::Trendline | DrawingKind::Path | DrawingKind::Fib | DrawingKind::Measure) || (kind == DrawingKind::Channel && before.len() == 1);
+        if self.shift && lines {
+            if let Some(prev) = before.last() {
+                a.price = prev.price;
+            }
+        }
+        a
     }
 
     /// Shift a whole drawing by a pointer move: along the bars, and by the same
@@ -1353,9 +1409,10 @@ impl Chart {
 
     fn drawing_at(&self, x: f32, y: f32) -> Option<i64> {
         let (mut best, mut best_distance) = (None, HIT_TOLERANCE);
+        let plot = self.panes.first()?.plot;
         for d in &self.drawings {
             let Some(placed) = self.place(d, false) else { continue };
-            let distance = distance_to_drawing(d.kind.as_str(), &placed.points, (x, y), &FIB_LEVELS);
+            let distance = drawings::distance(&placed, (x, y), plot);
             // `<=`: later drawings are painted on top, so the visible one wins a tie.
             if distance <= best_distance {
                 best_distance = distance;
@@ -1389,8 +1446,8 @@ impl Chart {
 
     fn draft_with(&mut self, kind: DrawingKind, extra: Option<Anchor>) {
         let mut points = self.placed.clone();
-        points.extend(extra);
-        self.draft = Some(DrawingShape { id: None, kind, points, label: None });
+        points.extend(extra.map(|a| self.constrain(kind, &self.placed, a)));
+        self.draft = Some(DrawingShape { style: self.tool_style.clone(), ..DrawingShape::new(None, kind, points) });
     }
 
     pub fn pointer_move(&mut self, x: f32, y: f32) {
@@ -1439,8 +1496,9 @@ impl Chart {
                     if let Some(end) = self.anchor_at(x, y) {
                         let mut points = self.placed.clone();
                         points.push(start);
+                        let end = self.constrain(kind, &points, end);
                         points.push(end);
-                        self.draft = Some(DrawingShape { id: None, kind, points, label: None });
+                        self.draft = Some(DrawingShape { style: self.tool_style.clone(), ..DrawingShape::new(None, kind, points) });
                     }
                 }
                 self.drag = Drag::Draw { kind, start, start_px, moved };
@@ -1495,7 +1553,7 @@ impl Chart {
                 }
             }
             // With a tool armed, a drag places its anchors in one gesture.
-            Zone::Plot(0) if !matches!(self.tool, Some(DrawingKind::Text) | Some(DrawingKind::Path)) => match (self.tool, self.anchor_at(x, y)) {
+            Zone::Plot(0) if !matches!(self.tool, Some(DrawingKind::Text | DrawingKind::Path | DrawingKind::Long | DrawingKind::Short)) => match (self.tool, self.anchor_at(x, y)) {
                 (Some(kind), Some(start)) => Drag::Draw { kind, start, start_px: (x, y), moved: false },
                 _ => Drag::None,
             },
@@ -1532,6 +1590,7 @@ impl Chart {
                         points.push(end);
                     } else {
                         points.push(start);
+                        let end = self.constrain(kind, &points, end);
                         points.push(end);
                     }
                     if points.len() >= kind.arity() {
@@ -1572,6 +1631,11 @@ impl Chart {
             Some(DrawingKind::Brush) => {}
             Some(tool) => {
                 let Some(anchor) = self.anchor_at(x, y).filter(|_| on_price) else { return };
+                if tool.is_position() {
+                    self.place_position(tool, x, y);
+                    return;
+                }
+                let anchor = self.constrain(tool, &self.placed, anchor);
                 self.placed.push(anchor);
                 if tool.open_ended() || self.placed.len() < tool.arity() {
                     // The draft repeats the newest anchor so it has something to
@@ -1584,6 +1648,23 @@ impl Chart {
                 self.finish_tool();
             }
         }
+    }
+
+    /// A position lands whole on one click, as on TradingView: the entry where
+    /// clicked, stop and target an equal distance either side, some bars wide.
+    fn place_position(&mut self, tool: DrawingKind, x: f32, y: f32) {
+        let reach = 60.0;
+        let (up, down) = (y - reach, y + reach);
+        let (stop_y, target_y) = if tool == DrawingKind::Long { (down, up) } else { (up, down) };
+        let right = x + ((self.time.bar_spacing * 20.0) as f32).max(120.0);
+        let (Some(entry), Some(stop), Some(target), Some(edge)) = (self.anchor_at(x, y), self.anchor_at(x, stop_y), self.anchor_at(x, target_y), self.anchor_at(right, y)) else { return };
+        // On the instrument's ticks, as a trader would type them.
+        let scale = 10f64.powi(self.precision() as i32);
+        let tick = |p: f64| (p * scale).round() / scale;
+        let points = vec![Anchor { price: tick(entry.price), ..entry }, Anchor { time: edge.time, price: tick(stop.price) }, Anchor { time: edge.time, price: tick(target.price) }];
+        self.placed.clear();
+        self.events.push(Event::DrawingCreated { kind: tool, points });
+        self.finish_tool();
     }
 
     fn finish_path(&mut self) -> bool {
@@ -2139,7 +2220,7 @@ mod tests {
     fn clicking_a_level_selects_it_and_delete_asks_to_remove_it() {
         let mut c = chart();
         let price = c.panes[0].scale.price(180.0);
-        c.set_drawings(vec![DrawingShape { id: Some(7), kind: DrawingKind::Horizontal, points: vec![Anchor { time: c.times[10], price }], label: None }]);
+        c.set_drawings(vec![DrawingShape::new(Some(7), DrawingKind::Horizontal, vec![Anchor { time: c.times[10], price }])]);
         c.render(1_800_000_000_000);
         click(&mut c, 50.0, 183.0);
         assert_eq!(c.take_events(), vec![Event::SelectionChanged(Some(7))]);
@@ -2209,7 +2290,7 @@ mod tests {
     fn a_drawing_moves_by_dragging_it_and_reshapes_by_its_handles() {
         let mut c = chart();
         let (a, b) = (Anchor { time: c.times[400], price: c.panes[0].scale.price(200.0) }, Anchor { time: c.times[450], price: c.panes[0].scale.price(150.0) });
-        c.set_drawings(vec![DrawingShape { id: Some(3), kind: DrawingKind::Trendline, points: vec![a, b], label: None }]);
+        c.set_drawings(vec![DrawingShape::new(Some(3), DrawingKind::Trendline, vec![a, b])]);
         c.render(1_800_000_000_000);
 
         let (mx, my) = ((c.time.x(400.0) + c.time.x(450.0)) as f32 / 2.0, 175.0);
@@ -2246,6 +2327,66 @@ mod tests {
         let Some(Event::DrawingCreated { kind, points }) = events.first().cloned() else { panic!("{events:?}") };
         assert_eq!((kind, points.len()), (DrawingKind::Rect, 2));
         assert_eq!(c.tool(), None, "and the tool is done");
+    }
+
+    #[test]
+    fn shift_keeps_a_line_level_with_its_first_point() {
+        let mut c = chart();
+        c.set_tool(Some(DrawingKind::Trendline));
+        c.set_shift(true);
+        c.pointer_down(300.0, 200.0, 0);
+        c.pointer_up(300.0, 200.0);
+        c.pointer_down(420.0, 280.0, 0);
+        c.pointer_up(420.0, 280.0);
+        let events = c.take_events();
+        let Some(Event::DrawingCreated { points, .. }) = events.first() else { panic!("{events:?}") };
+        assert_eq!(points[0].price, points[1].price, "the second end sits at the first one's price");
+        assert!(points[1].time > points[0].time);
+    }
+
+    #[test]
+    fn a_position_lands_whole_on_one_click_and_its_handles_set_prices() {
+        let mut c = chart();
+        c.set_tool(Some(DrawingKind::Long));
+        c.pointer_down(300.0, 200.0, 0);
+        c.pointer_up(300.0, 200.0);
+        let events = c.take_events();
+        let Some(Event::DrawingCreated { kind, points }) = events.first().cloned() else { panic!("{events:?}") };
+        assert_eq!(kind, DrawingKind::Long);
+        let (entry, stop, target) = (points[0], points[1], points[2]);
+        assert!(stop.price < entry.price && target.price > entry.price, "a long's stop is below and its target above");
+        assert_eq!(stop.time, target.time, "the right edge is one time");
+        assert!(stop.time > entry.time);
+
+        c.set_drawings(vec![DrawingShape::new(Some(9), DrawingKind::Long, points)]);
+        c.set_selected(Some(9));
+        let placed = c.place(&c.drawings[0], false).unwrap();
+        let handles = drawings::handles(&placed);
+        assert_eq!(handles.len(), 4);
+        // The stop handle sits on the left edge and moves only the stop.
+        let (hx, hy) = handles[1];
+        c.pointer_down(hx, hy, 0);
+        c.pointer_move(hx + 50.0, hy + 20.0);
+        c.pointer_up(hx + 50.0, hy + 20.0);
+        let shape = &c.drawings[0];
+        assert!(shape.points[1].price < stop.price);
+        assert_eq!((shape.points[0], shape.points[2].price), (entry, target.price));
+        assert_eq!(shape.points[1].time, stop.time, "a price handle leaves the width alone");
+    }
+
+    #[test]
+    fn a_channel_is_picked_between_its_lines_and_offsets_by_its_third_point() {
+        let mut c = chart();
+        let a = c.anchor_at(200.0, 200.0).unwrap();
+        let b = c.anchor_at(400.0, 150.0).unwrap();
+        let third = c.anchor_at(300.0, 275.0).unwrap();
+        c.set_drawings(vec![DrawingShape::new(Some(4), DrawingKind::Channel, vec![a, b, third])]);
+        let placed = c.place(&c.drawings[0], false).unwrap();
+        let handles = drawings::handles(&placed);
+        // The third handle rides the middle of the parallel line: 100px below the first.
+        assert!((handles[2].0 - 300.0).abs() < 1.0 && (handles[2].1 - 275.0).abs() < 1.0, "{handles:?}");
+        assert_eq!(c.drawing_at(300.0, 230.0), Some(4), "inside the band");
+        assert_eq!(c.drawing_at(300.0, 330.0), None, "outside it");
     }
 
     #[test]

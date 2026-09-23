@@ -302,3 +302,62 @@ table.venues tr.off td { color: var(--dim); }
   .dialog { max-height: 88vh; max-height: 88dvh; }
   .backdrop { padding: 4vh 8px 8px; }
 }
+
+/* ---- drawing settings: TradingView's dialog, in this app's skin */
+.dsettings { position: absolute; top: 34px; right: 76px; z-index: 40; display: flex; flex-direction: column; width: 340px; max-width: calc(100% - 16px); max-height: calc(100% - 48px); border: 1px solid var(--border); background: var(--surface); box-shadow: 0 16px 48px #000c; outline: 0; font-size: 12px; }
+.dsettings > header { display: flex; align-items: center; padding: 8px 10px 4px 14px; cursor: move; user-select: none; }
+.dsettings > header .title { font-size: 14px; color: var(--text); }
+.dsettings > header .x { padding: 2px 6px; color: var(--dim); font-size: 13px; }
+.dsettings > header .x:hover { color: var(--primary); }
+.dtabs { display: flex; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.dtabs button { padding: 6px 0; color: var(--muted); border-bottom: 2px solid transparent; font-size: 12px; }
+.dtabs button.on { color: var(--text); border-bottom-color: var(--primary); }
+.dtabs button:hover { color: var(--text); }
+.dbody { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.drow { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.dlabel { flex: 0 0 104px; color: var(--muted); }
+.dctl { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.dcheck { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--text); cursor: pointer; }
+.dsection { margin-top: 4px; color: var(--dim); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.dnote { margin: 0; color: var(--dim); font-size: 11px; }
+.dinput { height: 26px; min-width: 0; width: 120px; padding: 0 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; }
+.dinput.narrow { width: 74px; }
+.dinput:focus { border-color: var(--primary); outline: 0; }
+.dinput:disabled { color: var(--dim); }
+.dtext { width: 100%; min-height: 60px; padding: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; resize: vertical; box-sizing: border-box; }
+.dtext:focus { border-color: var(--primary); outline: 0; }
+.dlevels { display: flex; flex-direction: column; gap: 4px; }
+.dlevel { display: flex; align-items: center; gap: 6px; }
+.dlevel .cb { display: inline-flex; width: 16px; }
+.dlevel .dinput.num { width: 78px; }
+.dlevel.off .dinput { opacity: 0.5; }
+.dsummary { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font-size: 11px; }
+.dsettings > footer { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.dtemplate { position: relative; }
+.dtemplate .menu.up { bottom: 30px; top: auto; left: 0; }
+.dbtn { height: 28px; padding: 0 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 12px; }
+.dbtn:hover { border-color: var(--muted); }
+.dbtn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+.dbtn.icon { width: 36px; padding: 0; font-size: 11px; }
+.dbtn.on { border-color: var(--primary); color: var(--primary); }
+.dcolor { position: relative; display: inline-flex; }
+.swatchbtn { width: 26px; height: 26px; border: 1px solid var(--border); background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#555 0 25%, #333 0 50%) 0 0 / 8px 8px; }
+.swatchbtn:hover { border-color: var(--muted); }
+.palette { position: fixed; z-index: 60; width: 232px; padding: 8px; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 28px #000c; }
+.palette .grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+.palette .grid button { aspect-ratio: 1; border: 1px solid #0006; }
+.palette .grid button.cur { outline: 2px solid var(--primary); outline-offset: 1px; }
+.palette .custom, .palette .opacity { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.palette .custom input { width: 26px; height: 22px; padding: 0; border: 1px solid var(--border); background: none; }
+.palette .opacity input { flex: 1; accent-color: var(--primary); }
+.dtoolbar { position: absolute; top: 6px; left: 50%; z-index: 7; display: flex; align-items: center; gap: 4px; transform: translateX(-50%); padding: 3px 4px 3px 8px; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 6px 20px #0009; font-size: 11px; }
+.dtoolbar .name { margin-right: 4px; color: var(--muted); white-space: nowrap; }
+.dtoolbar > button { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; color: var(--muted); }
+.dtoolbar > button:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
+.dtoolbar > button.del:hover { color: var(--bear); }
+.dtoolbar .swatchbtn { width: 22px; height: 22px; }
+.dtoolbar .dinput { height: 24px; }
+@media (max-width: 520px) {
+  .dsettings { right: 8px; left: 8px; width: auto; }
+  .dlabel { flex-basis: 84px; }
+}

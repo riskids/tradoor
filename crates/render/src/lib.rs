@@ -19,6 +19,6 @@ pub mod tpo;
 
 pub use chart::{Chart, Cursor, Event, Legend, StudyMeta};
 pub use color::Color;
-pub use drawings::{Anchor, DrawingKind, DrawingShape};
+pub use drawings::{Anchor, Dash, DrawingKind, DrawingShape, DrawingStyle, Level};
 pub use paint::{Align, Baseline, Batch, Frame, IconCmd, Rect, TextCmd};
 pub use theme::Theme;
