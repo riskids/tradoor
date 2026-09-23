@@ -26,6 +26,8 @@ pub struct Theme {
     /// Drawings are the reader's opinion and get a hue no computed series uses.
     pub drawing: Color,
     pub drawing_selected: Color,
+    /// Price alert lines and their axis tags.
+    pub alert: Color,
     pub drawing_fill: Color,
     pub handle: Color,
     pub risk: Color,
@@ -59,6 +61,7 @@ impl Default for Theme {
             study_palette: [Color::hex(0x7fb2ff), Color::hex(0xc58fff), Color::hex(0xffd166), Color::hex(0x4ecdc4), Color::hex(0xff8fab), Color::hex(0x9ae66e)],
             drawing: Color::hex(0xff5fd2),
             drawing_selected: Color::hex(0xffa8e6),
+            alert: Color::hex(0x22ab94),
             drawing_fill: Color::hex(0xff5fd2).with_alpha(26),
             handle: Color::hex(0xffffff),
             risk: Color::hex(0xd97161),
@@ -102,6 +105,7 @@ impl Theme {
             "labelBackground" => &mut self.label_background,
             "drawing" => &mut self.drawing,
             "drawingSelected" => &mut self.drawing_selected,
+            "alert" => &mut self.alert,
             "tpo" => &mut self.tpo,
             "tpoPoc" => &mut self.tpo_poc,
             _ => return false,

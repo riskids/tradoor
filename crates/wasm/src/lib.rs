@@ -323,6 +323,11 @@ impl ChartEngine {
                         set(&o, "type", "paneWeights");
                         set(&o, "value", value);
                     }
+                    Event::AlertMoved { id, price } => {
+                        set(&o, "type", "alertMoved");
+                        set(&o, "id", id as f64);
+                        set(&o, "price", price);
+                    }
                     Event::AutoScaleChanged(on) => {
                         set(&o, "type", "autoScale");
                         set(&o, "value", on);
@@ -347,7 +352,32 @@ impl ChartEngine {
             set(&values, &k, v);
         }
         set(&o, "values", values);
+        match l.cursor {
+            Some((y, price)) => {
+                let c = obj();
+                set(&c, "y", f64::from(y));
+                set(&c, "price", price);
+                set(&o, "cursor", c);
+            }
+            None => set(&o, "cursor", JsValue::NULL),
+        }
+        set(&o, "axisX", f64::from(l.axis_x));
+        match l.alert {
+            Some((id, y)) => {
+                let a = obj();
+                set(&a, "id", id as f64);
+                set(&a, "y", f64::from(y));
+                set(&o, "alert", a);
+            }
+            None => set(&o, "alert", JsValue::NULL),
+        }
         o.into()
+    }
+
+    /// The market's active price alerts, as `[id, price, id, price, …]`.
+    pub fn set_alerts(&mut self, flat: &[f64]) {
+        let alerts = flat.chunks_exact(2).filter(|c| c[1].is_finite() && c[1] > 0.0).map(|c| tradoor_render::chart::AlertLine { id: c[0] as i64, price: c[1] }).collect();
+        self.chart.set_alerts(alerts);
     }
 
     pub fn studies(&self) -> Array {

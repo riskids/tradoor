@@ -37,6 +37,12 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
   }
 }
 
+/** A call answered with no body (204): only its status matters. */
+async function send(path: string, init?: { method?: string; body?: unknown }): Promise<void> {
+  const { status, body } = await request<{ error?: unknown }>(path, init);
+  if (status >= 400) throw new ApiError(status, typeof body?.error === 'string' ? body.error : `request failed (${status})`);
+}
+
 async function json<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const { status, body } = await request<T>(path, init);
   if (status >= 400 || body === null) {
@@ -133,6 +139,32 @@ export type LiquidationStats =
   | { ticker: string; tracked: false; tickers: string[] }
   | { ticker: string; tracked: true; now: number; coverageFrom: number; windows: LiquidationWindow[]; venues: CollectorVenue[]; recent: LiquidationRow[] };
 
+export type AlertCondition = 'crossing' | 'crossing_up' | 'crossing_down' | 'greater' | 'less';
+
+export interface Alert {
+  id: number;
+  market: string;
+  condition: AlertCondition;
+  price: number;
+  message: string | null;
+  active: boolean;
+  createdAt: number;
+  triggeredAt: number | null;
+  triggerPrice: number | null;
+}
+
+/** One trigger, kept after its alert is edited or deleted. */
+export interface AlertLog {
+  id: number;
+  alertId: number | null;
+  market: string;
+  condition: AlertCondition;
+  price: number;
+  message: string | null;
+  time: number;
+  value: number;
+}
+
 export const api = {
   async health(): Promise<{ ok: boolean; db: boolean }> {
     const { body } = await request<{ ok: boolean; db: boolean }>('/api/health');
@@ -144,6 +176,14 @@ export const api = {
   updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null; style?: Style }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string, chart: ChartKind) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'DELETE' }),
+  alerts: () => json<{ alerts: Alert[]; log: AlertLog[] }>('/api/alerts'),
+  createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
+  updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
+  triggerAlert: (id: number, value: number) => json<{ alert: Alert; log: AlertLog | null }>(`/api/alerts/${id}`, { method: 'PATCH', body: { triggered: { value } } }),
+  deleteAlert: (id: number) => send(`/api/alerts/${id}`, { method: 'DELETE' }),
+  clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),
+  restartAlerts: () => json<{ restarted: number }>('/api/alerts/restart', { method: 'POST' }),
+  clearAlertLog: () => send('/api/alerts/log', { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {

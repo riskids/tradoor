@@ -21,6 +21,8 @@ import { liquidationVenues } from '../lib/liquidation-venues';
 import { zoneLabel } from '../lib/timezone';
 import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { symbolOf, venueLabel } from '../lib/markets';
+import { alertState, createAlert, deleteAlert, digitsFor, editAlert, titleOf } from '../lib/alerts';
+import { toast } from '../lib/toasts';
 import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
@@ -156,6 +158,33 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const price = () => {
     const p = lastPrice(id);
     return p && p.market === market() ? p : null;
+  };
+
+  // ---------------------------------------------------------------- alerts
+  // The market's active alerts, drawn by the engine as levels.
+  createEffect(() => {
+    const list = alertState.alerts.filter((a) => a.active && a.market === market()).map((a) => ({ id: a.id, price: a.price }));
+    send({ t: 'alerts', id: sid, list });
+  });
+  // The add-alert button and an alert's label stay while the pointer is on
+  // them, though the chart below has lost it by then.
+  const [overClock, setOverClock] = createSignal<{ y: number; price: number } | null>(null);
+  const [overAlert, setOverAlert] = createSignal<{ id: number; y: number } | null>(null);
+  const axisX = () => legend()?.axisX ?? 0;
+  // Not over an alert's line: its own label is there, with its own delete.
+  const clock = () => overClock() ?? (tool() === '' && !legend()?.alert && !overAlert() ? (legend()?.cursor ?? null) : null);
+  const hoveredAlert = () => {
+    const h = overAlert() ?? legend()?.alert ?? null;
+    const a = h && alertState.alerts.find((x) => x.id === h.id && x.active);
+    return a && h ? { alert: a, y: h.y } : null;
+  };
+  const addAlertAt = (price: number) => {
+    const digits = digitsFor(market(), price);
+    const rounded = Number(price.toFixed(digits));
+    createAlert(market(), 'crossing', rounded).then(
+      (a) => toast({ tone: 'info', title: 'Alert created', body: titleOf(a) }, 4_000),
+      (err) => toast({ tone: 'warn', title: 'Alert not created', body: errorText(err) }),
+    );
   };
 
   const local = (e: MouseEvent) => {
@@ -472,6 +501,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       case 'autoScale':
         setAutoScale(e.value);
         break;
+      case 'alertMoved':
+        editAlert(e.id, { price: e.price }).catch((err) => toast({ tone: 'warn', title: 'Alert not moved', body: errorText(err) }));
+        break;
       case 'needHistory':
         break;
     }
@@ -729,6 +761,49 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
           <Show when={editing() === null && selectedDrawing()}>
             {(d) => <DrawingToolbar drawing={d()} onRestyle={(patch) => restyle(d(), patch)} onSettings={() => setEditing(d().id)} onDelete={() => void deleteDrawing(d().id)} />}
+          </Show>
+          <Show when={clock()}>
+            {(c) => (
+              <button
+                class="alert-add"
+                style={{ left: `${axisX() - 22}px`, top: `${c().y - 9}px` }}
+                data-tip={`Add alert at ${formatPrice(c().price, digitsFor(market(), c().price))}`}
+                onPointerEnter={() => setOverClock(c())}
+                onPointerLeave={() => setOverClock(null)}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  addAlertAt(c().price);
+                  setOverClock(null);
+                }}
+              >
+                <Icon name="alarm" size={13} />
+              </button>
+            )}
+          </Show>
+          <Show when={hoveredAlert()}>
+            {(h) => (
+              <div
+                class="alert-label"
+                style={{ right: `${(box?.clientWidth ?? 0) - axisX() + 22}px`, top: `${h().y - 11}px` }}
+                onPointerEnter={() => setOverAlert({ id: h().alert.id, y: h().y })}
+                onPointerLeave={() => setOverAlert(null)}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <span>{titleOf(h().alert)}</span>
+                <button
+                  data-tip="Delete this alert"
+                  aria-label="Delete this alert"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOverAlert(null);
+                    deleteAlert(h().alert.id).catch((err) => toast({ tone: 'warn', title: 'Alert not deleted', body: errorText(err) }));
+                  }}
+                >
+                  <Icon name="trash" size={12} />
+                </button>
+              </div>
+            )}
           </Show>
           <div class="legend">
             <div class="line">

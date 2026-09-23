@@ -12,6 +12,12 @@ export interface Legend {
   volume: string;
   /** Formatted value per study line, keyed `studyId:lineKey`. */
   values: Record<string, string>;
+  /** The pointer over the price pane, and the price there. */
+  cursor: { y: number; price: number } | null;
+  /** Where the price axis starts, in CSS pixels from the chart's left. */
+  axisX: number;
+  /** The alert line under the pointer. */
+  alert: { id: number; y: number } | null;
 }
 
 export interface StudyLine {
@@ -67,7 +73,8 @@ export type ChartEvent =
   | { type: 'toolFinished' }
   | { type: 'needHistory'; before: number }
   | { type: 'paneWeights'; value: string }
-  | { type: 'autoScale'; value: boolean };
+  | { type: 'autoScale'; value: boolean }
+  | { type: 'alertMoved'; id: number; price: number };
 
 export interface ChartStatus {
   loading: boolean;
@@ -153,6 +160,8 @@ export type ToWorker =
   | { t: 'tool'; id: string; value: string; style: Record<string, string | number | boolean> }
   | { t: 'magnet'; id: string; value: MagnetMode }
   | { t: 'drawings'; id: string; list: DrawingShape[] }
+  /** The market's active price alerts. */
+  | { t: 'alerts'; id: string; list: { id: number; price: number }[] }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }

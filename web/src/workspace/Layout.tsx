@@ -5,6 +5,7 @@
 import { createSignal, For, lazy, Match, onCleanup, Show, Switch, untrack, type JSX } from 'solid-js';
 import { dragging, setDragging } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
+import { unread } from '../lib/alerts';
 import { Icon } from '../lib/icons';
 import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
@@ -15,6 +16,7 @@ import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, t
 
 // Side panels, fetched when a layout shows one: the chart and watchlist come first.
 const ValuesPanel = lazy(() => import('../panels/ValuesPanel').then((m) => ({ default: m.ValuesPanel })));
+const AlertsPanel = lazy(() => import('../panels/AlertsPanel').then((m) => ({ default: m.AlertsPanel })));
 const LiquidationsPanel = lazy(() => import('../panels/LiquidationsPanel').then((m) => ({ default: m.LiquidationsPanel })));
 
 /** Smallest a cell may be dragged to, in pixels. */
@@ -22,6 +24,7 @@ const MIN_CELL = 90;
 
 export function panelTitle(p: Panel): string {
   if (p.type === 'watchlist') return 'Watchlist';
+  if (p.type === 'alerts') return 'Alerts';
   const label = `${symbolOf(marketOf(p))} ${tfLabel(timeframeOf(p))}`;
   if (p.type === 'chart') return p.tpo ? `TPO · ${label}` : label;
   return `${PANEL_TITLE[p.type]} · ${label}`;
@@ -292,6 +295,9 @@ function Tab(props: { id: string; tabs: TabsNode }) {
         >
           <LinkButton panel={p()} />
           <span class="label">{panelTitle(p())}</span>
+          <Show when={p().type === 'alerts' && unread() > 0}>
+            <span class="al-badge">{unread()}</span>
+          </Show>
           <button
             class="close"
             data-tip="Close panel"
@@ -341,5 +347,7 @@ function PanelView(props: { panel: Panel }) {
       return <ValuesPanel panel={p} />;
     case 'liquidations':
       return <LiquidationsPanel panel={p} />;
+    case 'alerts':
+      return <AlertsPanel panel={p} />;
   }
 }

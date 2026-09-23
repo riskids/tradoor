@@ -35,6 +35,8 @@ const VERTICAL_PAN_SLOP: f32 = 24.0;
 const HIT_TOLERANCE: f32 = 8.0;
 /// A weak magnet takes a bar's open, high, low or close within this many pixels.
 const MAGNET_PX: f32 = 14.0;
+/// How near an alert's line the pointer must be to take it.
+const ALERT_HIT_PX: f32 = 4.0;
 
 /// TradingView's magnet: anchors placed or dragged land on a bar's open, high,
 /// low or close — when near one (weak, elsewhere on a whole tick) or always
@@ -76,6 +78,15 @@ pub enum Event {
     PaneWeightsChanged(String),
     /// Every pane follows the bars on screen again, or one stopped doing so.
     AutoScaleChanged(bool),
+    /// A price alert's line was dragged to a new price.
+    AlertMoved { id: i64, price: f64 },
+}
+
+/// An active price alert, drawn as a level across the price pane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AlertLine {
+    pub id: i64,
+    pub price: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +127,13 @@ pub struct Legend {
     pub volume: String,
     /// `(studyId:lineKey, formatted value)`.
     pub values: Vec<(String, String)>,
+    /// The pointer over the price pane: its y and the price there, for the
+    /// page's add-alert button on the price axis.
+    pub cursor: Option<(f32, f64)>,
+    /// Where the price axis starts.
+    pub axis_x: f32,
+    /// The alert line under the pointer, and its y.
+    pub alert: Option<(i64, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -166,6 +184,8 @@ enum Drag {
     /// Moving a whole drawing, or one of its anchors.
     Shape { id: i64, last: (f32, f32), moved: bool },
     Anchor { id: i64, index: usize, moved: bool },
+    /// Moving a price alert's level.
+    Alert { id: i64, moved: bool },
     /// Pressed with a tool armed: a drag places its next anchors in one gesture.
     Draw { kind: DrawingKind, start: Anchor, start_px: (f32, f32), moved: bool },
 }
@@ -242,6 +262,7 @@ pub struct Chart {
     panes: Vec<PaneView>,
     axis_width: f32,
     crosshair: Option<(f32, f32)>,
+    alerts: Vec<AlertLine>,
     drag: Drag,
     drawings: Vec<DrawingShape>,
     selected: Option<i64>,
@@ -297,6 +318,7 @@ impl Chart {
             panes: Vec::new(),
             axis_width: MIN_AXIS_WIDTH,
             crosshair: None,
+            alerts: Vec::new(),
             drag: Drag::None,
             drawings: Vec::new(),
             tool_style: DrawingStyle::default(),
@@ -519,6 +541,35 @@ impl Chart {
             self.tpo_settings = settings;
             self.touch();
         }
+    }
+
+    /// The active price alerts of this market.
+    pub fn set_alerts(&mut self, alerts: Vec<AlertLine>) {
+        // A line being dragged keeps the price under the pointer until it is let go.
+        if let Drag::Alert { id, .. } = self.drag {
+            if let Some(held) = self.alerts.iter().find(|a| a.id == id).copied() {
+                self.alerts = alerts.into_iter().map(|a| if a.id == id { held } else { a }).collect();
+                self.touch();
+                return;
+            }
+        }
+        if self.alerts != alerts {
+            self.alerts = alerts;
+            self.touch();
+        }
+    }
+
+    /// The alert line within a few pixels of (x, y) on the price pane.
+    pub fn alert_at(&self, x: f32, y: f32) -> Option<(i64, f32)> {
+        let pane = self.panes.first()?;
+        if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
+            return None;
+        }
+        self.alerts
+            .iter()
+            .map(|a| (a.id, pane.scale.y(a.price) as f32))
+            .filter(|(_, ay)| (ay - y).abs() <= ALERT_HIT_PX)
+            .min_by(|a, b| (a.1 - y).abs().total_cmp(&(b.1 - y).abs()))
     }
 
     /// Soft edges on slanted drawing lines — for a GPU surface; see `Frame::smooth`.
@@ -1120,6 +1171,23 @@ impl Chart {
             drawings::paint(f, &placed, price.plot, t);
         }
 
+        // Price alerts: a dotted level, solid while the pointer holds it, with a
+        // ring by the axis as TradingView marks them.
+        let held_alert = match self.drag {
+            Drag::Alert { id, .. } => Some(id),
+            _ => self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.alert_at(x, y)).map(|(id, _)| id),
+        };
+        for a in &self.alerts {
+            let y = f.snap(price.scale.y(a.price) as f32);
+            if held_alert == Some(a.id) {
+                f.hline(0.0, plot_w, y, 1.0, t.alert);
+            } else {
+                f.dashed_line(0.0, y, plot_w, y, 1.0, t.alert, 4.0, 3.0);
+            }
+            f.circle(plot_w - 10.0, y, 4.5, t.alert);
+            f.circle(plot_w - 10.0, y, 3.0, t.background);
+        }
+
         // ---- crosshair
         let hover = self.crosshair.filter(|(x, y)| *x >= 0.0 && *x < plot_w && *y >= 0.0 && *y < avail && !matches!(self.drag, Drag::Separator { .. }));
         let hover_slot = hover.and_then(|(x, _)| self.slot_at(x));
@@ -1156,6 +1224,9 @@ impl Chart {
         if self.timeframe.source().interval.ms().is_some() || self.timeframe.source().interval == Interval::Mo1 {
             let close_at = self.timeframe.end(self.timeframe.align(now));
             badges.push(Badge { pane: 0, y: last_y + badge_h, text: format_countdown(close_at - now), bg: t.countdown_background, fg: t.countdown_text });
+        }
+        for a in &self.alerts {
+            badges.push(Badge { pane: 0, y: price.scale.y(a.price) as f32, text: format_price(a.price, Some(p)), bg: t.alert, fg: t.alert.contrast_text() });
         }
         let last_value = |values: &[Option<f64>]| values.iter().rev().flatten().next().copied();
         if !self.hidden.contains("ema200") {
@@ -1371,6 +1442,12 @@ impl Chart {
             up: diff >= 0.0,
             volume: format!("Vol {}", format_turnover(b.volume)),
             values,
+            cursor: self
+                .crosshair
+                .filter(|(x, y)| matches!(self.drag, Drag::None) && *x >= 0.0 && *x < pane.plot.w && *y >= pane.plot.y && *y <= pane.plot.bottom())
+                .map(|(_, y)| (y, pane.scale.price(f64::from(y)))),
+            axis_x: pane.plot.w,
+            alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_at(x, y)),
         }
     }
 
@@ -1569,6 +1646,7 @@ impl Chart {
         match self.drag {
             Drag::Press { panning: true, .. } => Cursor::Grabbing,
             Drag::Shape { .. } | Drag::Anchor { .. } => Cursor::Move,
+            Drag::Alert { .. } => Cursor::NsResize,
             Drag::PriceAxis { .. } => Cursor::NsResize,
             Drag::TimeAxis { .. } => Cursor::ColResize,
             Drag::Separator { .. } => Cursor::RowResize,
@@ -1577,6 +1655,7 @@ impl Chart {
                 Zone::PriceAxis(_) => Cursor::NsResize,
                 Zone::TimeAxis => Cursor::ColResize,
                 Zone::Plot(0) if self.handle_at(x, y).is_some() => Cursor::Pointer,
+                Zone::Plot(0) if self.alert_at(x, y).is_some() => Cursor::NsResize,
                 Zone::Plot(0) if self.drawing_at(x, y).is_some() => Cursor::Move,
                 Zone::Plot(_) => Cursor::Crosshair,
                 Zone::Outside => Cursor::Default,
@@ -1621,6 +1700,16 @@ impl Chart {
             Drag::Separator { upper, last_y } => {
                 self.resize_panes(upper, y - last_y);
                 self.drag = Drag::Separator { upper, last_y: y };
+            }
+            Drag::Alert { id, .. } => {
+                if let Some(pane) = self.panes.first() {
+                    let step = 10f64.powi(-(self.precision() as i32));
+                    let price = (pane.scale.price(f64::from(y)) / step).round() * step;
+                    if let Some(a) = self.alerts.iter_mut().find(|a| a.id == id) {
+                        a.price = price;
+                    }
+                }
+                self.drag = Drag::Alert { id, moved: true };
             }
             Drag::Anchor { id, index, .. } => {
                 self.move_anchor(id, index, x, y);
@@ -1685,6 +1774,8 @@ impl Chart {
             Zone::Plot(0) if free => {
                 if let Some((id, index)) = self.handle_at(x, y) {
                     Drag::Anchor { id, index, moved: false }
+                } else if let Some((id, _)) = self.alert_at(x, y) {
+                    Drag::Alert { id, moved: false }
                 } else if let Some(id) = self.drawing_at(x, y) {
                     self.select(Some(id));
                     Drag::Shape { id, last: (x, y), moved: false }
@@ -1714,6 +1805,11 @@ impl Chart {
                 if points.len() >= DrawingKind::Brush.arity() {
                     self.events.push(Event::DrawingCreated { kind: DrawingKind::Brush, points });
                     self.finish_tool();
+                }
+            }
+            Drag::Alert { id, moved: true } => {
+                if let Some(a) = self.alerts.iter().find(|a| a.id == id) {
+                    self.events.push(Event::AlertMoved { id, price: a.price });
                 }
             }
             Drag::Anchor { id, moved: true, .. } | Drag::Shape { id, moved: true, .. } => {
@@ -2603,6 +2699,42 @@ mod tests {
         let handles = drawings::handles(&placed);
         // 100px below the main line at both ends, so its middle is at the third point.
         assert!((handles[2].0 - 300.0).abs() < 0.5 && (handles[2].1 - 390.0).abs() < 0.5, "{handles:?}");
+    }
+
+    #[test]
+    fn an_alert_line_is_found_under_the_pointer_and_dragged_to_a_new_price() {
+        let mut c = chart();
+        let level = c.anchor_at(300.0, 200.0).unwrap().price;
+        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.render(1_800_000_000_000);
+        assert_eq!(c.alert_at(300.0, 202.0).map(|(id, _)| id), Some(9));
+        assert_eq!(c.alert_at(300.0, 220.0), None);
+        c.pointer_move(300.0, 200.0);
+        assert_eq!(c.legend().alert.map(|(id, _)| id), Some(9), "the page is told which one is hovered");
+
+        c.pointer_down(300.0, 200.0, 0);
+        c.pointer_move(300.0, 260.0);
+        // A refresh from the page mid-drag does not snap it back.
+        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.pointer_up(300.0, 260.0);
+        let moved = c.take_events().into_iter().find_map(|e| match e {
+            Event::AlertMoved { id: 9, price } => Some(price),
+            _ => None,
+        });
+        let expected = c.anchor_at(300.0, 260.0).unwrap().price;
+        assert!(moved.is_some_and(|p| (p - expected).abs() < 0.01 * expected.abs()), "{moved:?} vs {expected}");
+        assert!(moved.unwrap() < level, "dragged down is lower");
+    }
+
+    #[test]
+    fn the_legend_reads_the_price_under_the_pointer() {
+        let mut c = chart();
+        c.pointer_move(300.0, 150.0);
+        let l = c.legend();
+        let (y, price) = l.cursor.unwrap();
+        assert_eq!(y, 150.0);
+        assert!((price - c.anchor_at(300.0, 150.0).unwrap().price).abs() < 1e-6);
+        assert!(l.axis_x > 900.0);
     }
 
     #[test]

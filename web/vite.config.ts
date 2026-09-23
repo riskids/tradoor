@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
-import { site } from './site';
+import { site } from './site.ts';
 
 declare const process: { env: Record<string, string | undefined> };
 

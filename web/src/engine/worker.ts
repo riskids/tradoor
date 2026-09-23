@@ -748,6 +748,9 @@ function handle(msg: ToWorker): void {
     case 'drawings':
       slot.engine.set_drawings(msg.list);
       break;
+    case 'alerts':
+      slot.engine.set_alerts(Float64Array.from(msg.list.flatMap((a) => [a.id, a.price])));
+      break;
     case 'selected':
       slot.engine.set_selected(msg.value ?? Number.NaN);
       break;

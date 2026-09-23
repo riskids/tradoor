@@ -26,6 +26,15 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
     ],
   },
   {
+    title: 'Alerts',
+    keys: [
+      ['clock by the price axis', 'Add a crossing alert at the price under the pointer'],
+      ['hover an alert line', 'Its name, with delete'],
+      ['drag an alert line', 'Move it to another price'],
+      ['Alerts panel', 'Every alert, Active or Stopped — Triggered: restart, edit, delete; the Log lists each trigger'],
+    ],
+  },
+  {
     title: 'Watchlist',
     keys: [
       ['right-click', 'Flag a market, add a section or a symbol'],

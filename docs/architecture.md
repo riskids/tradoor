@@ -89,6 +89,9 @@ The file format is described in [format.md](format.md).
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
+| `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
+| `PATCH DELETE /api/alerts/{id}` | edit, restart or record a trigger (which stops it and logs it); delete |
+| `POST /api/alerts/restart` · `DELETE /api/alerts/log` | restart every stopped alert; clear the log |
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 
@@ -100,6 +103,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 |---|---|
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
+| `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500) |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
@@ -114,7 +118,16 @@ instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
-Panels: chart, watchlist, values and liquidations. The watchlist streams each
+Panels: chart, watchlist, values, liquidations and alerts.
+
+Price alerts are rows per browser id, like drawings (`/api/alerts`); the
+browser watches the prices, each alert market's daily candle stream, and fires
+them — Crossing, Crossing Up or Down, Greater or Less Than — with a sound, a
+notice in the page and, when the tab is out of sight, a system notification.
+One tab watches, the one holding the `tradoor-alerts` Web Lock; the rest follow
+over a BroadcastChannel, and the server takes only the first trigger of an
+alert, so nothing fires twice. An alert fires while a tradoor tab is open
+somewhere; the chart draws each active one as a level to drag or delete. The watchlist streams each
 market's daily candle, so its change and volume run from 00:00 UTC as
 TradingView's do, not over the rolling 24 hours an exchange ticker reports. It
 is one ordered list in which `#Name` entries head sections; a section folds

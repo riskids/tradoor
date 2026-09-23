@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 import { assertEquals } from 'jsr:@std/assert@1';
-import { formatClock, formatDateTime, offsetLabel, offsetMinutes } from './timezone.ts';
+import { formatAlertTime, formatClock, formatDateTime, LOCAL_ZONE, offsetLabel, offsetMinutes } from './timezone.ts';
 
 // The module reads the chosen zone from the workspace; these tests pass zones in.
 
@@ -19,4 +19,13 @@ Deno.test('times are written in the zone chosen', () => {
   assertEquals(formatClock(at, 'UTC'), '10:19:05');
   assertEquals(formatDateTime(at, 'Asia/Kolkata'), '2026-09-16 15:49 UTC+5:30');
   assertEquals([offsetLabel(0), offsetLabel(420), offsetLabel(-210)], ['UTC', 'UTC+7', 'UTC-3:30']);
+});
+
+Deno.test('an alert is dated as TradingView dates it, in any zone setting', () => {
+  // Friday 18 September 2026, 16:06 UTC.
+  const t = Date.UTC(2026, 8, 18, 16, 6);
+  assertEquals(formatAlertTime(t, 'UTC'), "Fri 18 Sep '26 16:06");
+  assertEquals(formatAlertTime(t, 'Asia/Jakarta'), "Fri 18 Sep '26 23:06");
+  // The device's own zone is spelled `local`, which Intl does not accept by name.
+  assertEquals(typeof formatAlertTime(t, LOCAL_ZONE), 'string');
 });

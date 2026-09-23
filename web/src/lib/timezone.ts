@@ -80,3 +80,15 @@ export function formatDateTime(ms: number, zone = timeZone()): string {
   const p = parts(zone, ms);
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${zoneLabel(zone)}`;
 }
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** `Fri 18 Sep '26 23:06`, as TradingView dates an alert. */
+export function formatAlertTime(ms: number, zone = timeZone()): string {
+  const p = parts(zone, ms);
+  // The zone's own date, named by hand: `zone` may be `local`, which Intl does
+  // not know by name, and Intl spells some months differently by version.
+  const weekday = WEEKDAYS[new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day))).getUTCDay()];
+  return `${weekday} ${Number(p.day)} ${MONTHS[Number(p.month) - 1]} '${String(p.year).slice(-2)} ${p.hour}:${p.minute}`;
+}

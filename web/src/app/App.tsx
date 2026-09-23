@@ -13,6 +13,8 @@ import { Icon } from '../lib/icons';
 import { tabTitle } from '../lib/tab-title';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
+import { showAlertsPanel, startAlerts, unread } from '../lib/alerts';
+import { Toasts } from '../components/Toasts';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
 import { Layout, panelTitle } from '../workspace/Layout';
 import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
@@ -373,6 +375,7 @@ export function App() {
     const chart = targetChart();
     if (chart) focusPanel(chart.id);
     void syncWithServer();
+    startAlerts();
     addEventListener('keydown', onKeyDown);
     const off = onEngineFailure(setEngineError);
     onCleanup(() => {
@@ -394,6 +397,12 @@ export function App() {
         <span class="item dim">{doc.name}</span>
         <span class="spacer" />
         <Health />
+        <button class="item alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
+          <Icon name="alarm" size={13} />
+          <Show when={unread() > 0}>
+            <span class="al-badge">{unread()}</span>
+          </Show>
+        </button>
         <Clock />
         <button class="item" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
           <Icon name="settings" size={13} />
@@ -408,6 +417,7 @@ export function App() {
       </main>
       <StatusBar />
       <Overlays />
+      <Toasts />
     </div>
   );
 }

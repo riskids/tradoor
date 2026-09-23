@@ -13,7 +13,7 @@ const isSectionItem = (v: unknown): v is string => typeof v === 'string' && isSe
 import { isTimeframe } from '../lib/timeframes';
 
 /** What a new panel can be. `tpo` is a preset: a chart drawn as TPO profiles. */
-export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations';
+export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations' | 'alerts';
 
 /**
  * How TPO profiles are split, as Exocharts names it: one profile per UTC day,
@@ -28,8 +28,8 @@ export const TPO_SPLITS: readonly { value: string; label: string }[] = [
 export type LinkColor = 'green' | 'blue' | 'red' | 'yellow';
 
 export const LINK_COLORS: readonly LinkColor[] = ['green', 'blue', 'red', 'yellow'];
-export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values', 'liquidations'];
-export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values', liquidations: 'Liquidations' };
+export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values', 'liquidations', 'alerts'];
+export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values', liquidations: 'Liquidations', alerts: 'Alerts' };
 
 interface PanelBase {
   id: string;
@@ -75,7 +75,15 @@ export interface LiquidationsPanelState extends PanelBase {
   minUsd: number;
 }
 
-export type Panel = ChartPanelState | WatchlistPanelState | ValuesPanelState | LiquidationsPanelState;
+export type AlertSort = 'newest' | 'symbol' | 'state';
+
+export interface AlertsPanelState extends PanelBase {
+  type: 'alerts';
+  tab: 'alerts' | 'log';
+  sort: AlertSort;
+}
+
+export type Panel = ChartPanelState | WatchlistPanelState | ValuesPanelState | LiquidationsPanelState | AlertsPanelState;
 
 export interface SplitNode {
   kind: 'split';
@@ -134,6 +142,8 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
       return { ...base, type, minUsd: 0 };
+    case 'alerts':
+      return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
 }
 
@@ -145,6 +155,7 @@ export function defaultWorkspace(): WorkspaceDoc {
   const tpo = newPanel('tpo', group);
   const values = newPanel('values', group);
   const watchlist = newPanel('watchlist', group);
+  const alerts = newPanel('alerts', group);
   const links = {} as Record<LinkColor, LinkState>;
   for (const c of LINK_COLORS) links[c] = { market: DEFAULT_MARKET, timeframe: DEFAULT_TIMEFRAME };
   return {
@@ -164,10 +175,10 @@ export function defaultWorkspace(): WorkspaceDoc {
           sizes: [0.7, 0.3],
           children: [tabsFor(chart), { kind: 'split', id: uid('split'), dir: 'row', sizes: [0.62, 0.38], children: [tabsFor(tpo), tabsFor(values)] }],
         },
-        tabsFor(watchlist),
+        { kind: 'split', id: uid('split'), dir: 'column', sizes: [0.6, 0.4], children: [tabsFor(watchlist), tabsFor(alerts)] },
       ],
     },
-    panels: { [chart.id]: chart, [tpo.id]: tpo, [values.id]: values, [watchlist.id]: watchlist },
+    panels: { [chart.id]: chart, [tpo.id]: tpo, [values.id]: values, [watchlist.id]: watchlist, [alerts.id]: alerts },
     links,
     theme: {},
   };
@@ -208,6 +219,9 @@ function readPanel(id: string, raw: unknown): Panel | null {
     if (isObj(raw.flags)) {
       for (const [m, c] of Object.entries(raw.flags)) if (p.markets.includes(m) && typeof c === 'string' && FLAGS.includes(c)) p.flags[m] = c;
     }
+  } else if (p.type === 'alerts') {
+    if (raw.tab === 'log') p.tab = 'log';
+    if (raw.sort === 'symbol' || raw.sort === 'state') p.sort = raw.sort;
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;

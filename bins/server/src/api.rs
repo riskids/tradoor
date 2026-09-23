@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{catalog::Catalog, drawings, limits, liquidations, open_interest, relay, workspaces};
+use crate::{alerts, catalog::Catalog, drawings, limits, liquidations, open_interest, relay, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -93,6 +93,10 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/drawings", get(drawings::list).post(drawings::create).delete(drawings::clear))
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
         .route("/workspaces/{id}", get(workspaces::get).put(workspaces::put))
+        .route("/alerts", get(alerts::list).post(alerts::create).delete(alerts::clear))
+        .route("/alerts/restart", axum::routing::post(alerts::restart_all))
+        .route("/alerts/log", delete(alerts::clear_log))
+        .route("/alerts/{id}", delete(alerts::delete_one).patch(alerts::update))
         .route("/liquidations/{ticker}", get(liquidations::stats))
         .route("/liquidations/{ticker}/live", get(liquidations::live))
         .route("/open-interest", get(open_interest::candles))
