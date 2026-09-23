@@ -16,7 +16,7 @@ function Swatch(props: { name: string; label: string; fallback: string }) {
       <Show when={doc.theme[props.name]}>
         <button
           class="dim"
-          title="Back to the default"
+          data-tip="Back to the default"
           onClick={(e) => {
             e.preventDefault();
             setThemeValue(props.name, null);
@@ -87,7 +87,7 @@ export function Settings(props: { onClose(): void }) {
             <span class="name">Time zone</span>
             <select
               class="box wide"
-              title="Every time on the page — axis, crosshair, tape, clock. Daily and longer candles keep their exchange (UTC) dates."
+              data-tip="Every time on the page — axis, crosshair, tape, clock. Daily and longer candles keep their exchange (UTC) dates."
               onChange={(e) => setThemeValue(TIME_ZONE_KEY, e.currentTarget.value === LOCAL_ZONE ? null : e.currentTarget.value)}
             >
               <For each={zoneChoices()}>

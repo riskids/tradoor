@@ -68,10 +68,10 @@ export function ValuesPanel(props: { panel: ValuesPanelState }) {
         <TimeframeSelect value={timeframe()} onChange={(tf) => setPanelTimeframe(id, tf)} />
         <span class="sep" />
         <span class="caps">Profile&nbsp;</span>
-        <button class="tb" classList={{ on: props.panel.basis === 'volume' }} title="Levels weighted by volume traded at each price" onClick={() => patchPanel(id, { basis: 'volume' })}>
+        <button class="tb" classList={{ on: props.panel.basis === 'volume' }} data-tip="Levels weighted by volume traded at each price" onClick={() => patchPanel(id, { basis: 'volume' })}>
           Volume
         </button>
-        <button class="tb" classList={{ on: props.panel.basis === 'tpo' }} title="Levels weighted by time spent at each price" onClick={() => patchPanel(id, { basis: 'tpo' })}>
+        <button class="tb" classList={{ on: props.panel.basis === 'tpo' }} data-tip="Levels weighted by time spent at each price" onClick={() => patchPanel(id, { basis: 'tpo' })}>
           TPO
         </button>
         <span class="spacer" />
@@ -97,7 +97,7 @@ export function ValuesPanel(props: { panel: ValuesPanelState }) {
                         <td>{r.label}</td>
                         <td>
                           {r.value === null ? (
-                            <span class="warn" title="Not enough history for this period — unknown, not zero">
+                            <span class="warn" data-tip="Not enough history for this period — unknown, not zero">
                               no history
                             </span>
                           ) : (

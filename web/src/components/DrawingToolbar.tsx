@@ -14,14 +14,14 @@ export function DrawingToolbar(props: { drawing: Drawing; onRestyle(patch: Style
       <span class="name">{KIND_NAMES[d().kind] ?? d().kind}</span>
       <Show when={!['long', 'short', 'text', 'measure'].includes(d().kind)}>
         <ColorField value={String(d().style.color ?? defaultStyle(d().kind).color ?? '#2962ff')} onChange={(v) => props.onRestyle({ color: v })} title="Line colour" />
-        <select class="dinput narrow" title="Thickness" value={String(d().style.width ?? defaultStyle(d().kind).width ?? 1.5)} onChange={(e) => props.onRestyle({ width: Number(e.currentTarget.value) })}>
+        <select class="dinput narrow" data-tip="Thickness" value={String(d().style.width ?? defaultStyle(d().kind).width ?? 1.5)} onChange={(e) => props.onRestyle({ width: Number(e.currentTarget.value) })}>
           <For each={[1, 1.5, 2, 3, 4]}>{(w) => <option value={w}>{w}px</option>}</For>
         </select>
       </Show>
-      <button title="Settings (double-click the drawing)" disabled={d().id < 0} onClick={() => props.onSettings()}>
+      <button data-tip="Settings (double-click the drawing)" disabled={d().id < 0} onClick={() => props.onSettings()}>
         <Icon name="settings" size={13} />
       </button>
-      <button class="del" title="Delete (Delete)" onClick={() => props.onDelete()}>
+      <button class="del" data-tip="Delete (Delete)" onClick={() => props.onDelete()}>
         <Icon name="trash" size={13} />
       </button>
     </div>

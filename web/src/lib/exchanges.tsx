@@ -73,7 +73,7 @@ export function VenueTag(props: { market: string; name?: boolean; size?: number 
   const ref = () => parseMarket(props.market);
   const exchange = () => exchangeOfVenue(ref()?.venue ?? 'binance');
   return (
-    <span class="venue" title={ref() ? `${exchange().name} ${ref()!.venue.endsWith('perp') ? 'perpetual' : 'spot'}` : undefined}>
+    <span class="venue" data-tip={ref() ? `${exchange().name} ${ref()!.venue.endsWith('perp') ? 'perpetual' : 'spot'}` : undefined}>
       <ExchangeLogo exchange={exchange()} size={props.size} />
       {props.name ? <span class="venue-name">{exchange().name}</span> : null}
       <span class="kind">{ref()?.venue.endsWith('perp') ? 'PERP' : 'SPOT'}</span>

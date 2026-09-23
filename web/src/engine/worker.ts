@@ -729,6 +729,9 @@ function handle(msg: ToWorker): void {
     case 'tool':
       slot.engine.set_tool(msg.value, msg.style);
       break;
+    case 'magnet':
+      slot.engine.set_magnet(msg.value);
+      break;
     case 'drawings':
       slot.engine.set_drawings(msg.list);
       break;

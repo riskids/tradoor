@@ -18,7 +18,7 @@ use tradoor_core::live::{Kline, LiveBar, LiveFeed};
 use tradoor_core::studies::STUDIES;
 use tradoor_core::timeframe::fold;
 use tradoor_core::{ChartTimeframe, Interval};
-use tradoor_render::{Anchor, Chart, DrawingKind, DrawingShape, DrawingStyle, Event};
+use tradoor_render::{Anchor, Chart, DrawingKind, DrawingShape, DrawingStyle, Event, Magnet};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{candles, columns, get, obj, opt, set};
@@ -203,6 +203,15 @@ impl ChartEngine {
 
     pub fn set_shift(&mut self, shift: bool) {
         self.chart.set_shift(shift);
+    }
+
+    /// `off`, `weak` or `strong`.
+    pub fn set_magnet(&mut self, mode: &str) {
+        self.chart.set_magnet(match mode {
+            "weak" => Magnet::Weak,
+            "strong" => Magnet::Strong,
+            _ => Magnet::Off,
+        });
     }
 
     pub fn reset_view(&mut self) {

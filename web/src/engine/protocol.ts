@@ -115,6 +115,9 @@ export interface Calls {
 
 export type CallName = keyof Calls;
 
+/** Where drawing anchors are pulled: nowhere, a bar's price when near, or always. */
+export type MagnetMode = 'off' | 'weak' | 'strong';
+
 export type PointerKind = 'move' | 'down' | 'up' | 'leave' | 'dblclick';
 
 export type ToWorker =
@@ -136,6 +139,7 @@ export type ToWorker =
   | { t: 'paneWeights'; id: string; value: string }
   /** `style`: what the new drawing will look like, so its draft matches. */
   | { t: 'tool'; id: string; value: string; style: Record<string, string | number | boolean> }
+  | { t: 'magnet'; id: string; value: MagnetMode }
   | { t: 'drawings'; id: string; list: DrawingShape[] }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }

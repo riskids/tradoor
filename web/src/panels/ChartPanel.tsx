@@ -4,9 +4,9 @@
  * pointer input.
  */
 import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
-import { chartControllers, setOverlay } from '../app/ui';
+import { chartControllers, cycleMagnet, magnet, setOverlay, TOOL_KEYS } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
-import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
+import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
 import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
@@ -31,7 +31,7 @@ const OpenInterestSettings = lazy(() => import('../components/OpenInterestSettin
 const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
-  { kind: '', icon: 'pointer', title: 'Select and pan — click a drawing to select it, then Delete to remove it' },
+  { kind: '', icon: 'pointer', title: 'Select and pan (Esc) — click a drawing to select it, then Delete to remove it' },
   { kind: 'path', icon: 'path', title: 'Path — click each turn, then Enter or double-click to finish' },
   { kind: 'trendline', icon: 'trendline', title: 'Trendline — click the two ends; anchored to time and price' },
   { kind: 'horizontal', icon: 'horizontal', title: 'Horizontal level — one click, drawn edge to edge' },
@@ -45,6 +45,20 @@ const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: 'short', icon: 'short', title: 'Short position — click the entry; drag its handles to set stop, target and width' },
   { kind: 'brush', icon: 'brush', title: 'Brush — drag to draw freehand' },
 ];
+
+/** The tool's name with its Alt shortcut: `Trendline (Alt+T) — click the two ends…`. */
+const toolTip = (t: { kind: string; title: string }): string => {
+  const key = Object.entries(TOOL_KEYS).find(([, kind]) => kind === t.kind)?.[0];
+  if (!key) return t.title;
+  const [name, ...rest] = t.title.split(' — ');
+  return [`${name} (Alt+${key.slice(3)})`, ...rest].join(' — ');
+};
+
+const MAGNET_TIP: Record<MagnetMode, string> = {
+  off: 'Magnet off (Alt+G) — click for a weak magnet',
+  weak: 'Weak magnet (Alt+G) — anchors near a bar take its open, high, low or close; elsewhere a whole tick. Click for strong',
+  strong: 'Strong magnet (Alt+G) — anchors always take the nearest open, high, low or close. Click to turn it off',
+};
 
 /** What each click is for, in order — on a position tool the order is the meaning. */
 const TOOL_STEPS: Record<string, string> = {
@@ -185,6 +199,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     if (demoRate() > 0) send({ t: 'demoLiquidations', id: sid, perMinute: demoRate() });
     chartControllers.set(id, {
       key: (key) => call('key', { id: sid, key }),
+      tool: (kind) => {
+        if (offline() === null) setTool(tool() === kind ? '' : kind);
+      },
       resetView: () => send({ t: 'resetView', id: sid }),
       showRange: (days) => send({ t: 'range', id: sid, days }),
       undo,
@@ -230,6 +247,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const tpoOn = (key: string) => tpoValue(props.panel.tpoSettings, key) === '1';
   createEffect(() => send({ t: 'paneWeights', id: sid, value: props.panel.paneWeights }));
   createEffect(() => send({ t: 'tool', id: sid, value: tool(), style: tool() ? defaultStyle(tool()) : {} }));
+  createEffect(() => send({ t: 'magnet', id: sid, value: magnet() }));
   createEffect(() => send({ t: 'selected', id: sid, value: selected() }));
   // Every timeframe shows the market's drawings, bar those hidden on this one.
   createEffect(() => {
@@ -506,7 +524,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   return (
     <div class="panelcol" style={{ position: 'relative' }}>
       <div class="toolbar">
-        <button class="symbol" title="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
+        <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
           {symbolOf(market())}
           <Icon name="chevron" size={10} />
         </button>
@@ -514,28 +532,28 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <span class="sep" />
         <For each={FAVORITE_TIMEFRAMES}>
           {(tf) => (
-            <button class="tb num" classList={{ on: timeframe() === tf }} title={tfName(tf)} onClick={() => setPanelTimeframe(id, tf)}>
+            <button class="tb num" classList={{ on: timeframe() === tf }} data-tip={tfName(tf)} onClick={() => setPanelTimeframe(id, tf)}>
               {tfLabel(tf)}
             </button>
           )}
         </For>
         <Show when={!FAVORITE_TIMEFRAMES.includes(timeframe())}>
-          <button class="tb num on" title={tfName(timeframe())}>
+          <button class="tb num on" data-tip={tfName(timeframe())}>
             {tfLabel(timeframe())}
           </button>
         </Show>
-        <button ref={tfButton} class="tb" title="Every timeframe" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft : null))}>
+        <button ref={tfButton} class="tb" data-tip="Every timeframe" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft : null))}>
           <Icon name="chevron" size={11} />
         </button>
         <span class="sep" />
-        <button class="tb" title="Add an indicator" onClick={() => setOverlay({ kind: 'indicators', panelId: id })}>
+        <button class="tb" data-tip="Add an indicator" onClick={() => setOverlay({ kind: 'indicators', panelId: id })}>
           <Icon name="indicators" size={13} /> Indicators
           <Show when={studyCount() > 0}>
             <span class="dim">{studyCount()}</span>
           </Show>
         </button>
         <span class="sep" />
-        <select title="Candles, or TPO profiles — the candles are the brackets, the split is how long a profile runs" onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value })}>
+        <select data-tip="Candles, or TPO profiles — the candles are the brackets, the split is how long a profile runs" onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value })}>
           <option value="" selected={!split()}>
             Candles
           </option>
@@ -551,7 +569,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           <button
             ref={tpoButton}
             class="tb"
-            title="TPO quick settings"
+            data-tip="TPO quick settings"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setTpoMenu((v) => (v === null ? tpoButton.offsetLeft : null))}
           >
@@ -626,7 +644,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                       <button
                         class="num"
                         classList={{ cur: t.value === timeframe() }}
-                        title={t.live ? t.name : `${t.name} — folded from shorter bars; closed bars only`}
+                        data-tip={t.live ? t.name : `${t.name} — folded from shorter bars; closed bars only`}
                         onClick={() => {
                           setPanelTimeframe(id, t.value);
                           setTfMenu(null);
@@ -650,7 +668,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               <button
                 classList={{ on: tool() === t.kind }}
                 disabled={t.kind !== '' && offline() !== null}
-                title={t.kind !== '' && offline() ? `${t.title.split(' — ')[0]} — unavailable: drawings are saved on the tradoor server (${offline()})` : t.title}
+                data-tip={t.kind !== '' && offline() ? `${t.title.split(' — ')[0]} — unavailable: drawings are saved on the tradoor server (${offline()})` : toolTip(t)}
                 onClick={() => setTool(tool() === t.kind ? '' : t.kind)}
               >
                 <Icon name={t.icon} />
@@ -658,10 +676,14 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             )}
           </For>
           <hr />
+          <button class="magnet" classList={{ on: magnet() !== 'off', strong: magnet() === 'strong' }} data-tip={MAGNET_TIP[magnet()]} onClick={cycleMagnet}>
+            <Icon name="magnet" />
+          </button>
+          <hr />
           <button
             class="del"
             disabled={selected() === null}
-            title={selected() === null ? 'Select a drawing on the chart first' : 'Delete the selected drawing (Delete)'}
+            data-tip={selected() === null ? 'Select a drawing on the chart first' : 'Delete the selected drawing (Delete)'}
             onClick={() => {
               const s = selected();
               if (s !== null) void deleteDrawing(s);
@@ -669,7 +691,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           >
             <Icon name="trash" />
           </button>
-          <button class="del" disabled={drawings().length === 0} title={`Remove all ${drawings().length} drawings on this market, on every timeframe`} onClick={() => void clearDrawings()}>
+          <button class="del" disabled={drawings().length === 0} data-tip={`Remove all ${drawings().length} drawings on this market, on every timeframe`} onClick={() => void clearDrawings()}>
             <Icon name="eraser" />
           </button>
           <Show when={drawings().length > 0}>
@@ -822,14 +844,14 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       <div class="rangebar">
         <For each={RANGES}>
           {(r) => (
-            <button class="tb num" title={r.days === null ? 'Every loaded bar' : `Zoom to the last ${r.label}`} onClick={() => showRange(r.days)}>
+            <button class="tb num" data-tip={r.days === null ? 'Every loaded bar' : `Zoom to the last ${r.label}`} onClick={() => showRange(r.days)}>
               {r.label}
             </button>
           )}
         </For>
         <span class="spacer" />
-        <Show when={status().error}>{(err) => <span class="warn" title={err()}>▲ {err()} · </span>}</Show>
-        <span class="dim num" title={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : 'Candles from the exchange; this market is not archived here'}>
+        <Show when={status().error}>{(err) => <span class="warn" data-tip={err()}>▲ {err()} · </span>}</Show>
+        <span class="dim num" data-tip={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : 'Candles from the exchange; this market is not archived here'}>
           {status().loading ? 'loading… · ' : ''}
           {status().bars.toLocaleString('en-US')} bars{status().source ? ` · ${status().source}` : ''} · {zoneLabel()}
         </span>
@@ -837,18 +859,18 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <button
           class="tb"
           classList={{ on: autoScale() }}
-          title="Auto scale — the price axis follows the bars on screen. Dragging the chart up or down, or dragging the price axis, turns it off; click to turn it back on."
+          data-tip="Auto scale — the price axis follows the bars on screen. Dragging the chart up or down, or dragging the price axis, turns it off; click to turn it back on."
           onClick={() => send({ t: 'autoScale', id: sid })}
         >
           AUTO
         </button>
-        <button class="tb" classList={{ on: !props.panel.log }} title="Linear price axis" onClick={() => patchPanel(id, { log: false })}>
+        <button class="tb" classList={{ on: !props.panel.log }} data-tip="Linear price axis" onClick={() => patchPanel(id, { log: false })}>
           LIN
         </button>
-        <button class="tb" classList={{ on: props.panel.log }} title="Logarithmic price axis — equal percentage moves take equal space" onClick={() => patchPanel(id, { log: true })}>
+        <button class="tb" classList={{ on: props.panel.log }} data-tip="Logarithmic price axis — equal percentage moves take equal space" onClick={() => patchPanel(id, { log: true })}>
           LOG
         </button>
-        <button class="tb" title="Reset view — the last bars, every axis autoscaling" onClick={() => send({ t: 'resetView', id: sid })}>
+        <button class="tb" data-tip="Reset view — the last bars, every axis autoscaling" onClick={() => send({ t: 'resetView', id: sid })}>
           <Icon name="reset" size={11} />
         </button>
       </div>
@@ -886,17 +908,17 @@ function LayerRow(props: {
       <span class="btns" onPointerDown={(e) => e.stopPropagation()}>
         <Show when={props.onSettings}>
           {(open) => (
-            <button title="Settings" onClick={() => open()()}>
+            <button data-tip="Settings" onClick={() => open()()}>
               <Icon name="settings" size={12} />
             </button>
           )}
         </Show>
-        <button title={props.off ? 'Show' : 'Hide'} onClick={() => props.onToggle()}>
+        <button data-tip={props.off ? 'Show' : 'Hide'} onClick={() => props.onToggle()}>
           <Icon name={props.off ? 'eyeOff' : 'eye'} size={12} />
         </button>
         <Show when={props.onRemove}>
           {(remove) => (
-            <button title="Remove" onClick={() => remove()()}>
+            <button data-tip="Remove" onClick={() => remove()()}>
               <Icon name="close" size={12} />
             </button>
           )}
@@ -931,7 +953,7 @@ function LiveBadge(props: { market: string; live: LiveStatus; price: LastPrice |
   };
   const state = () => LIVE[props.live];
   return (
-    <span class="live" title={state().title}>
+    <span class="live" data-tip={state().title}>
       <span class={`state ${state().tone}`} classList={{ pulse: props.live === 'connecting' || props.live === 'retrying' }}>
         {state().label}
       </span>

@@ -131,7 +131,7 @@ export function DrawingSettings(props: {
       <header onPointerDown={startDrag}>
         <span class="title">{KIND_NAMES[kind] ?? kind}</span>
         <span class="spacer" />
-        <button class="x" title="Cancel (esc)" onClick={cancel}>
+        <button class="x" data-tip="Cancel (esc)" onClick={cancel}>
           ✕
         </button>
       </header>
@@ -266,11 +266,11 @@ export function DrawingSettings(props: {
           <For each={points()}>
             {(p, i) => (
               <Row label={`#${i() + 1}`}>
-                <input class="dinput num" type="number" step="any" title="Price" value={Number(p.price.toFixed(props.precision))} onChange={(e) => setPrice(i(), Number(e.currentTarget.value))} />
+                <input class="dinput num" type="number" step="any" data-tip="Price" value={Number(p.price.toFixed(props.precision))} onChange={(e) => setPrice(i(), Number(e.currentTarget.value))} />
                 <input
                   class="dinput"
                   type="datetime-local"
-                  title="Time, UTC"
+                  data-tip="Time, UTC"
                   value={new Date(p.time).toISOString().slice(0, 16)}
                   onChange={(e) => setTime(i(), Date.parse(`${e.currentTarget.value}:00Z`))}
                 />
@@ -387,7 +387,7 @@ function ExtendRow(props: { flag(key: string, fallback?: boolean): boolean; set(
 
 function ArrowToggle(props: { title: string; on: boolean; left?: boolean; onChange(v: boolean): void }) {
   return (
-    <button class="dbtn icon" classList={{ on: props.on }} title={`${props.title}: ${props.on ? 'arrow' : 'normal'}`} onClick={() => props.onChange(!props.on)}>
+    <button class="dbtn icon" classList={{ on: props.on }} data-tip={`${props.title}: ${props.on ? 'arrow' : 'normal'}`} onClick={() => props.onChange(!props.on)}>
       {props.left ? (props.on ? '←—' : '○—') : props.on ? '—→' : '—○'}
     </button>
   );
@@ -397,7 +397,7 @@ function LineField(props: { color: string; width: number; dash: Dash; set(key: s
   return (
     <>
       <ColorField value={props.color} onChange={(v) => props.set('color', v)} />
-      <select class="dinput narrow" title="Thickness" value={String(props.width)} onChange={(e) => props.set('width', Number(e.currentTarget.value))}>
+      <select class="dinput narrow" data-tip="Thickness" value={String(props.width)} onChange={(e) => props.set('width', Number(e.currentTarget.value))}>
         <For each={[1, 1.5, 2, 3, 4]}>{(w) => <option value={w}>{w}px</option>}</For>
       </select>
       <DashSelect value={props.dash} onChange={(v) => props.set('dash', v)} />
@@ -407,7 +407,7 @@ function LineField(props: { color: string; width: number; dash: Dash; set(key: s
 
 function DashSelect(props: { value: Dash; onChange(v: Dash): void }) {
   return (
-    <select class="dinput narrow" title="Line style" value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as Dash)}>
+    <select class="dinput narrow" data-tip="Line style" value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as Dash)}>
       <option value="solid">───</option>
       <option value="dashed">- - -</option>
       <option value="dotted">·····</option>

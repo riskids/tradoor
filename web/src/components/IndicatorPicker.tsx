@@ -57,7 +57,7 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
                     {/* Open interest is set in its own dialog, from the legend, once added. */}
                     <For each={d.kind === 'oi' ? [] : d.params}>
                       {(p, i) => (
-                        <label class="field" title={p.name}>
+                        <label class="field" data-tip={p.name}>
                           {p.name}
                           <input
                             class="box num"
@@ -74,7 +74,7 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
                         </label>
                       )}
                     </For>
-                    <button class="btn" disabled={added()} title={added() ? 'Already on the chart' : `Add ${idOf(d)}`} onClick={() => props.onAdd(idOf(d))}>
+                    <button class="btn" disabled={added()} data-tip={added() ? 'Already on the chart' : `Add ${idOf(d)}`} onClick={() => props.onAdd(idOf(d))}>
                       <Icon name="plus" size={11} />
                       {added() ? 'Added' : 'Add'}
                     </button>

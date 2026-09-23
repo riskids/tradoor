@@ -106,7 +106,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
         </span>
         <span class="dim">{props.panel.markets.length}</span>
         <span class="spacer" />
-        <button class="iconbtn" title="Add a market" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
+        <button class="iconbtn" data-tip="Add a market" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
           <Icon name="plus" size={13} />
         </button>
       </div>
@@ -124,7 +124,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                 class="wl-row"
                 classList={{ active: market === current() }}
                 draggable={true}
-                title={`${symbolOf(market)} · ${venueLabel(market)}${t()?.quoteVolume ? ` · 24h turnover ${formatTurnover(t()!.quoteVolume)}` : ''}`}
+                data-tip={`${symbolOf(market)} · ${venueLabel(market)}${t()?.quoteVolume ? ` · 24h turnover ${formatTurnover(t()!.quoteVolume)}` : ''}`}
                 onClick={() => open(market)}
                 onDragStart={(e) => {
                   e.dataTransfer?.setData('text/plain', market);
@@ -152,7 +152,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                 </span>
                 <button
                   class="x"
-                  title="Remove from the watchlist"
+                  data-tip="Remove from the watchlist"
                   onClick={(e) => {
                     e.stopPropagation();
                     remove(market);

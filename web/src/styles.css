@@ -361,3 +361,28 @@ table.venues tr.off td { color: var(--dim); }
   .dsettings { right: 8px; left: 8px; width: auto; }
   .dlabel { flex-basis: 84px; }
 }
+
+/* The drawing magnet: lit when on, and marked when strong. */
+.rail button.magnet.on { background: color-mix(in oklab, var(--primary) 22%, transparent); color: var(--primary); }
+.rail button.magnet.strong { background: var(--primary); color: var(--bg); }
+
+/* The app's tooltips (lib/tooltip.ts), in place of the browser's. */
+.tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+  max-width: min(340px, calc(100vw - 12px));
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-3, var(--surface));
+  box-shadow: 0 6px 20px #000a;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s;
+}
+.tip.show { opacity: 1; }

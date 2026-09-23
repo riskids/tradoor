@@ -215,13 +215,13 @@ function TabsView(props: { node: TabsNode }) {
           <For each={props.node.panels}>{(id) => <Tab id={id} tabs={props.node} />}</For>
         </div>
         <div class="tabtools">
-          <button class="iconbtn" title="Add a panel to this group" onPointerDown={(e) => e.stopPropagation()} onClick={() => setAdding((v) => !v)}>
+          <button class="iconbtn" data-tip="Add a panel to this group" onPointerDown={(e) => e.stopPropagation()} onClick={() => setAdding((v) => !v)}>
             <Icon name="plus" size={12} />
           </button>
-          <button class="iconbtn" title="Split right" onClick={() => addHere(active()?.type ?? 'chart', 'right')}>
+          <button class="iconbtn" data-tip="Split right" onClick={() => addHere(active()?.type ?? 'chart', 'right')}>
             <Icon name="splitRight" size={12} />
           </button>
-          <button class="iconbtn" title="Split down" onClick={() => addHere(active()?.type ?? 'chart', 'bottom')}>
+          <button class="iconbtn" data-tip="Split down" onClick={() => addHere(active()?.type ?? 'chart', 'bottom')}>
             <Icon name="splitDown" size={12} />
           </button>
           <Show when={adding()}>
@@ -272,7 +272,7 @@ function Tab(props: { id: string; tabs: TabsNode }) {
           class="tab"
           classList={{ active: props.tabs.active === props.id }}
           draggable={true}
-          title={`${panelTitle(p())} — drag onto another group, or its edge, to dock it there`}
+          data-tip={`${panelTitle(p())} — drag onto another group, or its edge, to dock it there`}
           onDragStart={(e) => {
             e.dataTransfer?.setData('text/plain', props.id);
             if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
@@ -292,7 +292,7 @@ function Tab(props: { id: string; tabs: TabsNode }) {
           <span class="label">{panelTitle(p())}</span>
           <button
             class="close"
-            title="Close panel"
+            data-tip="Close panel"
             onClick={(e) => {
               e.stopPropagation();
               update((d) => removePanel(d, props.id));
@@ -317,7 +317,7 @@ function LinkButton(props: { panel: Panel }) {
       class="linkbtn"
       classList={{ linked: props.panel.link !== null }}
       style={props.panel.link ? { color: `var(--link-${props.panel.link})` } : undefined}
-      title={props.panel.link ? `Linked to the ${props.panel.link} group — click for the next group` : 'Not linked — click to join a group that shares one market'}
+      data-tip={props.panel.link ? `Linked to the ${props.panel.link} group — click for the next group` : 'Not linked — click to join a group that shares one market'}
       onClick={(e) => {
         e.stopPropagation();
         setPanelLink(props.panel.id, next());

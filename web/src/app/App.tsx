@@ -32,7 +32,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { chartControllers, closeOverlay, isTypingTarget, overlay, setOverlay } from './ui';
+import { chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, overlay, setOverlay, TOOL_KEYS } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -130,6 +130,25 @@ function onKeyDown(e: KeyboardEvent): void {
     setOverlay(overlay()?.kind === 'palette' ? null : { kind: 'palette' });
     return;
   }
+  // Alt + a letter: a drawing tool on the chart in use, or the magnet.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !overlay() && !isTypingTarget(e.target)) {
+    // The physical key; some input sources report only the letter.
+    const code = e.code || (/^[a-z]$/i.test(e.key) ? `Key${e.key.toUpperCase()}` : '');
+    if (code === MAGNET_KEY) {
+      e.preventDefault();
+      cycleMagnet();
+      return;
+    }
+    const kind = TOOL_KEYS[code];
+    const focus = focusedPanel();
+    const chart = focus?.type === 'chart' ? focus : targetChart();
+    const control = kind && chart ? chartControllers.get(chart.id) : undefined;
+    if (kind && control) {
+      e.preventDefault();
+      control.tool(kind);
+      return;
+    }
+  }
   // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: undo and redo drawings on the chart in use.
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key.toLowerCase();
@@ -223,7 +242,7 @@ function Health() {
       down: 'The tradoor server is not reachable. Charts still load from the exchanges; drawings and layout sync are paused.',
     })[state()];
   return (
-    <span class="item" title={title()}>
+    <span class="item" data-tip={title()}>
       <span class="health" classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }}>
         <Icon name="server" size={12} />
       </span>
@@ -237,7 +256,7 @@ function Clock() {
   const timer = setInterval(() => setNow(Date.now()), 1000);
   onCleanup(() => clearInterval(timer));
   return (
-    <span class="item num" title={`Times are shown in ${timeZone() === LOCAL_ZONE ? `your local time (${deviceZone()})` : timeZone()} — change it in Settings`}>
+    <span class="item num" data-tip={`Times are shown in ${timeZone() === LOCAL_ZONE ? `your local time (${deviceZone()})` : timeZone()} — change it in Settings`}>
       <span class="dim">{zoneLabel()}</span>
       {formatClock(now())}
     </span>
@@ -354,20 +373,20 @@ export function App() {
     <div class="shell">
       <header class="topbar">
         <div class="brand">TRADOOR</div>
-        <button class="item" title="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
+        <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={12} /> Commands <kbd>/</kbd>
         </button>
-        <button class="item" title="Open a chart beside the focused panel" onClick={() => addNear('chart', 'right')}>
+        <button class="item" data-tip="Open a chart beside the focused panel" onClick={() => addNear('chart', 'right')}>
           <Icon name="plus" size={12} /> Chart
         </button>
         <span class="item dim">{doc.name}</span>
         <span class="spacer" />
         <Health />
         <Clock />
-        <button class="item" title="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
+        <button class="item" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
           <Icon name="settings" size={13} />
         </button>
-        <button class="item" title="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
+        <button class="item" data-tip="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
           ?
         </button>
       </header>

@@ -9,7 +9,7 @@ import { TIMEFRAMES } from '../lib/timeframes';
 export function MarketButton(props: { panelId: string; market: string; venue?: boolean }) {
   return (
     <>
-      <button class="symbol" title="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: props.panelId, initial: '' })}>
+      <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: props.panelId, initial: '' })}>
         {symbolOf(props.market)}
         <Icon name="chevron" size={10} />
       </button>
@@ -20,7 +20,7 @@ export function MarketButton(props: { panelId: string; market: string; venue?: b
 
 export function TimeframeSelect(props: { value: string; onChange(tf: string): void; allow?: (tf: string) => boolean }) {
   return (
-    <select title="Timeframe" onChange={(e) => props.onChange(e.currentTarget.value)}>
+    <select data-tip="Timeframe" onChange={(e) => props.onChange(e.currentTarget.value)}>
       <For each={TIMEFRAMES.filter((t) => props.allow?.(t.value) ?? true)}>
         {(t) => (
           <option value={t.value} selected={t.value === props.value}>

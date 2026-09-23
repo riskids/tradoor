@@ -14,7 +14,7 @@ export function TpoSettings(props: { panel: ChartPanelState; onClose(): void }) 
   const set = (key: string, v: string) => patchPanel(props.panel.id, { tpoSettings: withTpoValue(props.panel.tpoSettings, key, v) });
 
   const Control = (p: { field: TpoField }) => (
-    <label class="swatch" title={p.field.hint}>
+    <label class="swatch" data-tip={p.field.hint}>
       <Switch>
         <Match when={p.field.kind === 'bool'}>
           <input type="checkbox" checked={value(p.field.key) === '1'} onChange={(e) => set(p.field.key, e.currentTarget.checked ? '1' : '0')} />
@@ -87,7 +87,7 @@ export function TpoSettings(props: { panel: ChartPanelState; onClose(): void }) 
         <header>
           <span class="title caps">TPO settings</span>
           <span class="spacer" />
-          <button class="dim" title="Every TPO option back to its default" onClick={() => patchPanel(props.panel.id, { tpoSettings: {} })}>
+          <button class="dim" data-tip="Every TPO option back to its default" onClick={() => patchPanel(props.panel.id, { tpoSettings: {} })}>
             reset
           </button>
           <button class="x" onClick={() => props.onClose()}>

@@ -36,6 +36,10 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
       ['double-click', 'Finish a path'],
       ['double-click a drawing', 'Its settings: style, text, coordinates, visibility'],
       ['shift', 'Keep a line level while drawing or dragging it'],
+      ['Alt T / H / J / R', 'Trendline, horizontal level, ray, zone'],
+      ['Alt C / F / N / M', 'Parallel channel, fib, note, measure'],
+      ['Alt L / S / B / P', 'Long, short, brush, path'],
+      ['Alt G', 'Magnet: off, weak, strong'],
     ],
   },
   {

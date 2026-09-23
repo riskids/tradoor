@@ -106,7 +106,7 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
           <div class="chips">
             <For each={LIVE_EXCHANGES}>
               {(x) => (
-                <button class="xchip" classList={{ on: exchange() === x.id }} title={exchange() === x.id ? `Showing ${x.name} only — click for every exchange` : `${x.name} only`} onClick={() => setExchange((e) => (e === x.id ? null : x.id))}>
+                <button class="xchip" classList={{ on: exchange() === x.id }} data-tip={exchange() === x.id ? `Showing ${x.name} only — click for every exchange` : `${x.name} only`} onClick={() => setExchange((e) => (e === x.id ? null : x.id))}>
                   <ExchangeLogo exchange={x} size={14} />
                 </button>
               )}

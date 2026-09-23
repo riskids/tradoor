@@ -33,6 +33,18 @@ const HANDLE_HIT: f32 = 9.0;
 /// price axis over, so a sideways pan with a shaky hand keeps autoscale.
 const VERTICAL_PAN_SLOP: f32 = 24.0;
 const HIT_TOLERANCE: f32 = 8.0;
+/// A weak magnet takes a bar's open, high, low or close within this many pixels.
+const MAGNET_PX: f32 = 14.0;
+
+/// TradingView's magnet: anchors placed or dragged land on a bar's open, high,
+/// low or close — when near one (weak, elsewhere on a whole tick) or always
+/// (strong) — and on the bar's own time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Magnet {
+    Off,
+    Weak,
+    Strong,
+}
 const BRUSH_SAMPLE: f32 = 3.0;
 /// How long a liquidation stays in the feed before it is gone.
 const LIQUIDATION_TTL: i64 = 5_000;
@@ -238,6 +250,8 @@ pub struct Chart {
     tool_style: DrawingStyle,
     /// Shift held: lines being drawn or reshaped stay level.
     shift: bool,
+    /// Where drawing anchors are pulled: nowhere, a bar's price when near it, or always.
+    magnet: Magnet,
     placed: Vec<Anchor>,
     draft: Option<DrawingShape>,
     events: Vec<Event>,
@@ -285,6 +299,7 @@ impl Chart {
             drawings: Vec::new(),
             tool_style: DrawingStyle::default(),
             shift: false,
+            magnet: Magnet::Off,
             selected: None,
             tool: None,
             placed: Vec::new(),
@@ -586,6 +601,10 @@ impl Chart {
 
     pub fn set_shift(&mut self, shift: bool) {
         self.shift = shift;
+    }
+
+    pub fn set_magnet(&mut self, magnet: Magnet) {
+        self.magnet = magnet;
     }
 
     pub fn tool(&self) -> Option<DrawingKind> {
@@ -1395,6 +1414,28 @@ impl Chart {
         (time.is_finite() && price.is_finite()).then_some(Anchor { time, price })
     }
 
+    /// An anchor where the pointer is, pulled by the magnet when it is on.
+    fn point_at(&self, x: f32, y: f32) -> Option<Anchor> {
+        let raw = self.anchor_at(x, y)?;
+        if self.magnet == Magnet::Off {
+            return Some(raw);
+        }
+        let pane = self.panes.first()?;
+        let scale = 10f64.powi(self.precision() as i32);
+        let on_tick = Anchor { price: (raw.price * scale).round() / scale, ..raw };
+        let n = self.total_bars();
+        let slot = self.time.logical(f64::from(x)).round();
+        // Past the last bar there is no candle to hold on to: a whole tick is all.
+        if n == 0 || slot < 0.0 || slot > (n - 1) as f64 {
+            return Some(on_tick);
+        }
+        let Some(bar) = self.bar(slot as usize) else { return Some(on_tick) };
+        let distance = |p: f64| (pane.scale.y(p) as f32 - y).abs();
+        let nearest = [bar.open, bar.high, bar.low, bar.close].into_iter().min_by(|a, b| distance(*a).total_cmp(&distance(*b))).unwrap_or(raw.price);
+        let price = if self.magnet == Magnet::Strong || distance(nearest) <= MAGNET_PX { nearest } else { on_tick.price };
+        Some(Anchor { time: bar.time as f64, price })
+    }
+
     /// An anchor handle of the selected drawing under the pointer.
     fn handle_at(&self, x: f32, y: f32) -> Option<(i64, usize)> {
         let id = self.selected?;
@@ -1413,7 +1454,7 @@ impl Chart {
     }
 
     fn move_anchor(&mut self, id: i64, index: usize, x: f32, y: f32) {
-        let Some(mut anchor) = self.anchor_at(x, y) else { return };
+        let Some(mut anchor) = self.point_at(x, y) else { return };
         let shift = self.shift;
         if let Some(shape) = self.drawings.iter_mut().find(|d| d.id == Some(id)) {
             if shape.kind.is_position() && shape.points.len() == 3 {
@@ -1568,7 +1609,7 @@ impl Chart {
             Drag::Draw { kind, start, start_px, moved } => {
                 let moved = moved || (x - start_px.0).hypot(y - start_px.1) > CLICK_SLOP;
                 if moved {
-                    if let Some(end) = self.anchor_at(x, y) {
+                    if let Some(end) = self.point_at(x, y) {
                         let mut points = self.placed.clone();
                         points.push(start);
                         let end = self.constrain(kind, &points, end);
@@ -1590,7 +1631,7 @@ impl Chart {
             Drag::None => {}
         }
         if let Some(tool) = self.tool.filter(|t| *t != DrawingKind::Brush && !self.placed.is_empty() && !matches!(self.drag, Drag::Draw { .. })) {
-            if let Some(a) = self.anchor_at(x, y) {
+            if let Some(a) = self.point_at(x, y) {
                 self.draft_with(tool, Some(a));
             }
         }
@@ -1628,7 +1669,7 @@ impl Chart {
                 }
             }
             // With a tool armed, a drag places its anchors in one gesture.
-            Zone::Plot(0) if !matches!(self.tool, Some(DrawingKind::Text | DrawingKind::Path | DrawingKind::Long | DrawingKind::Short)) => match (self.tool, self.anchor_at(x, y)) {
+            Zone::Plot(0) if !matches!(self.tool, Some(DrawingKind::Text | DrawingKind::Path | DrawingKind::Long | DrawingKind::Short)) => match (self.tool, self.point_at(x, y)) {
                 (Some(kind), Some(start)) => Drag::Draw { kind, start, start_px: (x, y), moved: false },
                 _ => Drag::None,
             },
@@ -1659,7 +1700,7 @@ impl Chart {
             Drag::Draw { kind, start, start_px, moved } => {
                 if !moved || (x - start_px.0).hypot(y - start_px.1) <= CLICK_SLOP {
                     self.click(x, y);
-                } else if let Some(end) = self.anchor_at(x, y) {
+                } else if let Some(end) = self.point_at(x, y) {
                     let mut points = std::mem::take(&mut self.placed);
                     if kind.arity() == 1 {
                         points.push(end);
@@ -1705,7 +1746,7 @@ impl Chart {
             None => self.select(if on_price { self.drawing_at(x, y) } else { None }),
             Some(DrawingKind::Brush) => {}
             Some(tool) => {
-                let Some(anchor) = self.anchor_at(x, y).filter(|_| on_price) else { return };
+                let Some(anchor) = self.point_at(x, y).filter(|_| on_price) else { return };
                 if tool.is_position() {
                     self.place_position(tool, x, y);
                     return;
@@ -1732,7 +1773,7 @@ impl Chart {
         let (up, down) = (y - reach, y + reach);
         let (stop_y, target_y) = if tool == DrawingKind::Long { (down, up) } else { (up, down) };
         let right = x + ((self.time.bar_spacing * 20.0) as f32).max(120.0);
-        let (Some(entry), Some(stop), Some(target), Some(edge)) = (self.anchor_at(x, y), self.anchor_at(x, stop_y), self.anchor_at(x, target_y), self.anchor_at(right, y)) else { return };
+        let (Some(entry), Some(stop), Some(target), Some(edge)) = (self.point_at(x, y), self.anchor_at(x, stop_y), self.anchor_at(x, target_y), self.anchor_at(right, y)) else { return };
         // On the instrument's ticks, as a trader would type them.
         let scale = 10f64.powi(self.precision() as i32);
         let tick = |p: f64| (p * scale).round() / scale;
@@ -2414,6 +2455,28 @@ mod tests {
         let _ = c.render(0);
         c.set_candles(c.candles[..3].to_vec());
         let _ = c.render(0);
+    }
+
+    #[test]
+    fn the_magnet_pulls_anchors_onto_a_bars_prices() {
+        let mut c = chart();
+        let _ = c.render(0);
+        let i = c.candles.len() - 10;
+        let bar = c.candles[i];
+        let x = c.time.x(i as f64) as f32 + 1.0;
+        let y_close = c.panes[0].scale.y(bar.close) as f32;
+        c.set_magnet(Magnet::Weak);
+        let near = c.point_at(x, y_close + 3.0).unwrap();
+        assert_eq!((near.time, near.price), (bar.open_time as f64, bar.close), "a weak magnet takes the close three pixels off");
+        let far_y = c.panes[0].scale.y(bar.high) as f32 - 80.0;
+        let far = c.point_at(x, far_y).unwrap();
+        assert!(far.price > bar.high, "far from the bar a weak magnet leaves the price");
+        let ticks = 10f64.powi(c.precision() as i32);
+        assert_eq!(far.price, (far.price * ticks).round() / ticks, "on a whole tick");
+        c.set_magnet(Magnet::Strong);
+        assert_eq!(c.point_at(x, far_y).unwrap().price, bar.high, "a strong magnet always takes the nearest");
+        c.set_magnet(Magnet::Off);
+        assert_eq!(c.point_at(x, far_y), c.anchor_at(x, far_y));
     }
 
     #[test]

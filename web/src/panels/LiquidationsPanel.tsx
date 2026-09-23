@@ -113,13 +113,13 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
       <div class="toolbar">
         <MarketButton panelId={id} market={market()} venue={false} />
         {/* Each exchange's mark, faded while it is not connected; the full status on hover. */}
-        <button class="tb liq-venues" title="Exchanges" onMouseEnter={() => showVenues(true)} onMouseLeave={() => showVenues(false)} onClick={() => setVenuesOpen((v) => !v)}>
+        <button class="tb liq-venues" data-tip="Exchanges" onMouseEnter={() => showVenues(true)} onMouseLeave={() => showVenues(false)} onClick={() => setVenuesOpen((v) => !v)}>
           <For each={(tape()?.venues() ?? []).filter((v) => v.market)}>
             {(v) => <span classList={{ down: (tape()?.status[v.venue] ?? 'connecting') !== 'live' }}><ExchangeLogo exchange={exchangeOfVenue(v.venue)} size={12} /></span>}
           </For>
         </button>
         <span class="spacer" />
-        <select title="Smallest hit to show in the tape" onChange={(e) => patchPanel(id, { minUsd: Number(e.currentTarget.value) })}>
+        <select data-tip="Smallest hit to show in the tape" onChange={(e) => patchPanel(id, { minUsd: Number(e.currentTarget.value) })}>
           <For each={[0, 1_000, 10_000, 100_000]}>
             {(v) => (
               <option value={v} selected={min() === v}>
@@ -177,7 +177,7 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
                   const state = (): VenueStatus => tape()?.status[v.venue] ?? 'connecting';
                   return (
                     <tr classList={{ off: !v.market }}>
-                      <td title={v.market ? `${exchange.name} ${symbolOf(v.market)} perpetual` : `${exchange.name} does not list ${ticker()}`}>
+                      <td data-tip={v.market ? `${exchange.name} ${symbolOf(v.market)} perpetual` : `${exchange.name} does not list ${ticker()}`}>
                         <ExchangeLogo exchange={exchange} size={12} />
                         <span>{exchange.name}</span>
                         {/* Named only where the exchange spells the ticker its own way. */}
@@ -212,7 +212,7 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
                 {(h) => (
                   <tr classList={{ big: h.usd >= 100_000 }}>
                     <td class="num dim">{formatClock(h.time)}</td>
-                    <td class={h.long ? 'bear' : 'bull'} title={`${exchangeOfVenue(h.venue).name} · ${h.long ? 'a long' : 'a short'} closed out`}>
+                    <td class={h.long ? 'bear' : 'bull'} data-tip={`${exchangeOfVenue(h.venue).name} · ${h.long ? 'a long' : 'a short'} closed out`}>
                       <ExchangeLogo exchange={exchangeOfVenue(h.venue)} size={11} />
                       {h.long ? 'LONG' : 'SHORT'}
                     </td>
@@ -234,7 +234,7 @@ function Total(props: { w: LiquidationWindow; partial: boolean }) {
   const total = () => props.w.longUsd + props.w.shortUsd;
   const longShare = () => (total() > 0 ? (props.w.longUsd / total()) * 100 : 50);
   return (
-    <div class="win" title={`${props.w.longs} longs and ${props.w.shorts} shorts closed out in the last ${props.w.window}${props.partial ? ' — the server has not listened that long yet' : ''}`}>
+    <div class="win" data-tip={`${props.w.longs} longs and ${props.w.shorts} shorts closed out in the last ${props.w.window}${props.partial ? ' — the server has not listened that long yet' : ''}`}>
       <span class="caps dim">
         {props.w.window.toUpperCase()}
         {props.partial ? '*' : ''}

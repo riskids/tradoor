@@ -59,7 +59,7 @@ export function ColorField(props: { value: string; onChange(v: string): void; ti
       <button
         ref={button}
         class="swatchbtn"
-        title={props.title ?? 'Colour'}
+        data-tip={props.title ?? 'Colour'}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={toggle}
         style={{ '--c': props.value || 'transparent' }}
@@ -68,7 +68,7 @@ export function ColorField(props: { value: string; onChange(v: string): void; ti
         <div class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
           <div class="grid">
             <For each={PALETTE}>
-              {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} title={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}
+              {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} data-tip={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}
             </For>
           </div>
           <label class="custom">

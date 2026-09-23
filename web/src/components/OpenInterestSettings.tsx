@@ -52,7 +52,7 @@ export function OpenInterestSettings(props: { id: string; onApply(id: string): v
       <header>
         <span class="title">Aggregated Open Interest</span>
         <span class="spacer" />
-        <button class="x" title="Cancel (esc)" onClick={() => props.onClose()}>
+        <button class="x" data-tip="Cancel (esc)" onClick={() => props.onClose()}>
           ✕
         </button>
       </header>
