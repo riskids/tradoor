@@ -65,6 +65,7 @@ impl ChartEngine {
         let text = text::TextLayer::new(text_canvas)?;
         chart.set_char_width(text.char_width(chart.theme().font_px));
         let gl = if flat { gl::Surface::Flat(gl::Flat::new(gl_canvas)?) } else { gl::Surface::new(gl_canvas)? };
+        chart.set_smooth_lines(matches!(gl, gl::Surface::Gpu(_)));
         Ok(Self { chart, gl, text })
     }
 

@@ -521,6 +521,14 @@ impl Chart {
         }
     }
 
+    /// Soft edges on slanted drawing lines — for a GPU surface; see `Frame::smooth`.
+    pub fn set_smooth_lines(&mut self, on: bool) {
+        if self.frame.smooth != on {
+            self.frame.smooth = on;
+            self.touch();
+        }
+    }
+
     pub fn set_log_scale(&mut self, log: bool) {
         if log != self.log_scale {
             self.log_scale = log;
@@ -2579,6 +2587,22 @@ mod tests {
         assert!((handles[2].0 - 300.0).abs() < 1.0 && (handles[2].1 - 275.0).abs() < 1.0, "{handles:?}");
         assert_eq!(c.drawing_at(300.0, 230.0), Some(4), "inside the band");
         assert_eq!(c.drawing_at(300.0, 330.0), None, "outside it");
+    }
+
+    #[test]
+    fn a_channel_stays_parallel_on_a_log_scale() {
+        let mut c = chart();
+        c.set_log_scale(true);
+        c.render(1_800_000_000_000);
+        // Across most of the pane's prices, where log and linear part ways most.
+        let a = c.anchor_at(200.0, 520.0).unwrap();
+        let b = c.anchor_at(400.0, 60.0).unwrap();
+        let third = c.anchor_at(300.0, 390.0).unwrap();
+        c.set_drawings(vec![DrawingShape::new(Some(4), DrawingKind::Channel, vec![a, b, third])]);
+        let placed = c.place(&c.drawings[0], false).unwrap();
+        let handles = drawings::handles(&placed);
+        // 100px below the main line at both ends, so its middle is at the third point.
+        assert!((handles[2].0 - 300.0).abs() < 0.5 && (handles[2].1 - 390.0).abs() < 0.5, "{handles:?}");
     }
 
     #[test]

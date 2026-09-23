@@ -87,6 +87,11 @@ pub struct Frame {
     pub batches: Vec<Batch>,
     pub texts: Vec<TextCmd>,
     pub icons: Vec<IconCmd>,
+    /// Soften slanted drawing lines with a one-pixel fade at their edges. For a
+    /// GPU surface, where multisampling alone leaves a thin slanted line
+    /// stepped and beaded; a 2D canvas smooths its own edges, and fills a
+    /// triangle in one colour, so it is not asked.
+    pub smooth: bool,
 }
 
 impl Frame {
@@ -178,6 +183,54 @@ impl Frame {
         self.triangle((x1 + nx, y1 + ny), (x1 - nx, y1 - ny), (x0 - nx, y0 - ny), color);
     }
 
+    /// A line with soft edges where `smooth` is on and it is slanted; see `smooth`.
+    pub fn smooth_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) {
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len = dx.hypot(dy);
+        if !self.smooth || dx == 0.0 || dy == 0.0 || len == 0.0 || !len.is_finite() {
+            self.line(x0, y0, x1, y1, width, color);
+            return;
+        }
+        // One device pixel of fade each side, taken from the solid core so the
+        // line covers as much as it did: core + two half-covered fades = width.
+        let fade = 1.0 / self.dpr;
+        let solid = if width >= fade { color } else { color.with_alpha((f32::from(color.a) * width / fade) as u8) };
+        let core = ((width - fade) / 2.0).max(0.0);
+        let (ux, uy) = (-dy / len, dx / len);
+        if core > 0.0 {
+            self.line(x0, y0, x1, y1, core * 2.0, solid);
+        }
+        let clear = solid.with_alpha(0);
+        for side in [1.0f32, -1.0] {
+            let (ix, iy) = (ux * core * side, uy * core * side);
+            let (ox, oy) = (ux * (core + fade) * side, uy * (core + fade) * side);
+            let (a, b) = ((x0 + ix, y0 + iy), (x1 + ix, y1 + iy));
+            let (c, d) = ((x0 + ox, y0 + oy), (x1 + ox, y1 + oy));
+            self.vertex(a.0, a.1, solid);
+            self.vertex(b.0, b.1, solid);
+            self.vertex(c.0, c.1, clear);
+            self.vertex(b.0, b.1, solid);
+            self.vertex(d.0, d.1, clear);
+            self.vertex(c.0, c.1, clear);
+        }
+    }
+
+    /// `dashed_line` with `smooth_line`'s edges.
+    pub fn smooth_dashed_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color, dash: f32, gap: f32) {
+        let len = (x1 - x0).hypot(y1 - y0);
+        if !self.smooth || x0 == x1 || y0 == y1 || len == 0.0 || !len.is_finite() {
+            self.dashed_line(x0, y0, x1, y1, width, color, dash, gap);
+            return;
+        }
+        let (ux, uy) = ((x1 - x0) / len, (y1 - y0) / len);
+        let mut d = 0.0;
+        while d < len {
+            let e = (d + dash).min(len);
+            self.smooth_line(x0 + ux * d, y0 + uy * d, x0 + ux * e, y0 + uy * e, width, color);
+            d += dash + gap;
+        }
+    }
+
     pub fn dashed_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color, dash: f32, gap: f32) {
         let len = (x1 - x0).hypot(y1 - y0);
         if len == 0.0 || !len.is_finite() {
@@ -252,6 +305,25 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_smooth_slanted_line_fades_out_at_its_edges() {
+        let mut f = Frame::default();
+        f.begin(100.0, 100.0, 1.0, Color::hex(0));
+        let white = Color::hex(0xffffff);
+        f.smooth_line(10.0, 10.0, 90.0, 60.0, 2.0, white);
+        assert_eq!(f.vertex_count(), 6, "plain until asked");
+
+        f.begin(100.0, 100.0, 1.0, Color::hex(0));
+        f.smooth = true;
+        f.smooth_line(10.0, 10.0, 90.0, 60.0, 2.0, white);
+        assert_eq!(f.vertex_count(), 18, "a core and a fade each side");
+        let clear = f.colors.chunks(4).filter(|c| c[3] == 0).count();
+        assert_eq!(clear, 6, "the fades' outer edges are transparent");
+        f.begin(100.0, 100.0, 1.0, Color::hex(0));
+        f.smooth_line(10.0, 50.0, 90.0, 50.0, 2.0, white);
+        assert_eq!(f.vertex_count(), 6, "a level line is crisp already");
+    }
 
     #[test]
     fn batches_split_on_clip_changes_only() {

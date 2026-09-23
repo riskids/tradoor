@@ -309,12 +309,14 @@ impl Placed<'_> {
 
     /// A channel's offset from its first line to its second, in price, and the
     /// price of level `f` at each end of the first line.
+    /// The channel line `f` of the way from the main line to the third point's.
+    /// Offset on screen, not in price, so the lines stay parallel as drawn on a
+    /// log scale too — as TradingView keeps them.
     fn channel_line(&self, f: f64) -> Option<((f32, f32), (f32, f32))> {
         let (a, b, c) = (self.points.first()?, self.points.get(1)?, self.points.get(2)?);
-        let (pa, pb, pc) = (self.price(0), self.price(1), self.price(2));
-        let t = if (b.0 - a.0).abs() > f32::EPSILON { f64::from((c.0 - a.0) / (b.0 - a.0)) } else { 0.0 };
-        let offset = pc - (pa + (pb - pa) * t);
-        Some(((a.0, self.y(pa + offset * f)), (b.0, self.y(pb + offset * f))))
+        let t = if (b.0 - a.0).abs() > f32::EPSILON { (c.0 - a.0) / (b.0 - a.0) } else { 0.0 };
+        let offset = (c.1 - (a.1 + (b.1 - a.1) * t)) * f as f32;
+        Some(((a.0, a.1 + offset), (b.0, b.1 + offset)))
     }
 
     /// A position box: left and right edges, and the entry, stop and target rows.
@@ -358,10 +360,10 @@ fn extend(a: (f32, f32), b: (f32, f32), plot: Rect, left: bool, right: bool) -> 
 
 fn stroke(frame: &mut Frame, a: (f32, f32), b: (f32, f32), width: f32, color: Color, dash: Dash) {
     match dash {
-        Dash::Dashed => frame.dashed_line(a.0, a.1, b.0, b.1, width, color, 6.0, 4.0),
-        Dash::Dotted => frame.dashed_line(a.0, a.1, b.0, b.1, width, color, width.max(1.5), 3.0),
+        Dash::Dashed => frame.smooth_dashed_line(a.0, a.1, b.0, b.1, width, color, 6.0, 4.0),
+        Dash::Dotted => frame.smooth_dashed_line(a.0, a.1, b.0, b.1, width, color, width.max(1.5), 3.0),
         Dash::Solid if a.1 == b.1 => frame.hline(a.0, b.0, a.1, width, color),
-        Dash::Solid => frame.line(a.0, a.1, b.0, b.1, width, color),
+        Dash::Solid => frame.smooth_line(a.0, a.1, b.0, b.1, width, color),
     }
 }
 
@@ -374,8 +376,8 @@ fn arrow(frame: &mut Frame, from: (f32, f32), tip: (f32, f32), width: f32, color
     let (ux, uy) = (dx / len, dy / len);
     let size = 7.0 + width * 1.5;
     let back = (tip.0 - ux * size, tip.1 - uy * size);
-    frame.line(tip.0, tip.1, back.0 - uy * size * 0.5, back.1 + ux * size * 0.5, width, color);
-    frame.line(tip.0, tip.1, back.0 + uy * size * 0.5, back.1 - ux * size * 0.5, width, color);
+    frame.smooth_line(tip.0, tip.1, back.0 - uy * size * 0.5, back.1 + ux * size * 0.5, width, color);
+    frame.smooth_line(tip.0, tip.1, back.0 + uy * size * 0.5, back.1 - ux * size * 0.5, width, color);
 }
 
 fn pct(from: f64, to: f64) -> f64 {
