@@ -89,6 +89,7 @@ docker compose run --rm server tradoor-backfill binance-perp:BTCUSDT --from 2021
 
 sudo cp tradoor.conf /etc/nginx/sites-available/tradoor   # set server_name first
 sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
+sudo cp http.conf /etc/nginx/conf.d/tradoor.conf
 sudo ln -s /etc/nginx/sites-available/tradoor /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d tradoor.example.com
@@ -157,7 +158,6 @@ headers, including the Content Security Policy the page also carries:
 ```sh
 sudo cp http.conf /etc/nginx/conf.d/tradoor.conf
 sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
-sudo cp http.conf /etc/nginx/conf.d/tradoor.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
