@@ -97,7 +97,10 @@ export interface Drawing {
   createdAt: number;
 }
 
-const scope = (market: string, timeframe: string): string => `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}`;
+/** A market's candle chart and its TPO chart keep separate drawings. */
+export type ChartKind = 'candles' | 'tpo';
+
+const scope = (market: string, timeframe: string, chart: ChartKind): string => `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}&chart=${chart}`;
 
 /** One of the four totals: 1h, 4h, 12h or 24h, over every exchange. */
 export interface LiquidationWindow {
@@ -135,12 +138,12 @@ export const api = {
     const { body } = await request<{ ok: boolean; db: boolean }>('/api/health');
     return body ?? { ok: false, db: false };
   },
-  drawings: (market: string, timeframe: string) => json<{ count: number; drawings: Drawing[] }>(`/api/drawings?${scope(market, timeframe)}`),
-  createDrawing: (market: string, timeframe: string, input: { kind: string; points: DrawingPoint[]; label?: string; style?: Style }) =>
-    json<{ drawing: Drawing }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'POST', body: input }),
+  drawings: (market: string, timeframe: string, chart: ChartKind) => json<{ count: number; drawings: Drawing[] }>(`/api/drawings?${scope(market, timeframe, chart)}`),
+  createDrawing: (market: string, timeframe: string, chart: ChartKind, input: { kind: string; points: DrawingPoint[]; label?: string; style?: Style }) =>
+    json<{ drawing: Drawing }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'POST', body: input }),
   updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null; style?: Style }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
-  clearDrawings: (market: string, timeframe: string) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe)}`, { method: 'DELETE' }),
+  clearDrawings: (market: string, timeframe: string, chart: ChartKind) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {

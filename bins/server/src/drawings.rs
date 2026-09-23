@@ -2,7 +2,8 @@
 //! on is kept, but every timeframe of the market shows it: anchors are epoch ms
 //! and price, which mean the same thing on any bar length — as on TradingView.
 //! Every query is scoped to the owner the request names, so one browser can
-//! neither see nor change another's.
+//! neither see nor change another's — and to the chart, candles or TPO, which
+//! keep separate drawings.
 //!
 //! Strict about the SHAPE of what goes in: `points` is JSONB, so Postgres would
 //! accept any JSON at all, and a row that cannot be rendered cannot be selected
@@ -111,13 +112,21 @@ pub fn parse_points(kind: &str, value: Option<&Value>) -> Result<Vec<Point>, Str
 pub struct Scope {
     market: String,
     timeframe: String,
+    /// `candles` (the default) or `tpo`.
+    #[serde(default)]
+    chart: Option<String>,
 }
 
 impl Scope {
-    fn validated(&self) -> ApiResult<(String, &str)> {
+    fn validated(&self) -> ApiResult<(String, &str, &str)> {
         let market = MarketRef::parse(&self.market).ok_or_else(|| ApiError::bad_request(format!("not a market: '{}' (expected venue:SYMBOL)", self.market)))?;
         ChartTimeframe::parse(&self.timeframe).ok_or_else(|| ApiError::bad_request(format!("invalid timeframe: '{}'", self.timeframe)))?;
-        Ok((market.to_string(), &self.timeframe))
+        let chart = match self.chart.as_deref() {
+            None | Some("candles") => "candles",
+            Some("tpo") => "tpo",
+            Some(other) => return Err(ApiError::bad_request(format!("chart is candles or tpo, not '{other}'"))),
+        };
+        Ok((market.to_string(), &self.timeframe, chart))
     }
 }
 
@@ -132,32 +141,32 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
-    let (market, _) = scope.validated()?;
+    let (market, _, chart) = scope.validated()?;
     let client = state.pool.get().await?;
-    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE owner = $1 AND market = $2 ORDER BY id"), &[&owner, &market]).await?;
+    let rows = client.query(&format!("SELECT {COLUMNS} FROM drawing WHERE owner = $1 AND market = $2 AND chart = $3 ORDER BY id"), &[&owner, &market, &chart]).await?;
     // Kinds this version no longer draws are left out rather than shipped to a
     // renderer that cannot show — or delete — them.
     let drawings: Vec<Value> = rows.iter().filter(|r| KINDS.contains(&r.get::<_, &str>(3))).map(row_json).collect();
     Ok(Json(json!({ "count": drawings.len(), "drawings": drawings })))
 }
 
-pub async fn insert(client: &tokio_postgres::Client, owner: &str, market: &str, timeframe: &str, input: &DrawingInput) -> Result<tokio_postgres::Row, tokio_postgres::Error> {
+pub async fn insert(client: &tokio_postgres::Client, owner: &str, market: &str, timeframe: &str, chart: &str, input: &DrawingInput) -> Result<tokio_postgres::Row, tokio_postgres::Error> {
     let points = serde_json::to_value(&input.points).expect("points serialise");
     let style = Value::Object(input.style.clone());
     client
         .query_one(
-            &format!("INSERT INTO drawing (owner, market, timeframe, kind, points, style, label) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {COLUMNS}"),
-            &[&owner, &market, &timeframe, &input.kind, &points, &style, &input.label],
+            &format!("INSERT INTO drawing (owner, market, timeframe, chart, kind, points, style, label) VALUES ($1, $2, $3, $8, $4, $5, $6, $7) RETURNING {COLUMNS}"),
+            &[&owner, &market, &timeframe, &input.kind, &points, &style, &input.label, &chart],
         )
         .await
 }
 
 pub async fn create(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>, Json(body): Json<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let owner = owner(&headers)?;
-    let (market, timeframe) = scope.validated()?;
+    let (market, timeframe, chart) = scope.validated()?;
     let input = parse_body(&body).map_err(ApiError::bad_request)?;
     let client = state.pool.get().await?;
-    let row = insert(&client, &owner, &market, timeframe, &input).await?;
+    let row = insert(&client, &owner, &market, timeframe, chart, &input).await?;
     Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
 }
 
@@ -217,12 +226,12 @@ pub async fn delete_one(State(state): State<AppState>, headers: HeaderMap, Path(
     }
 }
 
-/// Every drawing on one market — on every timeframe, since each shows them all.
+/// Every drawing on one market's chart — on every timeframe, since each shows them all.
 pub async fn clear(State(state): State<AppState>, headers: HeaderMap, Query(scope): Query<Scope>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
-    let (market, _) = scope.validated()?;
+    let (market, _, chart) = scope.validated()?;
     let client = state.pool.get().await?;
-    let deleted = client.execute("DELETE FROM drawing WHERE owner = $1 AND market = $2", &[&owner, &market]).await?;
+    let deleted = client.execute("DELETE FROM drawing WHERE owner = $1 AND market = $2 AND chart = $3", &[&owner, &market, &chart]).await?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 

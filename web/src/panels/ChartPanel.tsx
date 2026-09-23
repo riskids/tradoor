@@ -7,7 +7,7 @@ import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, S
 import { chartControllers, setOverlay } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
-import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
+import { api, catalog, errorText, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
 import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
@@ -102,6 +102,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   /** The TPO split drawn now: chosen, and longer than the candles it stacks. */
   const split = () => (props.panel.tpo && tfLonger(props.panel.tpo, timeframe()) ? props.panel.tpo : null);
   const tpoShown = () => split() !== null;
+  /** Candles and TPO profiles keep separate drawings. */
+  const chartKind = (): ChartKind => (tpoShown() ? 'tpo' : 'candles');
 
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
@@ -247,7 +249,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   async function loadDrawings(): Promise<void> {
     const req = ++drawingsRequest;
     try {
-      const res = await api.drawings(market(), timeframe());
+      const res = await api.drawings(market(), timeframe(), chartKind());
       if (req !== drawingsRequest) return;
       batch(() => {
         setDrawings(res.drawings);
@@ -263,17 +265,19 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   }
 
   // A tool armed on one chart must not start drawing on the next. Drawings
-  // belong to the market, so a new timeframe keeps them without a refetch.
+  // belong to the market and the chart — candles or TPO — so a new timeframe
+  // keeps them without a refetch, and switching to TPO reads its own.
   createEffect(
-    on([market, timeframe], ([m], prev) => {
+    on([market, timeframe, chartKind], ([m, , kind], prev) => {
       batch(() => {
         setTool('');
         setSelected(null);
         setDrawError(null);
         setEditing(null);
       });
-      if (!prev || prev[0] !== m) {
-        // Steps are about this market's drawings.
+      if (!prev || prev[0] !== m || prev[2] !== kind) {
+        // Steps are about this chart's drawings.
+        setDrawings([]);
         history.reset();
         void loadDrawings();
       }
@@ -284,12 +288,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
      under the pointer the moment it is placed rather than a round trip later. A
      rejected change is rolled back and the server's list is re-read. */
   let pending = 0;
-  const onSameChart = (m: string) => m === market();
+  const onSameChart = (m: string, kind: ChartKind = chartKind()) => m === market() && kind === chartKind();
   const history = new DrawingHistory();
 
   /** Save a drawing. `ref`: one undo is bringing back, which keeps its steps. */
   async function saveDrawing(input: { kind: string; points: DrawingPoint[]; label?: string | null; style: Style; timeframe?: string }, ref?: DrawingRef): Promise<void> {
     const m = market();
+    const kind = chartKind();
     const tf = input.timeframe ?? timeframe();
     const temporary: Drawing = { id: --pending, market: m, timeframe: tf, kind: input.kind, points: input.points, style: input.style, label: input.label ?? null, createdAt: Date.now() };
     const r = ref ?? history.ref(temporary.id);
@@ -297,9 +302,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     if (!ref) history.record({ kind: 'create', ref: r, drawing: temporary });
     setDrawings((list) => [...list, temporary]);
     try {
-      const { drawing } = await api.createDrawing(m, tf, { kind: input.kind, points: input.points, label: input.label ?? undefined, style: input.style });
+      const { drawing } = await api.createDrawing(m, tf, kind, { kind: input.kind, points: input.points, label: input.label ?? undefined, style: input.style });
       setDrawError(null);
-      const kept = onSameChart(m) && drawings().some((d) => d.id === temporary.id);
+      const kept = onSameChart(m, kind) && drawings().some((d) => d.id === temporary.id);
       if (!kept) {
         // Undone, or the chart moved on, before the server answered.
         void api.deleteDrawing(drawing.id).catch(() => {});
@@ -310,7 +315,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     } catch (e) {
       setDrawError(errorText(e));
       history.forget(r);
-      if (onSameChart(m)) setDrawings((list) => list.filter((d) => d.id !== temporary.id));
+      if (onSameChart(m, kind)) setDrawings((list) => list.filter((d) => d.id !== temporary.id));
     }
   }
 
@@ -319,6 +324,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   /** `previous`: what the change replaces, when the list already shows it (a dialog's preview). */
   async function changeDrawing(drawingId: number, patch: DrawingChange, record = true, previous?: DrawingChange): Promise<void> {
     const m = market();
+    const kind = chartKind();
     const current = drawings().find((d) => d.id === drawingId);
     if (record && current) history.record({ kind: 'change', ref: history.ref(drawingId), before: previous ?? before(current, patch), after: patch });
     setDrawings((list) => list.map((d) => (d.id === drawingId ? { ...d, ...patch } : d)));
@@ -326,10 +332,10 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     try {
       const { drawing } = await api.updateDrawing(drawingId, patch);
       setDrawError(null);
-      if (onSameChart(m)) setDrawings((list) => list.map((d) => (d.id === drawingId ? drawing : d)));
+      if (onSameChart(m, kind)) setDrawings((list) => list.map((d) => (d.id === drawingId ? drawing : d)));
     } catch (e) {
       setDrawError(errorText(e));
-      if (onSameChart(m)) void loadDrawings();
+      if (onSameChart(m, kind)) void loadDrawings();
     }
   }
 
@@ -410,7 +416,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     setDrawings([]);
     setSelected(null);
     try {
-      await api.clearDrawings(market(), timeframe());
+      await api.clearDrawings(market(), timeframe(), chartKind());
       setDrawError(null);
     } catch (e) {
       setDrawError(errorText(e));
