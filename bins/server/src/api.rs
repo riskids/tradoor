@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
@@ -21,7 +20,6 @@ pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub data: DataDir,
     pub catalog: Arc<Catalog>,
-    pub api_token: Option<String>,
     /// Absent when no ticker's liquidations are being kept.
     pub liquidations: Option<Arc<liquidations::Collector>>,
     /// Absent when no coin's open interest is being recorded.
@@ -98,7 +96,6 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/open-interest", get(open_interest::candles))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
-        .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(CompressionLayer::new())
         .with_state(state);
 
@@ -119,17 +116,6 @@ async fn cache_partitions(req: Request, next: Next) -> Response {
     let value = if immutable { "public, max-age=31536000, immutable" } else { "no-cache" };
     res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
     res
-}
-
-async fn require_token(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
-    let reads = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if let (false, Some(token)) = (reads, state.api_token.as_deref()) {
-        let given = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-        if given != Some(token) {
-            return ApiError(StatusCode::UNAUTHORIZED, "this server requires an API token for writes".into()).into_response();
-        }
-    }
-    next.run(req).await
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {

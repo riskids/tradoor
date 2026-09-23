@@ -12,7 +12,6 @@ x-app: &app
       condition: service_healthy
   environment:
     DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    TRADOOR_API_TOKEN: ${TRADOOR_API_TOKEN:?set TRADOOR_API_TOKEN in .env}
   volumes:
     - data:/data
 

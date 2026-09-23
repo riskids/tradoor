@@ -83,7 +83,7 @@ scp deploy/env.example user@server:/var/www/tradoor/.env
 
 # On the server.
 cd /var/www/tradoor
-nano .env        # POSTGRES_PASSWORD and TRADOOR_API_TOKEN: openssl rand -hex 24
+nano .env        # POSTGRES_PASSWORD: openssl rand -hex 24
 docker compose up -d
 docker compose run --rm server tradoor-backfill binance-perp:BTCUSDT --from 2021-09-01 --track
 
@@ -94,8 +94,8 @@ sudo certbot --nginx -d tradoor.example.com
 ```
 
 The server and recorder apply database migrations when they start; partitions
-live in the `data` volume. Open the site, go to Settings, and enter the
-`TRADOOR_API_TOKEN` so drawings and layouts can be saved.
+live in the `data` volume. Drawings and layouts need no setup: each browser
+keeps its own under its browser id.
 
 To update, rebuild and load the image again, then `docker compose up -d` on the
 server; that also refreshes `web/`. Without Docker, `deploy/systemd` runs the

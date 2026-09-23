@@ -40,9 +40,6 @@ struct Cli {
     /// Serve the built web app from here as well (development and single-box setups).
     #[arg(long, env = "TRADOOR_WEB_DIR")]
     web_dir: Option<PathBuf>,
-    /// When set, writes (drawings, workspaces) require `Authorization: Bearer <token>`.
-    #[arg(long, env = "TRADOOR_API_TOKEN")]
-    api_token: Option<String>,
     #[arg(long, env = "BINANCE_SPOT_REST", default_value = binance::SPOT_REST)]
     binance_spot_rest: String,
     /// Tickers whose liquidations are kept for 24 hours, gathered from every
@@ -121,7 +118,6 @@ async fn main() -> anyhow::Result<()> {
                 pool,
                 data: DataDir::new(&cli.data_dir),
                 catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?),
-                api_token: cli.api_token.clone().filter(|t| !t.is_empty()),
                 relay: relay::Relay::new(doh)?,
             };
             let app = api::router(state, cli.data_dir.clone(), cli.web_dir.clone());

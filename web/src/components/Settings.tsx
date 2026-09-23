@@ -1,8 +1,7 @@
 import { createSignal, For, Show } from 'solid-js';
-import { API_TOKEN_PREF } from '../lib/api';
 import { OWNER_KEY, OWNER_PATTERN, ownerId } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
-import { readPref, writePref } from '../lib/prefs';
+import { writePref } from '../lib/prefs';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
@@ -45,7 +44,6 @@ function zoneChoices(): { value: string; label: string }[] {
 }
 
 export function Settings(props: { onClose(): void }) {
-  const [token, setToken] = createSignal(readPref(API_TOKEN_PREF) ?? '');
   return (
     <div class="backdrop" onPointerDown={() => props.onClose()}>
       <div
@@ -138,25 +136,6 @@ export function Settings(props: { onClose(): void }) {
               )}
             </For>
           </div>
-
-          <h3 class="caps">Server</h3>
-          <label class="swatch">
-            <span class="name">API token for saving drawings and layouts</span>
-            <input
-              class="box wide"
-              type="password"
-              autocomplete="off"
-              value={token()}
-              placeholder="only when the server sets TRADOOR_API_TOKEN"
-              onChange={(e) => {
-                setToken(e.currentTarget.value);
-                writePref(API_TOKEN_PREF, e.currentTarget.value.trim());
-              }}
-            />
-          </label>
-          <p class="note" style={{ padding: '4px 0' }}>
-            Kept in this browser only; it is never part of the saved workspace.
-          </p>
 
           <div style={{ display: 'flex', gap: '6px', 'margin-top': '10px' }}>
             <button

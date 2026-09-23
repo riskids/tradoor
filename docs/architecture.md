@@ -92,7 +92,7 @@ The file format is described in [format.md](format.md).
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 
-Writes require `Authorization: Bearer` when `TRADOOR_API_TOKEN` is set.
+Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser's own random id: one browser cannot read or change another's.
 
 ## Database
 
