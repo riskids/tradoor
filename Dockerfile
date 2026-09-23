@@ -47,7 +47,9 @@ COPY scripts scripts
 COPY web web
 RUN cargo build --release --locked -p tradoor-server -p tradoor-recorder -p tradoor-backfill
 RUN ./scripts/build-wasm.sh
-RUN cd web && deno task build
+# The site's public address, for its canonical URL, preview image and sitemap (web/site.ts).
+ARG SITE_URL=""
+RUN cd web && SITE_URL="${SITE_URL}" deno task build
 
 FROM debian:trixie-slim
 RUN apt-get update \

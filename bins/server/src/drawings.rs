@@ -24,6 +24,8 @@ pub const KINDS: [&str; 12] = ["path", "trendline", "horizontal", "ray", "rect",
 /// A style is a flat object of short settings; this bounds what one row may carry.
 pub const MAX_STYLE_BYTES: usize = 8 * 1024;
 pub const MAX_POINTS: usize = 2000;
+/// Drawings one browser keeps, over every market: far past any hand's work.
+pub const MAX_PER_OWNER: i64 = 20_000;
 
 /// Anchors each kind needs, and whether that is a minimum (path, brush) rather
 /// than an exact count.
@@ -166,6 +168,13 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Query(sco
     let (market, timeframe, chart) = scope.validated()?;
     let input = parse_body(&body).map_err(ApiError::bad_request)?;
     let client = state.pool.get().await?;
+    let held: i64 = client.query_one("SELECT count(*) FROM drawing WHERE owner = $1", &[&owner]).await?.get(0);
+    if held >= MAX_PER_OWNER {
+        return Err(ApiError::bad_request(format!("a browser may keep at most {MAX_PER_OWNER} drawings")));
+    }
+    if held == 0 && !crate::limits::new_owner(&state, &headers) {
+        return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "too many new browser ids from this address; wait a while".into()));
+    }
     let row = insert(&client, &owner, &market, timeframe, chart, &input).await?;
     Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
 }

@@ -88,7 +88,7 @@ The file format is described in [format.md](format.md).
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
-| `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin starts recording it |
+| `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 

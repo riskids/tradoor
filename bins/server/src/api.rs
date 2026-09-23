@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{catalog::Catalog, drawings, liquidations, open_interest, relay, workspaces};
+use crate::{catalog::Catalog, drawings, limits, liquidations, open_interest, relay, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +26,8 @@ pub struct AppState {
     pub open_interest: Option<Arc<open_interest::Recorder>>,
     /// The exchanges' market data, for browsers on networks that block them.
     pub relay: Arc<relay::Relay>,
+    /// What one visitor may ask of the server; see `limits`.
+    pub limits: Arc<limits::Limits>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -96,6 +98,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/open-interest", get(open_interest::candles))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
+        .layer(middleware::from_fn_with_state(state.clone(), limits::middleware))
         .layer(CompressionLayer::new())
         .with_state(state);
 
@@ -105,7 +108,18 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
     if let Some(web) = web_dir {
         app = app.fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))));
     }
-    app.layer(TraceLayer::new_for_http())
+    app.layer(middleware::from_fn(security_headers)).layer(TraceLayer::new_for_http())
+}
+
+/// Headers every answer carries, whoever serves the page: nginx sets the same
+/// (deploy/nginx/tradoor.conf), this covers the server serving it alone.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin"));
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    res
 }
 
 /// Partition files never change once written, so they are cached for a year;

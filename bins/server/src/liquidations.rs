@@ -770,31 +770,40 @@ pub async fn stats(State(state): State<AppState>, Path(ticker): Path<String>) ->
 /// `GET /api/liquidations/{ticker}/live`: every hit on every exchange as it
 /// arrives, as server-sent events — one `hit` event each, and a `venues` event
 /// with the exchanges' connections every ten seconds.
-pub async fn live(State(state): State<AppState>, Path(ticker): Path<String>) -> Result<impl axum::response::IntoResponse, ApiError> {
+pub async fn live(State(state): State<AppState>, headers: axum::http::HeaderMap, Path(ticker): Path<String>) -> Result<axum::response::Response, ApiError> {
     use axum::response::sse::{Event, KeepAlive, Sse};
+    use axum::response::IntoResponse;
     let collector = state.liquidations.as_ref().filter(|c| c.tickers.contains(&ticker)).ok_or_else(|| ApiError::not_found(format!("{ticker} is not followed on this server")))?.clone();
+    // A stream a chart, a handful an address; the place is freed when the stream ends.
+    let held = match crate::limits::client(&headers) {
+        Some(ip) => match state.limits.hold("live", &ip, crate::limits::LIVE_STREAMS) {
+            Some(held) => Some(held),
+            None => return Ok(crate::limits::too_many("live streams open")),
+        },
+        None => None,
+    };
     let rx = collector.live.subscribe();
     let venues = tokio::time::interval(Duration::from_secs(10));
-    let stream = futures_util::stream::unfold((rx, venues, collector, ticker), |(mut rx, mut venues, collector, ticker)| async move {
+    let stream = futures_util::stream::unfold((rx, venues, collector, ticker, held), |(mut rx, mut venues, collector, ticker, held)| async move {
         loop {
             tokio::select! {
                 got = rx.recv() => match got {
                     Ok((t, hit)) if t == ticker => {
                         let data = json!({ "venue": hit.venue, "time": hit.time, "price": hit.price, "qty": hit.qty, "usd": hit.price * hit.qty, "long": hit.long });
-                        return Some((Ok::<Event, std::convert::Infallible>(Event::default().event("hit").data(data.to_string())), (rx, venues, collector, ticker)));
+                        return Some((Ok::<Event, std::convert::Infallible>(Event::default().event("hit").data(data.to_string())), (rx, venues, collector, ticker, held)));
                     }
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return None,
                 },
                 _ = venues.tick() => {
                     let data = serde_json::to_string(&collector.states()).unwrap_or_default();
-                    return Some((Ok(Event::default().event("venues").data(data)), (rx, venues, collector, ticker)));
+                    return Some((Ok(Event::default().event("venues").data(data)), (rx, venues, collector, ticker, held)));
                 }
             }
         }
     });
     // nginx would otherwise hold the stream back in its buffer.
-    Ok(([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default())))
+    Ok(([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default())).into_response())
 }
 
 #[cfg(test)]

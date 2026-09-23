@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use crate::api::{owner, ApiError, ApiResult, AppState};
 
 const MAX_DOC_BYTES: usize = 512 * 1024;
+/// Workspaces one browser keeps; the app uses one.
+const MAX_PER_OWNER: i64 = 10;
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -59,6 +61,13 @@ pub async fn put(State(state): State<AppState>, headers: HeaderMap, Path(id): Pa
         return Ok((StatusCode::OK, Json(json!({ "version": row.get::<_, i32>(0) }))));
     }
     if body.version == 0 {
+        let held: i64 = client.query_one("SELECT count(*) FROM workspace WHERE owner = $1", &[&owner]).await?.get(0);
+        if held >= MAX_PER_OWNER {
+            return Err(ApiError::bad_request(format!("a browser may keep at most {MAX_PER_OWNER} workspaces")));
+        }
+        if held == 0 && !crate::limits::new_owner(&state, &headers) {
+            return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "too many new browser ids from this address; wait a while".into()));
+        }
         let created = client.query_opt("INSERT INTO workspace (owner, id, name, doc) VALUES ($4, $1, $2, $3) ON CONFLICT (owner, id) DO NOTHING RETURNING version", &[&id, &name, &body.doc, &owner]).await?;
         if let Some(row) = created {
             return Ok((StatusCode::CREATED, Json(json!({ "version": row.get::<_, i32>(0) }))));

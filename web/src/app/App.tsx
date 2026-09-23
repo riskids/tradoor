@@ -354,14 +354,21 @@ function Overlays() {
   );
 }
 
+/** Search engines and link previews, which render the page but do not trade from it. */
+const IS_CRAWLER = /bot\b|crawler|spider|slurp|facebookexternalhit|bingpreview|embedly|preview/i.test(navigator.userAgent);
+
 export function App() {
   const [engineError, setEngineError] = createSignal<string | null>(null);
   applyTheme();
-  // The chart last used names the browser tab, with its live price.
-  createEffect(() => {
-    const chart = targetChart();
-    document.title = chart ? tabTitle(marketOf(chart), lastPrice(chart.id)) : tabTitle(null, undefined);
-  });
+  // The chart last used names the browser tab, with its live price. A search
+  // engine's crawler keeps the page's own title, which says what the site is.
+  const pageTitle = document.title;
+  if (!IS_CRAWLER) {
+    createEffect(() => {
+      const chart = targetChart();
+      document.title = chart ? tabTitle(marketOf(chart), lastPrice(chart.id)) : pageTitle;
+    });
+  }
   onMount(() => {
     const chart = targetChart();
     if (chart) focusPanel(chart.id);

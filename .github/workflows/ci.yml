@@ -104,6 +104,9 @@ jobs:
             ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # The repository variable SITE_URL (https://your-domain), for SEO tags and the sitemap.
+          build-args: |
+            SITE_URL=${{ vars.SITE_URL }}
 
       - name: SSH key
         env:

@@ -2,6 +2,7 @@
  *  Kept apart from the drawing dialog so the chart's toolbar can use it without
  *  loading the dialog. */
 import { createSignal, For, onCleanup, Show } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import { useDismiss } from '../lib/dismiss';
 
 /** A palette in the spirit of TradingView's: greys, then hues in three strengths. */
@@ -35,7 +36,8 @@ let closeOpenPalette: (() => void) | null = null;
 
 /** A colour swatch that opens TradingView's palette, a custom colour, and opacity. */
 export function ColorField(props: { value: string; onChange(v: string): void; title?: string }) {
-  // Placed on the page, not in the dialog, so its scroll box cannot clip it.
+  // Placed on the page's body, not in the dialog or the chart: a scroll box
+  // would clip it, and a panel's container query would make `fixed` mean the panel.
   const [open, setOpenState] = createSignal<{ left: number; top: number } | null>(null);
   const close = () => setOpenState(null);
   let button!: HTMLButtonElement;
@@ -65,22 +67,24 @@ export function ColorField(props: { value: string; onChange(v: string): void; ti
         style={{ '--c': props.value || 'transparent' }}
       />
       <Show when={open()}>
-        <div class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
-          <div class="grid">
-            <For each={PALETTE}>
-              {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} data-tip={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}
-            </For>
+        <Portal>
+          <div class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
+            <div class="grid">
+              <For each={PALETTE}>
+                {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} data-tip={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}
+              </For>
+            </div>
+            <label class="custom">
+              <input type="color" value={parts().hex} onInput={(e) => props.onChange(joinColor(e.currentTarget.value, parts().opacity))} />
+              Custom
+            </label>
+            <label class="opacity">
+              Opacity
+              <input type="range" min="0" max="100" value={parts().opacity} onInput={(e) => props.onChange(joinColor(parts().hex, Number(e.currentTarget.value)))} />
+              <span class="num">{parts().opacity}%</span>
+            </label>
           </div>
-          <label class="custom">
-            <input type="color" value={parts().hex} onInput={(e) => props.onChange(joinColor(e.currentTarget.value, parts().opacity))} />
-            Custom
-          </label>
-          <label class="opacity">
-            Opacity
-            <input type="range" min="0" max="100" value={parts().opacity} onInput={(e) => props.onChange(joinColor(parts().hex, Number(e.currentTarget.value)))} />
-            <span class="num">{parts().opacity}%</span>
-          </label>
-        </div>
+        </Portal>
       </Show>
     </span>
   );

@@ -4,12 +4,54 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <title>tradoor</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23070907'/%3E%3Cpath d='M3 12l3-4 3 2 4-6' stroke='%23aafd35' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+    <meta name="theme-color" content="#070907" />
+    <title>tradoor — crypto charts, TPO market profile, open interest &amp; liquidations</title>
+    <meta name="description" content="A fast trading terminal in the browser: TradingView-style crypto charts and ExoCharts-style TPO market profiles, aggregated open interest and live liquidations from Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken and Lighter. Free, no sign-up." />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="application-name" content="tradoor" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="tradoor" />
+    <meta property="og:title" content="tradoor — crypto charts, TPO market profile &amp; liquidations" />
+    <meta property="og:description" content="TradingView-style charts, TPO market profiles, aggregated open interest and live liquidations from every major crypto exchange, in the browser." />
+    <meta property="og:image" content="/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="tradoor: a candle chart with a market profile" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="tradoor — crypto charts, TPO market profile &amp; liquidations" />
+    <meta name="twitter:description" content="TradingView-style charts, TPO market profiles, aggregated open interest and live liquidations from every major crypto exchange." />
+    <meta name="twitter:image" content="/og.png" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "tradoor",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Any (web browser)",
+        "browserRequirements": "Requires JavaScript and WebAssembly",
+        "description": "A trading terminal in the browser: crypto candle charts, TPO market profiles, aggregated open interest and live liquidations across Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken and Lighter.",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "Candle charts with indicators: EMA, RSI, Stochastic RSI, volume",
+          "TPO and volume market profile with value area, POC and initial balance",
+          "Aggregated open interest across exchanges",
+          "Live liquidations from twelve exchanges",
+          "Drawing tools: trendlines, channels, Fibonacci, long and short positions",
+          "Watchlists with sections, split layouts and linked panels"
+        ]
+      }
+    </script>
     <style>html,body{background:#070907}</style>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <h1>tradoor — a crypto trading terminal in the browser</h1>
+      <p>Candle charts and TPO market profiles, aggregated open interest and live liquidations from Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken and Lighter. The charts are drawn with WebAssembly and need JavaScript.</p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

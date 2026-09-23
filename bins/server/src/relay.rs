@@ -13,7 +13,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::ws::{Message as ClientMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use crate::api::{ApiError, AppState};
+use crate::limits;
 use crate::dns::Doh;
 
 /// REST calls a chart makes, by host and exact path — or by a prefix ending
@@ -90,6 +91,10 @@ pub async fn rest(State(state): State<AppState>, Query(q): Query<RestQuery>) -> 
     if !allowed_rest(&url) {
         return Err(ApiError(StatusCode::FORBIDDEN, "only the exchanges' market data calls are relayed".into()));
     }
+    // Everyone's relayed calls to one exchange together stay well under what it would ban this server for.
+    if !state.limits.take(limits::RELAY_HOST, url.host_str().unwrap_or_default()) {
+        return Ok(limits::too_many("relayed calls to this exchange"));
+    }
     let upstream = state.relay.http.get(url).send().await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("the exchange could not be reached: {e}")))?;
     let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
@@ -113,12 +118,21 @@ pub struct StreamQuery {
 }
 
 /// `GET /api/relay/ws?venue=binance-perp`: the venue's public stream, frame for frame.
-pub async fn ws(State(state): State<AppState>, Query(q): Query<StreamQuery>, upgrade: WebSocketUpgrade) -> Response {
+pub async fn ws(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<StreamQuery>, upgrade: WebSocketUpgrade) -> Response {
     let Some(url) = stream_url(&q.venue) else {
         return ApiError::bad_request("an unknown venue").into_response();
     };
+    // One address may hold a page's worth of streams, not the server's all.
+    let held = match limits::client(&headers) {
+        Some(ip) => match state.limits.hold("relay-ws", &ip, limits::RELAY_STREAMS) {
+            Some(held) => Some(held),
+            None => return limits::too_many("relayed streams open"),
+        },
+        None => None,
+    };
     let relay = state.relay.clone();
     upgrade.on_upgrade(move |client| async move {
+        let _held = held;
         let Ok(_permit) = relay.streams.try_acquire() else { return };
         pipe(client, &relay.doh, url).await;
     })

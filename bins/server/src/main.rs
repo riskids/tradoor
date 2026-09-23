@@ -12,6 +12,7 @@ mod catalog;
 mod dns;
 mod drawings;
 mod import;
+mod limits;
 mod liquidations;
 mod open_interest;
 mod relay;
@@ -119,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
                 data: DataDir::new(&cli.data_dir),
                 catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?),
                 relay: relay::Relay::new(doh)?,
+                limits: Arc::new(limits::Limits::default()),
             };
             let app = api::router(state, cli.data_dir.clone(), cli.web_dir.clone());
             let listener = tokio::net::TcpListener::bind(cli.bind).await.with_context(|| format!("binding {}", cli.bind))?;

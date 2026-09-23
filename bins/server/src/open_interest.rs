@@ -722,7 +722,15 @@ pub async fn candles(State(state): State<AppState>, Query(p): Query<Params>) -> 
         None => OiVenue::ALL.to_vec(),
     };
     let ids: Vec<&str> = venues.iter().map(|v| v.id()).collect();
-    let tracked = recorder.track(&coin.name).await;
+    // Recording starts only for a coin some exchange lists a perpetual on: the
+    // list is capped, and made-up names would fill it for good.
+    let tracked = if recorder.coins().contains(&coin.name) {
+        true
+    } else if state.catalog.lists_perp(&coin.name).await {
+        recorder.track(&coin.name).await
+    } else {
+        return Err(ApiError::not_found(format!("no exchange lists a {} perpetual", coin.name)));
+    };
 
     let client = state.pool.get().await?;
     let rows = client

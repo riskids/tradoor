@@ -17,6 +17,11 @@ use tradoor_venues::{binance, bitget, bybit, hyperliquid, kraken, lighter, okx, 
 
 const TTL: Duration = Duration::from_secs(30 * 60);
 
+/// A symbol less its quote, as the page's `coinOf` has it: `BTCUSDT` → `BTC`.
+fn coin_of(symbol: &str) -> &str {
+    ["USDT", "USDC", "FDUSD", "BUSD", "USD"].iter().find_map(|q| symbol.strip_suffix(q)).filter(|c| !c.is_empty()).unwrap_or(symbol)
+}
+
 pub struct Catalog {
     http: reqwest::Client,
     binance_spot_rest: String,
@@ -123,6 +128,14 @@ impl Catalog {
         }
     }
 
+    /// Whether any exchange lists a perpetual on `coin` — the coin as a chart
+    /// names it, its symbol less the quote: `BTC`, `1000PEPE`.
+    pub async fn lists_perp(&self, coin: &str) -> bool {
+        self.get().await;
+        let state = self.state.lock().await;
+        state.as_ref().is_some_and(|c| c.by_venue.iter().flat_map(|(_, p)| p).any(|p| p.kind == "perp" && (p.base == coin || coin_of(&p.symbol) == coin)))
+    }
+
     /// The serialised catalogue, refreshed when older than the TTL. A venue that
     /// fails keeps its previous list: stale names beat an empty search box.
     pub async fn get(&self) -> Arc<Bytes> {
@@ -149,5 +162,16 @@ impl Catalog {
         let body = Arc::new(Bytes::from(serde_json::to_vec(&response).expect("catalogue serialises")));
         *state = Some(Cached { at: Instant::now(), body: body.clone(), by_venue });
         body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_coin_is_its_symbol_less_the_quote() {
+        assert_eq!(super::coin_of("BTCUSDT"), "BTC");
+        assert_eq!(super::coin_of("1000PEPEUSDC"), "1000PEPE");
+        assert_eq!(super::coin_of("ETHUSD"), "ETH");
+        assert_eq!(super::coin_of("USDT"), "USDT", "a bare quote stays itself");
     }
 }

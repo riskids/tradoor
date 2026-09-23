@@ -78,7 +78,7 @@ The `Dockerfile` builds one image holding the three binaries and the web app.
 docker build -t tradoor:latest .
 ssh user@server 'sudo mkdir -p /var/www/tradoor && sudo chown $USER /var/www/tradoor'
 docker save tradoor:latest | gzip | ssh user@server 'gunzip | docker load'
-scp deploy/compose.yml deploy/nginx/tradoor.conf user@server:/var/www/tradoor/
+scp deploy/compose.yml deploy/nginx/tradoor.conf deploy/nginx/security-headers.conf user@server:/var/www/tradoor/
 scp deploy/env.example user@server:/var/www/tradoor/.env
 
 # On the server.
@@ -88,6 +88,7 @@ docker compose up -d
 docker compose run --rm server tradoor-backfill binance-perp:BTCUSDT --from 2021-09-01 --track
 
 sudo cp tradoor.conf /etc/nginx/sites-available/tradoor   # set server_name first
+sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
 sudo ln -s /etc/nginx/sites-available/tradoor /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d tradoor.example.com
@@ -127,6 +128,37 @@ ssh-keyscan -p <port> <server> | gh secret set VPS_KNOWN_HOSTS
 
 To roll back, set `TRADOOR_IMAGE` in `/var/www/tradoor/.env` to an earlier
 commit's tag and run `docker compose up -d`.
+
+## Search engines and link previews
+
+Set the repository variable `SITE_URL` to the site's address (`gh variable set
+SITE_URL --body https://your-domain`). The image build passes it to the web
+build, which then writes the canonical URL, absolute Open Graph image, and
+`robots.txt` with a `sitemap.xml` (`web/site.ts`). Without it the page still has
+its title, description, preview tags and structured data, but no canonical URL
+or sitemap.
+
+## Security
+
+There are no accounts: a browser's random id is what makes its drawings and
+layout its own, and the id never leaves it except to this server. What keeps
+one visitor from spoiling the server for the rest is in
+`bins/server/src/limits.rs` — a request rate per address, per kind of request;
+a cap on relayed and live streams per address; a shared rate per exchange host
+for the relay, below what would get the server's address banned; caps on
+drawings and workspaces per browser id and on new ids per address. Open
+interest records only coins some exchange lists a perpetual on.
+
+The server reads the visitor's address from nginx's `X-Real-IP`, so it must only
+be reachable through nginx — `deploy/compose.yml` publishes it on loopback.
+`deploy/nginx/tradoor.conf` adds a second request limit and the security
+headers, including the Content Security Policy the page also carries:
+
+```sh
+sudo cp tradoor.conf /etc/nginx/sites-available/tradoor
+sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
 
 ## Drawings and layouts belong to a browser
 
