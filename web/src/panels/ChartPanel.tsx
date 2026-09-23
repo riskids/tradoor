@@ -3,13 +3,13 @@
  * the DOM around them — toolbar, drawing rail, legend, menus — and forwards
  * pointer input.
  */
-import { batch, createEffect, createSignal, For, on, onCleanup, onMount, Show, untrack } from 'solid-js';
+import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, setOverlay } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type Drawing, type Product } from '../lib/api';
-import { ColorField, DrawingSettings, type DrawingPatch } from '../components/DrawingSettings';
-import { defaultStyle, KIND_NAMES, visibleOn, type Style } from '../lib/drawing-style';
+import type { DrawingPatch } from '../components/DrawingSettings';
+import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
@@ -24,6 +24,10 @@ import { symbolOf, venueLabel } from '../lib/markets';
 import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
+
+// Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
+const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
+const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: '', icon: 'pointer', title: 'Select and pan — click a drawing to select it, then Delete to remove it' },
@@ -680,26 +684,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             </div>
           </Show>
           <Show when={editing() === null && selectedDrawing()}>
-            {(current) => {
-              const d = () => current();
-              return (
-              <div class="dtoolbar" onPointerDown={(e) => e.stopPropagation()} onDblClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
-                <span class="name">{KIND_NAMES[d().kind] ?? d().kind}</span>
-                <Show when={!['long', 'short', 'text', 'measure'].includes(d().kind)}>
-                  <ColorField value={String(d().style.color ?? defaultStyle(d().kind).color ?? '#2962ff')} onChange={(v) => restyle(d(), { color: v })} title="Line colour" />
-                  <select class="dinput narrow" title="Thickness" value={String(d().style.width ?? defaultStyle(d().kind).width ?? 1.5)} onChange={(e) => restyle(d(), { width: Number(e.currentTarget.value) })}>
-                    <For each={[1, 1.5, 2, 3, 4]}>{(w) => <option value={w}>{w}px</option>}</For>
-                  </select>
-                </Show>
-                <button title="Settings (double-click the drawing)" disabled={d().id < 0} onClick={() => setEditing(d().id)}>
-                  <Icon name="settings" size={13} />
-                </button>
-                <button class="del" title="Delete (Delete)" onClick={() => void deleteDrawing(d().id)}>
-                  <Icon name="trash" size={13} />
-                </button>
-              </div>
-              );
-            }}
+            {(d) => <DrawingToolbar drawing={d()} onRestyle={(patch) => restyle(d(), patch)} onSettings={() => setEditing(d().id)} onDelete={() => void deleteDrawing(d().id)} />}
           </Show>
           <div class="legend">
             <div class="line">

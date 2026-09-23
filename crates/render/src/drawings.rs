@@ -107,10 +107,6 @@ pub struct Level {
 }
 
 impl Level {
-    const fn new(value: f64, on: bool, dash: Dash) -> Self {
-        Self { value, on, color: None, dash }
-    }
-
     /// `value,on,color,dash` lines joined by `|` — `0.5,1,#ff6d00,dashed|…`.
     pub fn parse_list(s: &str) -> Vec<Level> {
         s.split('|')
@@ -215,17 +211,36 @@ impl DrawingStyle {
         if let Some(levels) = &self.levels {
             return levels.clone();
         }
+        // TradingView's defaults: a channel's quarter lines hidden and its middle
+        // dashed; a fib's levels each in their own colour.
+        let blue = Some(Color::hex(0x2962ff));
+        let lvl = |value: f64, on: bool, color: Option<Color>, dash: Dash| Level { value, on, color, dash };
         match kind {
             DrawingKind::Channel => vec![
-                Level::new(-0.25, false, Dash::Solid),
-                Level::new(0.0, true, Dash::Solid),
-                Level::new(0.25, false, Dash::Solid),
-                Level::new(0.5, true, Dash::Dashed),
-                Level::new(0.75, false, Dash::Solid),
-                Level::new(1.0, true, Dash::Solid),
-                Level::new(1.25, false, Dash::Solid),
+                lvl(-0.25, false, blue, Dash::Solid),
+                lvl(0.0, true, None, Dash::Solid),
+                lvl(0.25, false, blue, Dash::Solid),
+                lvl(0.5, true, Some(Color::hex(0xff6d00)), Dash::Dashed),
+                lvl(0.75, false, blue, Dash::Solid),
+                lvl(1.0, true, None, Dash::Solid),
+                lvl(1.25, false, blue, Dash::Solid),
             ],
-            _ => FIB_LEVELS.iter().map(|v| Level::new(*v, true, Dash::Solid)).collect(),
+            _ => [
+                (0.0, true, 0x787b86),
+                (0.236, true, 0xf23645),
+                (0.382, true, 0xff9800),
+                (0.5, true, 0x4caf50),
+                (0.618, true, 0x089981),
+                (0.786, true, 0x00bcd4),
+                (1.0, true, 0x787b86),
+                (1.618, false, 0x2962ff),
+                (2.618, false, 0xf23645),
+                (3.618, false, 0x9c27b0),
+                (4.236, false, 0xe91e63),
+            ]
+            .into_iter()
+            .map(|(v, on, c)| lvl(v, on, Some(Color::hex(c)), Dash::Solid))
+            .collect(),
         }
     }
 

@@ -6,25 +6,20 @@ import { createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js'
 import type { DrawingPoint } from '../engine/protocol';
 import type { Drawing } from '../lib/api';
 import {
-  defaultStyle,
-  factoryStyle,
   isPosition,
-  joinColor,
   KIND_NAMES,
-  PALETTE,
   parseLevels,
   resetDefaultStyle,
   saveDefaultStyle,
   serializeLevels,
-  splitColor,
   VISIBILITY_UNITS,
-  visibleOn,
   withHidden,
   type Dash,
   type Level,
-  type Style,
-} from '../lib/drawing-style';
+} from '../lib/drawing-options';
+import { defaultStyle, factoryStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { useDismiss } from '../lib/dismiss';
+import { ColorField } from './ColorField';
 
 export interface DrawingPatch {
   style: Style;
@@ -395,62 +390,6 @@ function ArrowToggle(props: { title: string; on: boolean; left?: boolean; onChan
     <button class="dbtn icon" classList={{ on: props.on }} title={`${props.title}: ${props.on ? 'arrow' : 'normal'}`} onClick={() => props.onChange(!props.on)}>
       {props.left ? (props.on ? '←—' : '○—') : props.on ? '—→' : '—○'}
     </button>
-  );
-}
-
-/** Only one palette is open at a time: opening one closes the last. */
-let closeOpenPalette: (() => void) | null = null;
-
-/** A colour swatch that opens TradingView's palette, a custom colour, and opacity. */
-export function ColorField(props: { value: string; onChange(v: string): void; title?: string }) {
-  // Placed on the page, not in the dialog, so its scroll box cannot clip it.
-  const [open, setOpenState] = createSignal<{ left: number; top: number } | null>(null);
-  const close = () => setOpenState(null);
-  let button!: HTMLButtonElement;
-  const toggle = () => {
-    let next: { left: number; top: number } | null = null;
-    if (!open()) {
-      const r = button.getBoundingClientRect();
-      next = { left: Math.max(4, Math.min(r.left, innerWidth - 240)), top: r.bottom + 222 > innerHeight ? Math.max(4, r.top - 222) : r.bottom + 4 };
-    }
-    if (next && closeOpenPalette !== close) closeOpenPalette?.();
-    closeOpenPalette = next ? close : null;
-    setOpenState(next);
-  };
-  useDismiss(open, close);
-  onCleanup(() => {
-    if (closeOpenPalette === close) closeOpenPalette = null;
-  });
-  const parts = () => splitColor(props.value);
-  return (
-    <span class="dcolor">
-      <button
-        ref={button}
-        class="swatchbtn"
-        title={props.title ?? 'Colour'}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={toggle}
-        style={{ '--c': props.value || 'transparent' }}
-      />
-      <Show when={open()}>
-        <div class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
-          <div class="grid">
-            <For each={PALETTE}>
-              {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} title={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}
-            </For>
-          </div>
-          <label class="custom">
-            <input type="color" value={parts().hex} onInput={(e) => props.onChange(joinColor(e.currentTarget.value, parts().opacity))} />
-            Custom
-          </label>
-          <label class="opacity">
-            Opacity
-            <input type="range" min="0" max="100" value={parts().opacity} onInput={(e) => props.onChange(joinColor(parts().hex, Number(e.currentTarget.value)))} />
-            <span class="num">{parts().opacity}%</span>
-          </label>
-        </div>
-      </Show>
-    </span>
   );
 }
 
