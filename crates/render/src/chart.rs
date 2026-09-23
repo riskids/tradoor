@@ -1245,8 +1245,9 @@ impl Chart {
     fn paint_study_candles(&self, f: &mut Frame, scale: &PriceScale, bars: &[Option<[f64; 4]>], i0: usize, i1: usize, body: f32) {
         let t = &self.theme;
         let wick = (1.0 / f.dpr).max(1.0);
-        for i in i0..=i1.min(bars.len().saturating_sub(1)) {
-            let Some([o, h, l, c]) = bars[i] else { continue };
+        // Most studies have no candles: an empty list must not be indexed at all.
+        for (i, bar) in bars.iter().enumerate().take(i1.saturating_add(1)).skip(i0) {
+            let Some([o, h, l, c]) = *bar else { continue };
             let x = f.snap(self.time.x(i as f64) as f32);
             let color = if c >= o { t.bull } else { t.bear };
             let (yh, yl, yo, yc) = (scale.y(h) as f32, scale.y(l) as f32, scale.y(o) as f32, scale.y(c) as f32);
@@ -2398,6 +2399,18 @@ mod tests {
         let Some(Event::DrawingCreated { kind, points }) = events.first().cloned() else { panic!("{events:?}") };
         assert_eq!((kind, points.len()), (DrawingKind::Rect, 2));
         assert_eq!(c.tool(), None, "and the tool is done");
+    }
+
+    #[test]
+    fn studies_without_candles_draw_when_the_first_bar_is_in_view() {
+        // A study pane with the whole history on screen: its first bar is index 0.
+        let mut c = chart();
+        c.set_studies("rsi:14,oi");
+        c.set_open_interest(vec![(c.candles[0].open_time, [1.0, 2.0, 0.5, 1.5])]);
+        c.show_range(None);
+        let _ = c.render(0);
+        c.set_candles(c.candles[..3].to_vec());
+        let _ = c.render(0);
     }
 
     #[test]
