@@ -161,9 +161,11 @@ sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-`http.conf` makes nginx take the visitor's address from Cloudflare's
-`CF-Connecting-IP`, trusted from Cloudflare's ranges only; without it every
-visitor would share a handful of Cloudflare addresses. Once certbot has added
+`http.conf` keys nginx's limits on Cloudflare's `CF-Connecting-IP`, which the
+site passes to the server; without it every visitor would share a handful of
+Cloudflare addresses. It is trustworthy only where nginx admits nothing but
+Cloudflare (`allow` its ranges, `deny all`) — it is deliberately not nginx's
+`real_ip` module, which would make such a rule refuse every visitor. Once certbot has added
 its HTTPS block, merge `tradoor.conf`'s locations into the site by hand rather
 than copying it over.
 

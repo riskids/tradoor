@@ -129,9 +129,8 @@ pub fn new_owner(state: &AppState, headers: &HeaderMap) -> bool {
 
 /// The visitor's address: Cloudflare's `CF-Connecting-IP` where the site sits
 /// behind Cloudflare — nginx's own address for the visitor is then Cloudflare's
-/// — else nginx's `X-Real-IP`. nginx overwrites both from the connection
-/// (deploy/nginx/tradoor.conf), trusting Cloudflare's only from its ranges, so
-/// neither can be made up by a visitor.
+/// — else nginx's `X-Real-IP`. Cloudflare's is only as good as the host's rule
+/// that nothing but Cloudflare reaches nginx (deploy/nginx/http.conf).
 pub fn client(headers: &HeaderMap) -> Option<String> {
     ["cf-connecting-ip", "x-real-ip"].iter().find_map(|name| {
         let ip = headers.get(*name)?.to_str().ok()?.trim();
