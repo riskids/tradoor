@@ -7,8 +7,8 @@
 //! rate per exchange host for the relay. Past the relay's, an exchange would
 //! ban this server's address, and with it the recorders every chart reads.
 //!
-//! The address is nginx's `X-Real-IP`: the API listens on loopback only, behind
-//! nginx, which sets that header from the connection. Where it is missing —
+//! The address is Cloudflare's `CF-Connecting-IP` or nginx's `X-Real-IP` (see
+//! `client`): the API listens on loopback only, behind nginx, which sets them. Where it is missing —
 //! development, or an nginx location that does not set it — the per-address
 //! limits do not apply (every visitor would share one address), and only the
 //! shared ones do.
@@ -127,10 +127,16 @@ pub fn new_owner(state: &AppState, headers: &HeaderMap) -> bool {
     client(headers).is_none_or(|ip| state.limits.take(NEW_OWNERS, &ip))
 }
 
-/// The visitor's address as nginx saw it, if nginx said.
+/// The visitor's address: Cloudflare's `CF-Connecting-IP` where the site sits
+/// behind Cloudflare — nginx's own address for the visitor is then Cloudflare's
+/// — else nginx's `X-Real-IP`. nginx overwrites both from the connection
+/// (deploy/nginx/tradoor.conf), trusting Cloudflare's only from its ranges, so
+/// neither can be made up by a visitor.
 pub fn client(headers: &HeaderMap) -> Option<String> {
-    let ip = headers.get("x-real-ip")?.to_str().ok()?.trim();
-    (!ip.is_empty() && ip.len() <= 64).then(|| ip.to_string())
+    ["cf-connecting-ip", "x-real-ip"].iter().find_map(|name| {
+        let ip = headers.get(*name)?.to_str().ok()?.trim();
+        (!ip.is_empty() && ip.len() <= 64).then(|| ip.to_string())
+    })
 }
 
 /// `429 Too Many Requests`, with how long to wait.
@@ -202,5 +208,8 @@ mod tests {
         assert_eq!(client(&h), None);
         h.insert("x-real-ip", HeaderValue::from_static("203.0.113.9"));
         assert_eq!(client(&h).as_deref(), Some("203.0.113.9"));
+        // Behind Cloudflare, nginx's address is Cloudflare's; the visitor's is in its header.
+        h.insert("cf-connecting-ip", HeaderValue::from_static("198.51.100.4"));
+        assert_eq!(client(&h).as_deref(), Some("198.51.100.4"));
     }
 }

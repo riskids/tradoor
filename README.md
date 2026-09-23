@@ -78,7 +78,7 @@ The `Dockerfile` builds one image holding the three binaries and the web app.
 docker build -t tradoor:latest .
 ssh user@server 'sudo mkdir -p /var/www/tradoor && sudo chown $USER /var/www/tradoor'
 docker save tradoor:latest | gzip | ssh user@server 'gunzip | docker load'
-scp deploy/compose.yml deploy/nginx/tradoor.conf deploy/nginx/security-headers.conf user@server:/var/www/tradoor/
+scp deploy/compose.yml deploy/nginx/tradoor.conf deploy/nginx/security-headers.conf deploy/nginx/http.conf user@server:/var/www/tradoor/
 scp deploy/env.example user@server:/var/www/tradoor/.env
 
 # On the server.
@@ -155,10 +155,17 @@ be reachable through nginx — `deploy/compose.yml` publishes it on loopback.
 headers, including the Content Security Policy the page also carries:
 
 ```sh
-sudo cp tradoor.conf /etc/nginx/sites-available/tradoor
+sudo cp http.conf /etc/nginx/conf.d/tradoor.conf
 sudo cp security-headers.conf /etc/nginx/snippets/tradoor-security-headers.conf
+sudo cp http.conf /etc/nginx/conf.d/tradoor.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+`http.conf` makes nginx take the visitor's address from Cloudflare's
+`CF-Connecting-IP`, trusted from Cloudflare's ranges only; without it every
+visitor would share a handful of Cloudflare addresses. Once certbot has added
+its HTTPS block, merge `tradoor.conf`'s locations into the site by hand rather
+than copying it over.
 
 ## Drawings and layouts belong to a browser
 
