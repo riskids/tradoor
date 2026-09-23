@@ -103,6 +103,7 @@ pub fn parse_instruments(venue: Venue, body: &str, tickers: Option<&str>) -> Res
                 base: s.get("baseCoin")?.as_str()?.to_string(),
                 quote: s.get("quoteCoin")?.as_str()?.to_string(),
                 kind: venue.kind().as_str(),
+                native: None,
                 price_decimals: tick_decimals(s.get("priceFilter").and_then(|f| f.get("tickSize")?.as_str())),
                 quote_volume_24h: t.and_then(|t| num(t.get("turnover24h"))),
                 last_price: t.and_then(|t| num(t.get("lastPrice"))),

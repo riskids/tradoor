@@ -6,6 +6,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { setOverlay } from '../app/ui';
+import { nativeOf } from '../lib/native';
 import { StreamHub } from '../engine/streams';
 import { catalog, type Catalog } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
@@ -43,22 +44,31 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
   });
 
   createEffect(() => {
-    const unsubscribe = props.panel.markets.map((m) => {
+    let live = true;
+    const offs: (() => void)[] = [];
+    for (const m of props.panel.markets) {
       const ref = parseMarket(m);
-      if (!ref) return () => {};
-      return hub.subscribe(
-        ref.venue,
-        { kind: 'ticker', symbol: ref.symbol },
-        {
-          message: (msg) => {
-            if (msg.kind === 'ticker') setTickers(m, { last: msg.last, changePct: msg.changePct, quoteVolume: msg.quoteVolume });
-          },
-          state: () => {},
-        },
-      );
-    });
+      if (!ref) continue;
+      // The exchange's own name for it, which may take the catalogue to know.
+      void nativeOf(m).then((symbol) => {
+        if (!live) return;
+        offs.push(
+          hub.subscribe(
+            ref.venue,
+            { kind: 'ticker', symbol },
+            {
+              message: (msg) => {
+                if (msg.kind === 'ticker') setTickers(m, { last: msg.last, changePct: msg.changePct, quoteVolume: msg.quoteVolume });
+              },
+              state: () => {},
+            },
+          ),
+        );
+      });
+    }
     onCleanup(() => {
-      for (const off of unsubscribe) off();
+      live = false;
+      for (const off of offs.splice(0)) off();
     });
   });
 

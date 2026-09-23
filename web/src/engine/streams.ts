@@ -8,6 +8,7 @@ import type { Venue } from '../lib/markets';
 
 export type SocketState = 'connecting' | 'live' | 'stalled' | 'retrying';
 
+/** `symbol` is the exchange's own name for the market (see lib/native). */
 export type StreamSpec =
   | { kind: 'kline'; symbol: string; interval: string }
   | { kind: 'trades'; symbol: string }
@@ -59,22 +60,26 @@ export interface StreamListener {
   state(state: SocketState): void;
 }
 
-type Json = Record<string, unknown>;
+export type Json = Record<string, unknown>;
 
-interface Protocol {
+export interface Protocol {
   /** Tried in turn when a socket opens and nothing ever arrives. */
   urls: readonly string[];
-  topic(spec: StreamSpec): string;
+  /** The topic for a spec, or '' when this exchange does not stream it. */
+  topic(spec: StreamSpec, venue: Venue): string;
   frames(op: 'subscribe' | 'unsubscribe', topics: string[]): unknown[];
   read(msg: Json, emit: (topic: string, msg: StreamMsg) => void): void;
   /** A refused frame: the topic the exchange named, and the batch it came in. */
   refused?(msg: Json): { bad: string; batch: string[] } | null;
+  /** Sent every so often; a string goes as it is, anything else as JSON. */
   heartbeat?: unknown;
+  /** Sent once each time the socket opens, before the subscriptions. */
+  open?: unknown[];
 }
 
-const num = (v: unknown): number => (typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : Number.NaN);
+export const num = (v: unknown): number => (typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : Number.NaN);
 
-function chunks<T>(list: T[], size: number): T[][] {
+export function chunks<T>(list: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
   return out;
@@ -201,15 +206,29 @@ function bybit(urls: string[]): Protocol {
  * fails before a word moves to the next address, so the relay is only used
  * where the exchange itself is out of reach.
  */
-const relay = (venue: Venue): string[] =>
-  typeof location === 'undefined' ? [] : [`${location.origin.replace(/^http/, 'ws')}/api/relay/ws?venue=${venue}`];
+export const relay = (socket: string): string[] =>
+  typeof location === 'undefined' ? [] : [`${location.origin.replace(/^http/, 'ws')}/api/relay/ws?venue=${socket}`];
 
-const PROTOCOLS: Record<Venue, () => Protocol> = {
+/** Sockets by name: one per venue, except where an exchange shares or splits them. */
+const PROTOCOLS: Record<string, () => Protocol> = {
   'binance-spot': () => binance(['wss://stream.binance.com:9443/ws', 'wss://data-stream.binance.vision/ws', ...relay('binance-spot')]),
   'binance-perp': () => binance(['wss://fstream.binance.com/market/ws', 'wss://fstream.binance.com/ws', ...relay('binance-perp')]),
   'bybit-spot': () => bybit(['wss://stream.bybit.com/v5/public/spot', ...relay('bybit-spot')]),
   'bybit-perp': () => bybit(['wss://stream.bybit.com/v5/public/linear', ...relay('bybit-perp')]),
 };
+
+/** The other exchanges' protocols load with the first market that needs one. */
+let more: Promise<typeof import('./streams-more')> | null = null;
+const loadMore = () => (more ??= import('./streams-more'));
+
+/** The socket a venue's spec travels on. */
+export function socketOf(venue: Venue, spec: StreamSpec): string {
+  if (venue.startsWith('okx')) return spec.kind === 'kline' ? 'okx-business' : 'okx-public';
+  if (venue.startsWith('bitget')) return 'bitget';
+  if (venue === 'hyperliquid-perp') return 'hyperliquid';
+  if (venue === 'lighter-perp') return 'lighter';
+  return venue;
+}
 
 const STALL_MS = 12_000;
 const RETRY_MS = [1_000, 3_000, 5_000, 10_000];
@@ -243,8 +262,8 @@ class Connection {
 
   constructor(private readonly proto: Protocol) {}
 
-  topic(spec: StreamSpec): string {
-    return this.proto.topic(spec);
+  topic(spec: StreamSpec, venue: Venue): string {
+    return this.proto.topic(spec, venue);
   }
 
   add(topic: string, listener: StreamListener, quiet = false): () => void {
@@ -329,6 +348,7 @@ class Connection {
     ws.onopen = () => {
       this.pending.subscribe.clear();
       this.pending.unsubscribe.clear();
+      for (const frame of this.proto.open ?? []) ws.send(JSON.stringify(frame));
       this.sendFrames(ws, 'subscribe', [...this.topics.keys()]);
       this.stallTimer = setTimeout(() => {
         if (this.heard) return;
@@ -338,7 +358,7 @@ class Connection {
         if (this.proto.urls.length > 1) ws.close();
       }, STALL_MS);
       if (this.proto.heartbeat !== undefined) {
-        const beat = JSON.stringify(this.proto.heartbeat);
+        const beat = typeof this.proto.heartbeat === 'string' ? this.proto.heartbeat : JSON.stringify(this.proto.heartbeat);
         this.beatTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send(beat);
         }, HEARTBEAT_MS);
@@ -407,14 +427,43 @@ class Connection {
 }
 
 export class StreamHub {
-  private readonly connections = new Map<Venue, Connection>();
+  private readonly connections = new Map<string, Connection>();
+  private extra: Awaited<ReturnType<typeof loadMore>> | null = null;
+  private poller: InstanceType<Awaited<ReturnType<typeof loadMore>>['Poller']> | null = null;
 
   subscribe(venue: Venue, spec: StreamSpec, listener: StreamListener): () => void {
-    let conn = this.connections.get(venue);
-    if (!conn) {
-      conn = new Connection(PROTOCOLS[venue]());
-      this.connections.set(venue, conn);
+    const socket = socketOf(venue, spec);
+    if (!PROTOCOLS[socket] && !this.extra) {
+      // Loaded once, then this subscription goes ahead — unless dropped meanwhile.
+      let off: (() => void) | null = null;
+      let dropped = false;
+      listener.state('connecting');
+      void loadMore().then((m) => {
+        this.extra ??= m;
+        if (!dropped) off = this.subscribe(venue, spec, listener);
+      });
+      return () => {
+        dropped = true;
+        off?.();
+      };
     }
-    return conn.add(conn.topic(spec), listener, spec.kind === 'liquidations');
+    if (venue === 'lighter-perp' && spec.kind === 'kline' && this.extra) {
+      this.poller ??= new this.extra.Poller();
+      return this.poller.add(spec.symbol, this.extra.lighterResolution(spec.interval), listener);
+    }
+    let conn = this.connections.get(socket);
+    if (!conn) {
+      const make = PROTOCOLS[socket] ?? this.extra?.PROTOCOLS[socket];
+      if (!make) return () => {};
+      conn = new Connection(make());
+      this.connections.set(socket, conn);
+    }
+    const topic = conn.topic(spec, venue);
+    // This exchange does not stream it: say so rather than wait forever.
+    if (topic === '') {
+      listener.state('stalled');
+      return () => {};
+    }
+    return conn.add(topic, listener, spec.kind === 'liquidations');
   }
 }

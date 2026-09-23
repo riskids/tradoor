@@ -18,7 +18,7 @@ function rank(products: readonly Product[], query: string, kindFilter: Kind, exc
   let kind = kindFilter;
   const terms: string[] = [];
   for (const word of query.toUpperCase().split(/[\s/:-]+/).filter(Boolean)) {
-    if (word === 'BINANCE' || word === 'BYBIT') exchange = word.toLowerCase();
+    if (LIVE_EXCHANGES.some((e) => e.id === word.toLowerCase())) exchange = word.toLowerCase();
     else if (word === 'PERP' || word === 'SPOT') kind = word.toLowerCase() as Kind;
     else terms.push(word.replace(/[^A-Z0-9]/g, ''));
   }

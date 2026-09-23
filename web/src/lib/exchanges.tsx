@@ -1,7 +1,6 @@
 /**
- * Exchanges and their marks. Binance and Bybit are live; the rest are listed so
- * their logos and names are ready when their venues, streams and history
- * loaders are added — flip `live` then, and they appear in search and filters.
+ * Exchanges and their marks. Those `live` can be charted — they have venues,
+ * streams and history loaders; the rest are here for their liquidations.
  * Marks are the official ones, on a black disc, from rsalianto's exchange icons.
  */
 import type { Component, JSX } from 'solid-js';
@@ -47,11 +46,11 @@ const logo = (id: ExchangeId): Component<LogoProps> => (p) => <Paths size={p.siz
 export const EXCHANGES: Record<ExchangeId, ExchangeDef> = {
   binance: { id: 'binance', name: 'Binance', live: true, Logo: logo('binance') },
   bybit: { id: 'bybit', name: 'Bybit', live: true, Logo: logo('bybit') },
-  okx: { id: 'okx', name: 'OKX', live: false, Logo: logo('okx') },
-  bitget: { id: 'bitget', name: 'Bitget', live: false, Logo: logo('bitget') },
-  hyperliquid: { id: 'hyperliquid', name: 'Hyperliquid', live: false, Logo: logo('hyperliquid') },
-  kraken: { id: 'kraken', name: 'Kraken', live: false, Logo: logo('kraken') },
-  lighter: { id: 'lighter', name: 'Lighter', live: false, Logo: logo('lighter') },
+  okx: { id: 'okx', name: 'OKX', live: true, Logo: logo('okx') },
+  bitget: { id: 'bitget', name: 'Bitget', live: true, Logo: logo('bitget') },
+  hyperliquid: { id: 'hyperliquid', name: 'Hyperliquid', live: true, Logo: logo('hyperliquid') },
+  kraken: { id: 'kraken', name: 'Kraken', live: true, Logo: logo('kraken') },
+  lighter: { id: 'lighter', name: 'Lighter', live: true, Logo: logo('lighter') },
   gate: { id: 'gate', name: 'Gate', live: false, Logo: logo('gate') },
   htx: { id: 'htx', name: 'HTX', live: false, Logo: logo('htx') },
   bitmex: { id: 'bitmex', name: 'BitMEX', live: false, Logo: logo('bitmex') },

@@ -1,6 +1,6 @@
 //! The exchanges, for browsers that cannot reach them.
 //!
-//! The browser talks to Binance and Bybit itself; this server is not on that
+//! The browser talks to the exchanges itself; this server is not on that
 //! path. But on networks that block the exchanges' names — a phone on an
 //! Indonesian carrier — the browser gets nowhere, while this server, looking
 //! names up over HTTPS, still does. So the page falls back to these two routes:
@@ -23,23 +23,38 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 use crate::api::{ApiError, AppState};
 use crate::dns::Doh;
 
-/// REST calls a chart makes, by host and exact path.
-const REST: [(&str, &[&str]); 4] = [
+/// REST calls a chart makes, by host and exact path — or by a prefix ending
+/// in `/`, where the market is part of the path (Kraken Futures' charts).
+/// Hyperliquid's are POSTs and are not relayed.
+const REST: [(&str, &[&str]); 9] = [
     ("api.binance.com", &["/api/v3/klines", "/api/v3/ping"]),
     ("data-api.binance.vision", &["/api/v3/klines", "/api/v3/ping"]),
     ("fapi.binance.com", &["/fapi/v1/klines", "/fapi/v1/ping"]),
     ("api.bybit.com", &["/v5/market/kline", "/v5/market/time"]),
+    ("www.okx.com", &["/api/v5/market/candles", "/api/v5/market/history-candles"]),
+    ("api.bitget.com", &["/api/v2/spot/market/candles", "/api/v2/spot/market/history-candles", "/api/v2/mix/market/candles", "/api/v2/mix/market/history-candles"]),
+    ("api.kraken.com", &["/0/public/OHLC"]),
+    ("futures.kraken.com", &["/api/charts/v1/trade/"]),
+    ("mainnet.zklighter.elliot.ai", &["/api/v1/candles"]),
 ];
 /// Upstream responses larger than this are refused: a kline page is a few hundred kilobytes.
 const MAX_BODY: usize = 8 * 1024 * 1024;
 
-/// The public market stream of each venue.
+/// The public market streams, by venue or — where an exchange splits them over
+/// several sockets — by socket.
 fn stream_url(venue: &str) -> Option<&'static str> {
     Some(match venue {
         "binance-spot" => "wss://stream.binance.com:9443/ws",
         "binance-perp" => "wss://fstream.binance.com/market/ws",
         "bybit-spot" => "wss://stream.bybit.com/v5/public/spot",
         "bybit-perp" => "wss://stream.bybit.com/v5/public/linear",
+        "okx-business" => "wss://ws.okx.com:8443/ws/v5/business",
+        "okx-public" => "wss://ws.okx.com:8443/ws/v5/public",
+        "bitget" => "wss://ws.bitget.com/v2/ws/public",
+        "hyperliquid" => "wss://api.hyperliquid.xyz/ws",
+        "kraken-spot" => "wss://ws.kraken.com/v2",
+        "kraken-perp" => "wss://futures.kraken.com/ws/v1",
+        "lighter" => "wss://mainnet.zklighter.elliot.ai/stream",
         _ => return None,
     })
 }
@@ -60,7 +75,8 @@ impl Relay {
 
 /// Whether `url` is one of the REST calls relayed.
 pub fn allowed_rest(url: &reqwest::Url) -> bool {
-    url.scheme() == "https" && url.port().is_none() && REST.iter().any(|(host, paths)| url.host_str() == Some(*host) && paths.contains(&url.path()))
+    // The URL is parsed, so `..` is already resolved out of the path a prefix is matched against.
+    url.scheme() == "https" && url.port().is_none() && REST.iter().any(|(host, paths)| url.host_str() == Some(*host) && paths.iter().any(|p| if p.ends_with('/') { url.path().starts_with(p) && url.path().len() > p.len() } else { url.path() == *p }))
 }
 
 #[derive(Deserialize)]
@@ -170,6 +186,11 @@ mod tests {
         assert!(!ok("http://fapi.binance.com/fapi/v1/klines"), "https only");
         assert!(!ok("https://fapi.binance.com:8443/fapi/v1/klines"), "no other ports");
         assert!(!ok("https://fapi.binance.com/fapi/v1/klines/../order"), "the path must match exactly");
+        assert!(ok("https://futures.kraken.com/api/charts/v1/trade/PF_XBTUSD/1h?from=1"));
+        assert!(!ok("https://futures.kraken.com/api/charts/v1/trade/../../derivatives/api/v3/sendorder"), "a prefix after `..` is resolved");
+        assert!(ok("https://www.okx.com/api/v5/market/history-candles?instId=BTC-USDT&bar=1H"));
+        assert!(!ok("https://www.okx.com/api/v5/trade/order"));
+        assert_eq!(stream_url("okx-business"), Some("wss://ws.okx.com:8443/ws/v5/business"));
         assert_eq!(stream_url("bybit-perp"), Some("wss://stream.bybit.com/v5/public/linear"));
         assert_eq!(stream_url("wss://anything"), None);
     }

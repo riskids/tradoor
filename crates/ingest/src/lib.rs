@@ -194,6 +194,8 @@ impl Ingest {
             (Exchange::Bybit, _) => &self.config.bybit_rest,
             (Exchange::Binance, tradoor_venues::Kind::Spot) => &self.config.binance_spot_rest,
             (Exchange::Binance, tradoor_venues::Kind::Perp) => &self.config.binance_perp_rest,
+            // Only Binance and Bybit are archived; `rest` refuses the rest before asking.
+            _ => "",
         }
     }
 
@@ -203,6 +205,7 @@ impl Ingest {
         let limit = match market.venue.exchange() {
             Exchange::Binance => binance::max_klines(market.venue),
             Exchange::Bybit => bybit::MAX_KLINES,
+            _ => return Err(IngestError::Http(format!("{} is not archived: only Binance and Bybit are", market.venue.id()))),
         };
         let mut parts = Vec::new();
         let mut cursor = from;
@@ -212,6 +215,7 @@ impl Ingest {
             let url = match market.venue.exchange() {
                 Exchange::Binance => binance::klines_url(base, market, interval, Some(cursor), Some(end - 1), limit),
                 Exchange::Bybit => bybit::klines_url(base, market, interval, Some(cursor), Some(end - 1), limit),
+                _ => unreachable!("refused above"),
             };
             tokio::time::sleep(self.config.pace).await;
             stats.rest_requests += 1;
@@ -220,6 +224,7 @@ impl Ingest {
             let mut klines = match market.venue.exchange() {
                 Exchange::Binance => binance::parse_klines(&body)?,
                 Exchange::Bybit => bybit::parse_klines(&body)?,
+                _ => unreachable!("refused above"),
             };
             klines.retain(|k| k.open_time >= cursor && k.open_time < end);
             dedupe(&mut klines);

@@ -9,6 +9,7 @@ import { api, catalog, type LiquidationStats, type LiquidationWindow } from '../
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { holdTape, releaseTape, type Tape, type TapeHit, type VenueStatus } from '../lib/liquidation-tape';
+import { serverTicker } from '../lib/liquidation-venues';
 import { parseMarket, symbolOf } from '../lib/markets';
 import { formatClock, formatHm, zoneLabel } from '../lib/timezone';
 import type { LiquidationsPanelState } from '../workspace/model';
@@ -59,7 +60,7 @@ export function LiquidationsPanel(props: { panel: LiquidationsPanelState }) {
     let current = true;
     const load = async () => {
       try {
-        const s = await api.liquidations(t);
+        const s = await api.liquidations(serverTicker(t));
         if (!current) return;
         setStats(s);
         setStatsError(false);

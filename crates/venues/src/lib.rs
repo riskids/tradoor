@@ -6,10 +6,15 @@
 #![forbid(unsafe_code)]
 
 pub mod binance;
+pub mod bitget;
 pub mod bybit;
 pub mod catalog;
+pub mod hyperliquid;
 pub mod kline;
+pub mod kraken;
+pub mod lighter;
 pub mod market;
+pub mod okx;
 
 pub use catalog::Product;
 pub use kline::OwnedKline;

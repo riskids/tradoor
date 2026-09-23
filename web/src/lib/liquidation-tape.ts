@@ -12,8 +12,8 @@ import { createStore } from 'solid-js/store';
 import { StreamHub, type SocketState } from '../engine/streams';
 import { catalog, type LiquidationRow } from './api';
 import { demoHit, demoRate } from './demo';
-import { followLiquidations, type ServerVenue } from './liquidation-feed';
-import { liquidationVenues, type LiquidationVenue } from './liquidation-venues';
+import type { ServerVenue } from './liquidation-feed';
+import { liquidationVenues, serverTicker, type LiquidationVenue } from './liquidation-venues';
 import { parseMarket, symbolOf } from './markets';
 
 /** Tapes keep their own sockets: liquidations are few and the engine thread is busy. */
@@ -88,22 +88,25 @@ function open(market: string): Entry {
     for (const v of list) setStatus(v.venue, SERVER_STATE[v.state] ?? 'connecting');
   };
 
-  // The server first: one feed for every exchange it follows.
-  offs.push(
-    followLiquidations(ticker, {
-      hit: (h) => {
-        setFromServer(true);
-        add(h.venue, h.time, h.price, h.qty, h.long);
-      },
-      venues: (list) => {
-        setFromServer(true);
-        showServerVenues(list);
-      },
-      unavailable: () => {
-        if (!closed) listenDirectly();
-      },
-    }),
-  );
+  // The server first: one feed for every exchange it follows. Its reader loads with the first tape.
+  void import('./liquidation-feed').then(({ followLiquidations }) => {
+    if (closed) return;
+    offs.push(
+      followLiquidations(serverTicker(ticker), {
+        hit: (h) => {
+          setFromServer(true);
+          add(h.venue, h.time, h.price, h.qty, h.long);
+        },
+        venues: (list) => {
+          setFromServer(true);
+          showServerVenues(list);
+        },
+        unavailable: () => {
+          if (!closed) listenDirectly();
+        },
+      }),
+    );
+  });
 
   const listenDirectly = () => void catalog()
     .then(

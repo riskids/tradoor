@@ -8,7 +8,9 @@
  * closed bars are held; the forming one comes from the stream.
  */
 import { decode_partition } from '../wasm/pkg/tradoor_wasm.js';
-import { parseMarket, type MarketRef } from '../lib/markets';
+import { parseMarket, type MarketRef, type Venue } from '../lib/markets';
+import { nativeOf } from '../lib/native';
+import { restInterval } from './intervals';
 
 export interface Cols {
   time: Float64Array;
@@ -85,7 +87,7 @@ export function intervalEnd(interval: string, open: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
 }
 
-const intervalMs = (interval: string): number => FIXED[interval] ?? 30 * DAY;
+export const intervalMs = (interval: string): number => FIXED[interval] ?? 30 * DAY;
 
 // ---------------------------------------------------------------- exchange REST
 
@@ -98,7 +100,24 @@ const BYBIT_INTERVAL: Record<string, string> = {
   '1d': 'D', '1w': 'W', '1M': 'M',
 };
 
-const pageLimit = (ref: MarketRef): number => (ref.venue === 'binance-perp' ? 1500 : 1000);
+/** Bars one request returns at most, per venue. */
+const PAGE_LIMIT: Record<Venue, number> = {
+  'binance-spot': 1000,
+  'binance-perp': 1500,
+  'bybit-spot': 1000,
+  'bybit-perp': 1000,
+  'okx-spot': 100,
+  'okx-perp': 100,
+  'bitget-spot': 200,
+  'bitget-perp': 200,
+  'hyperliquid-perp': 5000,
+  'kraken-spot': 720,
+  'kraken-perp': 2000,
+  'lighter-perp': 500,
+};
+
+const pageLimit = (ref: MarketRef): number => PAGE_LIMIT[ref.venue];
+
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -109,6 +128,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * fails it goes that way for the rest of the session.
  */
 const unreachable = new Set<string>();
+// Kraken Futures answers with an empty Access-Control-Allow-Origin, which no browser accepts.
+unreachable.add('futures.kraken.com');
 
 async function fetchExchange(url: string): Promise<Response> {
   const host = new URL(url).host;
@@ -148,16 +169,19 @@ async function binanceSpot(query: string): Promise<unknown> {
   }
 }
 
+export type Row = number[];
+export type Range = { start?: number; end?: number };
+
 interface Page {
   cols: Cols;
-  /** Rows the exchange sent, before the forming bar was dropped. */
+  /** Rows the exchange sent in the range, before the forming bar was dropped. */
   raw: number;
 }
 
 /** Klines opening inside the range, oldest first, closed bars only. */
-async function klines(ref: MarketRef, interval: string, range: { start?: number; end?: number }): Promise<Page> {
+async function klines(ref: MarketRef, interval: string, range: Range): Promise<Page> {
   const limit = pageLimit(ref);
-  let rows: number[][];
+  let rows: Row[];
   if (ref.venue.startsWith('binance')) {
     const path = ref.venue === 'binance-perp' ? '/fapi/v1/klines' : '/api/v3/klines';
     let query = `${path}?symbol=${ref.symbol}&interval=${interval}&limit=${limit}`;
@@ -166,7 +190,7 @@ async function klines(ref: MarketRef, interval: string, range: { start?: number;
     const body = ref.venue === 'binance-perp' ? await getJson(`https://fapi.binance.com${query}`) : await binanceSpot(query);
     if (!Array.isArray(body)) throw new Error('Binance sent an unexpected kline response');
     rows = (body as unknown[][]).map((r) => [Number(r[0]), Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5])]);
-  } else {
+  } else if (ref.venue.startsWith('bybit')) {
     const category = ref.venue === 'bybit-perp' ? 'linear' : 'spot';
     let url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${ref.symbol}&interval=${BYBIT_INTERVAL[interval] ?? interval}&limit=${limit}`;
     if (range.start !== undefined) url += `&start=${range.start}`;
@@ -175,6 +199,10 @@ async function klines(ref: MarketRef, interval: string, range: { start?: number;
     if (body.retCode !== 0) throw new Error(body.retMsg || 'Bybit refused the kline request');
     // Newest first on Bybit.
     rows = (body.result?.list ?? []).map((r) => r.slice(0, 6).map(Number)).reverse();
+  } else {
+    // The other exchanges' loaders come with the first market on one of them.
+    const { venueRows } = await import('./history-venues');
+    rows = await venueRows(ref, await nativeOf(`${ref.venue}:${ref.symbol}`), interval, range, limit, getJson);
   }
   const now = Date.now();
   const closed = rows.filter((r) => Number.isFinite(r[4]) && intervalEnd(interval, r[0]!) <= now);
@@ -404,7 +432,8 @@ export async function openSeries(market: string, base: string, interval: string)
   if (!ref) throw new Error(`not a market: ${market}`);
   const stored = (await manifest(ref))?.bases[base] ?? [];
   const source: SeriesSource = stored.length > 0 ? 'archive' : 'exchange';
-  const at = source === 'archive' ? base : interval;
+  // A length the exchange lacks is fetched shorter and folded by the chart.
+  const at = source === 'archive' ? base : restInterval(ref.venue, interval);
   const key = `${market}|${at}`;
   let series = registry.get(key);
   if (!series) {

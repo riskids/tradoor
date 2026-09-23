@@ -7,8 +7,9 @@
 import type { Product } from './api';
 import { parseMarket, VENUES, type Venue } from './markets';
 
-/** Venues with positions to liquidate, in the order their marks are shown. */
-export const PERP_VENUES: readonly Venue[] = VENUES.filter((v) => v.endsWith('perp'));
+/** Perpetual venues the page streams liquidations from itself, when the
+ *  server does not follow the ticker. The server's feed covers every other. */
+export const PERP_VENUES: readonly Venue[] = VENUES.filter((v) => v === 'binance-perp' || v === 'bybit-perp');
 
 export interface LiquidationVenue {
   /** A chart venue, or any exchange the server's feed names. */
@@ -29,6 +30,13 @@ export function coinOf(base: string): string {
   const after = /^(.*[A-Z])(10{2,})$/.exec(base);
   return after ? `${after[1]}x${after[2]}` : base;
 }
+
+/**
+ * The ticker the server keeps a coin's liquidations under. It gathers a coin
+ * from every exchange whatever the quote, and names it with USDT: a Kraken or
+ * Hyperliquid `BTCUSD` chart reads `BTCUSDT`.
+ */
+export const serverTicker = (symbol: string): string => `${symbol.replace(/(USDT|USDC|USD)$/, '') || symbol}USDT`;
 
 /**
  * Where `market`'s ticker trades as a perpetual on each exchange. Without the

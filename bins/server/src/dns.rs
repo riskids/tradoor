@@ -18,7 +18,22 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// Names under these are looked up over HTTPS.
-const EXCHANGE_DOMAINS: [&str; 3] = ["binance.com", "binance.vision", "bybit.com"];
+const EXCHANGE_DOMAINS: [&str; 14] = [
+    "binance.com",
+    "binance.vision",
+    "bybit.com",
+    "okx.com",
+    "bitget.com",
+    "hyperliquid.xyz",
+    "kraken.com",
+    "elliot.ai",
+    "deribit.com",
+    "gateio.ws",
+    "hbdm.com",
+    "bitmex.com",
+    "bitfinex.com",
+    "asterdex.com",
+];
 /// DNS-over-HTTPS endpoints, by address: asking a resolver for their names would defeat the point.
 const ENDPOINTS: [&str; 2] = ["https://1.1.1.1/dns-query", "https://8.8.8.8/resolve"];
 

@@ -6,6 +6,11 @@ use std::fmt;
 pub enum Exchange {
     Binance,
     Bybit,
+    Okx,
+    Bitget,
+    Hyperliquid,
+    Kraken,
+    Lighter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -29,10 +34,31 @@ pub enum Venue {
     BinancePerp,
     BybitSpot,
     BybitPerp,
+    OkxSpot,
+    OkxPerp,
+    BitgetSpot,
+    BitgetPerp,
+    HyperliquidPerp,
+    KrakenSpot,
+    KrakenPerp,
+    LighterPerp,
 }
 
 impl Venue {
-    pub const ALL: [Venue; 4] = [Self::BinanceSpot, Self::BinancePerp, Self::BybitSpot, Self::BybitPerp];
+    pub const ALL: [Venue; 12] = [
+        Self::BinanceSpot,
+        Self::BinancePerp,
+        Self::BybitSpot,
+        Self::BybitPerp,
+        Self::OkxSpot,
+        Self::OkxPerp,
+        Self::BitgetSpot,
+        Self::BitgetPerp,
+        Self::HyperliquidPerp,
+        Self::KrakenSpot,
+        Self::KrakenPerp,
+        Self::LighterPerp,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -40,6 +66,14 @@ impl Venue {
             Self::BinancePerp => "binance-perp",
             Self::BybitSpot => "bybit-spot",
             Self::BybitPerp => "bybit-perp",
+            Self::OkxSpot => "okx-spot",
+            Self::OkxPerp => "okx-perp",
+            Self::BitgetSpot => "bitget-spot",
+            Self::BitgetPerp => "bitget-perp",
+            Self::HyperliquidPerp => "hyperliquid-perp",
+            Self::KrakenSpot => "kraken-spot",
+            Self::KrakenPerp => "kraken-perp",
+            Self::LighterPerp => "lighter-perp",
         }
     }
 
@@ -49,6 +83,14 @@ impl Venue {
             Self::BinancePerp => "Binance Perp",
             Self::BybitSpot => "Bybit Spot",
             Self::BybitPerp => "Bybit Perp",
+            Self::OkxSpot => "OKX Spot",
+            Self::OkxPerp => "OKX Perp",
+            Self::BitgetSpot => "Bitget Spot",
+            Self::BitgetPerp => "Bitget Perp",
+            Self::HyperliquidPerp => "Hyperliquid Perp",
+            Self::KrakenSpot => "Kraken Spot",
+            Self::KrakenPerp => "Kraken Perp",
+            Self::LighterPerp => "Lighter Perp",
         }
     }
 
@@ -56,13 +98,18 @@ impl Venue {
         match self {
             Self::BinanceSpot | Self::BinancePerp => Exchange::Binance,
             Self::BybitSpot | Self::BybitPerp => Exchange::Bybit,
+            Self::OkxSpot | Self::OkxPerp => Exchange::Okx,
+            Self::BitgetSpot | Self::BitgetPerp => Exchange::Bitget,
+            Self::HyperliquidPerp => Exchange::Hyperliquid,
+            Self::KrakenSpot | Self::KrakenPerp => Exchange::Kraken,
+            Self::LighterPerp => Exchange::Lighter,
         }
     }
 
     pub fn kind(self) -> Kind {
         match self {
-            Self::BinanceSpot | Self::BybitSpot => Kind::Spot,
-            Self::BinancePerp | Self::BybitPerp => Kind::Perp,
+            Self::BinanceSpot | Self::BybitSpot | Self::OkxSpot | Self::BitgetSpot | Self::KrakenSpot => Kind::Spot,
+            _ => Kind::Perp,
         }
     }
 
@@ -72,7 +119,10 @@ impl Venue {
 }
 
 /// `binance-perp:BTCUSDT`. The venue is part of a market's identity: BTCUSDT
-/// exists on all four venues at four prices.
+/// exists on many venues at many prices. The symbol is this app's spelling —
+/// `[A-Z0-9_]`, the coin and the quote run together where the exchange writes
+/// `BTC-USDT-SWAP` or `BTC/USD` — and the catalogue carries the exchange's own
+/// name for it where the two differ.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MarketRef {
     pub venue: Venue,
@@ -116,7 +166,11 @@ mod tests {
         assert_eq!((m.venue, m.symbol.as_str(), m.to_string(), m.dir()), (Venue::BinancePerp, "BTCUSDT", "binance-perp:BTCUSDT".to_string(), "binance-perp/BTCUSDT".to_string()));
         assert!(MarketRef::parse("binance-perp:../etc").is_none());
         assert!(MarketRef::parse("binance-perp:btcusdt").is_none());
-        assert!(MarketRef::parse("kraken-spot:BTCUSD").is_none());
+        assert_eq!(MarketRef::parse("kraken-spot:BTCUSD").unwrap().venue, Venue::KrakenSpot);
+        assert!(MarketRef::parse("kucoin-spot:BTCUSDT").is_none());
+        for v in Venue::ALL {
+            assert_eq!(Venue::parse(v.id()), Some(v));
+        }
         assert!(MarketRef::parse("BTCUSDT").is_none());
     }
 }

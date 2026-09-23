@@ -9,11 +9,14 @@ import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
 import { MARK_ORDER, markIndex } from '../lib/mark-order';
 import { parseMarket } from '../lib/markets';
-import { concatCols, emptyCols, openSeries, sliceCols, type Cols, type Series } from './history';
+import { concatCols, emptyCols, intervalMs, lowerBound, openSeries, sliceCols, type Cols, type Series } from './history';
+import { restInterval } from './intervals';
+import { nativeOf } from '../lib/native';
 import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
 import { followLiquidations } from '../lib/liquidation-feed';
+import { serverTicker } from '../lib/liquidation-venues';
 import { coinOf, oiVenues, OpenInterestFeed } from './open-interest';
-import { StreamHub, type SocketState, type StreamListener, type StreamMsg } from './streams';
+import { StreamHub, type KlineMsg, type SocketState, type StreamListener, type StreamMsg } from './streams';
 
 /** Closed bars a chart opens with: enough for EMA 200 to settle, with room to scroll. */
 const CHART_BARS = 1_500;
@@ -88,7 +91,55 @@ function precisionOf(c: Cols): number {
 
 /** Base bars needed for `bars` bars of `tf` from this series. */
 const baseBars = (series: Series, tf: TfInfo, bars: number): number =>
-  Math.min(MAX_BASE_BARS, series.source === 'archive' ? Math.ceil((bars * tf.barMs) / tf.baseMs) : bars * tf.group);
+  Math.min(MAX_BASE_BARS, series.source === 'archive' ? Math.ceil((bars * tf.barMs) / tf.baseMs) : Math.ceil((bars * tf.barMs) / intervalMs(series.interval)));
+
+/** Where the chart's bar of `timeframe` that `t` falls in opens. */
+function barStart(timeframe: string, t: number): number {
+  const d = new Date(t);
+  if (timeframe === '1M') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  if (timeframe === '1w') {
+    // The epoch was a Thursday; weeks open on Monday.
+    const week = 7 * 86_400_000;
+    const monday = 4 * 86_400_000;
+    return Math.floor((t - monday) / week) * week + monday;
+  }
+  const ms = intervalMs(timeframe);
+  return Math.floor(t / ms) * ms;
+}
+
+/**
+ * Shorter klines combined into the chart's forming bar: the parts of it
+ * already closed come from the loaded history, the rest as they stream.
+ */
+function combiner(timeframe: string, history: Cols): (k: KlineMsg) => KlineMsg | null {
+  const parts = new Map<number, KlineMsg>();
+  let open = Number.NEGATIVE_INFINITY;
+  return (k) => {
+    const start = barStart(timeframe, k.openTime);
+    if (start < open) return null;
+    if (start > open) {
+      open = start;
+      parts.clear();
+      for (let i = lowerBound(history.time, start); i < history.time.length; i += 1) {
+        const t = history.time[i]!;
+        parts.set(t, { kind: 'kline', openTime: t, open: history.open[i]!, high: history.high[i]!, low: history.low[i]!, close: history.close[i]!, volume: history.volume[i]!, lastTradeId: 0, closed: true });
+      }
+    }
+    parts.set(k.openTime, k);
+    const list = [...parts.values()].sort((a, b) => a.openTime - b.openTime);
+    return {
+      kind: 'kline',
+      openTime: open,
+      open: list[0]!.open,
+      high: Math.max(...list.map((p) => p.high)),
+      low: Math.min(...list.map((p) => p.low)),
+      close: list[list.length - 1]!.close,
+      volume: list.reduce((sum, p) => sum + p.volume, 0),
+      lastTradeId: 0,
+      closed: false,
+    };
+  };
+}
 
 class Slot {
   readonly engine: ChartEngine;
@@ -117,6 +168,7 @@ class Slot {
   hidden = false;
   /** The ticker's perpetual on each exchange, whose liquidations the feed shows. */
   private liquidationMarkets: string[] = [];
+  private liquidationKey = '';
   /** The studies as last set, for whether open interest is shown. */
   private studies = '';
   private readonly openInterest = new OpenInterestFeed((steps) => {
@@ -192,12 +244,16 @@ class Slot {
    * their exchange's mark; the list comes from the page, which has the catalogue.
    */
   watchLiquidations(markets: string[]): void {
-    if (markets.join() === this.liquidationMarkets.join()) return;
+    // The chart's own market decides the server's ticker: a Lighter BTCUSD chart may list no direct venue at all.
+    const symbol = parseMarket(this.market)?.symbol ?? markets.map((m) => parseMarket(m)?.symbol).find(Boolean);
+    const key = `${symbol}|${markets.join()}`;
+    if (key === this.liquidationKey) return;
+    this.liquidationKey = key;
     for (const off of this.liquidationOff.splice(0)) off();
     this.liquidationMarkets = markets;
     this.engine.clear_liquidations();
-    const ticker = markets.map((m) => parseMarket(m)?.symbol).find(Boolean);
-    if (!ticker) return;
+    if (!symbol) return;
+    const ticker = serverTicker(symbol);
     // The server's feed carries every exchange it follows; without it, the chart's own sockets.
     let direct = false;
     this.liquidationOff.push(
@@ -347,13 +403,19 @@ class Slot {
     }
     const feed = new LiveFeedEngine(this.timeframe);
     this.feed = feed;
+    // An exchange without this length streams a shorter one, combined here into the chart's bar.
+    const streamed = restInterval(ref.venue, tf.live);
+    const combine = streamed !== tf.live ? combiner(this.timeframe, this.series?.cols ?? emptyCols()) : null;
     const listener: StreamListener = {
       message: (m: StreamMsg) => {
         if (gen !== this.gen) return;
-        const changed =
-          m.kind === 'kline'
-            ? feed.apply_kline(m.openTime, m.open, m.high, m.low, m.close, m.volume, m.lastTradeId, m.closed)
-            : m.kind === 'trade' && feed.apply_trade(m.time, m.price, m.qty, m.lastTradeId);
+        let changed: boolean;
+        if (m.kind === 'kline') {
+          const k = combine ? combine(m) : m;
+          changed = k !== null && feed.apply_kline(k.openTime, k.open, k.high, k.low, k.close, k.volume, k.lastTradeId, k.closed);
+        } else {
+          changed = m.kind === 'trade' && feed.apply_trade(m.time, m.price, m.qty, m.lastTradeId);
+        }
         if (changed) this.onLive(feed.bar() as Bar | null);
       },
       state: (state: SocketState) => {
@@ -364,9 +426,16 @@ class Slot {
         if (state === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail();
       },
     };
-    this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol: ref.symbol, interval: tf.live }, listener));
-    // Binance's kline publishes about once a second; trades fill in between.
-    if (ref.venue.startsWith('binance')) this.cleanup.push(hub.subscribe(ref.venue, { kind: 'trades', symbol: ref.symbol }, listener));
+    let off = false;
+    this.cleanup.push(() => {
+      off = true;
+    });
+    void nativeOf(this.market).then((symbol) => {
+      if (off || gen !== this.gen) return;
+      this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed }, listener));
+      // Binance's kline publishes about once a second; trades fill in between.
+      if (ref.venue.startsWith('binance')) this.cleanup.push(hub.subscribe(ref.venue, { kind: 'trades', symbol }, listener));
+    });
   }
 
   private onLive(bar: Bar | null): void {

@@ -18,7 +18,7 @@ first.
 ```text
 crates/core      candles, timeframes, indicators and studies with Pine Script semantics; no dependencies
 crates/codec     the TDC1 partition format (docs/format.md)
-crates/venues    Binance and Bybit: markets, klines, archives
+crates/venues    the exchanges: market lists, klines, archives (Binance and Bybit)
 crates/store     the data directory and PostgreSQL metadata
 crates/ingest    archive and REST sync into partitions
 crates/render    the chart as a pure model: layout, scales, interaction, frames

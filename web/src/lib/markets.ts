@@ -1,31 +1,57 @@
 /** A market is `venue:SYMBOL` — the same spelling the server, the data
- *  directory and the drawings table use. BTCUSDT exists on four venues at four
- *  prices, so the venue is part of the identity. */
+ *  directory and the drawings table use. BTCUSDT exists on many venues at many
+ *  prices, so the venue is part of the identity. The symbol is this app's
+ *  spelling; where an exchange names the market otherwise (`BTC-USDT-SWAP`,
+ *  `BTC/USD`, a Lighter market number) the catalogue carries that name. */
 
-export type Venue = 'binance-spot' | 'binance-perp' | 'bybit-spot' | 'bybit-perp';
+export type Venue =
+  | 'binance-spot'
+  | 'binance-perp'
+  | 'bybit-spot'
+  | 'bybit-perp'
+  | 'okx-spot'
+  | 'okx-perp'
+  | 'bitget-spot'
+  | 'bitget-perp'
+  | 'hyperliquid-perp'
+  | 'kraken-spot'
+  | 'kraken-perp'
+  | 'lighter-perp';
 
-export const VENUES: readonly Venue[] = ['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp'];
+export const VENUES: readonly Venue[] = [
+  'binance-spot',
+  'binance-perp',
+  'bybit-spot',
+  'bybit-perp',
+  'okx-spot',
+  'okx-perp',
+  'bitget-spot',
+  'bitget-perp',
+  'hyperliquid-perp',
+  'kraken-spot',
+  'kraken-perp',
+  'lighter-perp',
+];
 
-export const VENUE_LABEL: Record<Venue, string> = {
-  'binance-spot': 'Binance',
-  'binance-perp': 'Binance Perp',
-  'bybit-spot': 'Bybit',
-  'bybit-perp': 'Bybit Perp',
-};
+const EXCHANGE_NAME: Record<string, string> = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', bitget: 'Bitget', hyperliquid: 'Hyperliquid', kraken: 'Kraken', lighter: 'Lighter' };
+
+/** `Binance` for spot, `Binance Perp` for the perpetuals. */
+export const VENUE_LABEL = Object.fromEntries(VENUES.map((v) => [v, EXCHANGE_NAME[v.split('-')[0]!] + (v.endsWith('perp') ? ' Perp' : '')])) as Record<Venue, string>;
 
 export interface MarketRef {
   venue: Venue;
   symbol: string;
 }
 
-const MARKET = /^(binance|bybit)-(spot|perp):([A-Z0-9_]+)$/;
+const MARKET = /^([a-z]+-(?:spot|perp)):([A-Z0-9_]+)$/;
+const KNOWN = new Set<string>(VENUES);
 
 export function parseMarket(ref: string): MarketRef | null {
   const m = MARKET.exec(ref);
-  return m ? { venue: `${m[1]}-${m[2]}` as Venue, symbol: m[3]! } : null;
+  return m && KNOWN.has(m[1]!) ? { venue: m[1] as Venue, symbol: m[2]! } : null;
 }
 
-export const isMarket = (v: unknown): v is string => typeof v === 'string' && MARKET.test(v);
+export const isMarket = (v: unknown): v is string => typeof v === 'string' && parseMarket(v) !== null;
 
 export const symbolOf = (ref: string): string => parseMarket(ref)?.symbol ?? ref;
 

@@ -181,6 +181,7 @@ pub fn parse_products(venue: Venue, info: &str, tickers: Option<&str>) -> Result
                 base: s.get("baseAsset")?.as_str()?.to_string(),
                 quote: s.get("quoteAsset")?.as_str()?.to_string(),
                 kind: venue.kind().as_str(),
+                native: None,
                 price_decimals: tick_decimals(tick),
                 quote_volume_24h: t.and_then(|t| num(t.get("quoteVolume"))),
                 last_price: t.and_then(|t| num(t.get("lastPrice"))),

@@ -83,7 +83,7 @@ The file format is described in [format.md](format.md).
 | Route | |
 |---|---|
 | `GET /api/health` | `{ok, db}` |
-| `GET /api/markets` | every market on four venues with 24h stats, cached 30 minutes |
+| `GET /api/markets` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken, Lighter) with 24h stats and each exchange's own name for it, cached 30 minutes |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
