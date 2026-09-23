@@ -13,6 +13,7 @@ import { Icon } from '../lib/icons';
 import { tabTitle } from '../lib/tab-title';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
+import { insertMarket, isSection, visible } from '../lib/watchlist';
 import { Layout, panelTitle } from '../workspace/Layout';
 import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
 import {
@@ -52,11 +53,12 @@ function addNear(type: PanelType, zone: DropZone): void {
 }
 
 /** A picked market lands in the panel that asked: a watchlist gains a row, anything else switches. */
-function pickMarket(panelId: string | null, market: string): void {
+function pickMarket(panelId: string | null, market: string, at?: number): void {
   const panel = (panelId && doc.panels[panelId]) || targetChart();
   if (!panel) return;
   if (panel.type === 'watchlist') {
-    if (!panel.markets.includes(market)) patchPanel(panel.id, { markets: [...panel.markets, market] });
+    if (at !== undefined) patchPanel(panel.id, { markets: insertMarket(panel.markets, market, at) });
+    else if (!panel.markets.includes(market)) patchPanel(panel.id, { markets: [...panel.markets, market] });
   } else {
     setPanelMarket(panel.id, market);
   }
@@ -117,8 +119,11 @@ function stepWatchlist(panel: Panel, step: number): boolean {
   // What the list drives: its link, the panel asked from, or the last chart.
   const target = panel.type === 'watchlist' ? targetChart() : panel;
   const current = list.link ? doc.links[list.link].market : target ? marketOf(target) : null;
-  const at = current ? list.markets.indexOf(current) : -1;
-  const next = list.markets[at === -1 ? (step > 0 ? 0 : list.markets.length - 1) : (at + step + list.markets.length) % list.markets.length]!;
+  // Markets as shown: not section headers, nor what a folded section hides.
+  const rows = visible(list.markets, list.collapsed).map((i) => list.markets[i]!).filter((m) => !isSection(m));
+  if (rows.length === 0) return false;
+  const at = current ? rows.indexOf(current) : -1;
+  const next = rows[at === -1 ? (step > 0 ? 0 : rows.length - 1) : (at + step + rows.length) % rows.length]!;
   if (panel.type === 'watchlist' && list.link) setLinkMarket(list.link, next);
   else if (target) setPanelMarket(target.id, next);
   return true;
@@ -311,7 +316,7 @@ function Overlays() {
                 onClose={closeOverlay}
                 onSelect={(market) => {
                   closeOverlay();
-                  pickMarket(o.panelId, market);
+                  pickMarket(o.panelId, market, o.at);
                 }}
               />
             );

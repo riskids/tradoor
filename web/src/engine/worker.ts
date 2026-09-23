@@ -12,7 +12,7 @@ import { parseMarket } from '../lib/markets';
 import { concatCols, emptyCols, intervalMs, lowerBound, openSeries, sliceCols, type Cols, type Series } from './history';
 import { restInterval } from './intervals';
 import { nativeOf } from '../lib/native';
-import type { CallName, Calls, ChartEvent, ChartStatus, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
+import type { CallName, Calls, ChartEvent, ChartStatus, DailyBars, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
 import { followLiquidations } from '../lib/liquidation-feed';
 import { serverTicker } from '../lib/liquidation-venues';
 import { coinOf, oiVenues, OpenInterestFeed } from './open-interest';
@@ -579,9 +579,9 @@ const lastBars = (c: Cols, n: number): Cols => sliceCols(c, Math.max(0, c.time.l
 /** Source bars in one profile session. */
 const SESSION_BARS: Record<string, number> = { '1d': 24, '1w': 7, '1M': 31 };
 
-async function valuesCall({ market, timeframe, basis }: Calls['values']['args']): Promise<IndicatorValues | null> {
-  const chart = await hold(market, timeframe, CHART_BARS);
-  const spec = profile_spec(timeframe) as ProfileSpec | null;
+async function valuesCall({ market, timeframe, basis, profile = true, bars: wanted = CHART_BARS }: Calls['values']['args']): Promise<IndicatorValues | null> {
+  const chart = await hold(market, timeframe, Math.max(50, Math.min(CHART_BARS, wanted)));
+  const spec = profile ? (profile_spec(timeframe) as ProfileSpec | null) : null;
   let src: Awaited<ReturnType<typeof hold>> | null = null;
   try {
     const c = chart.series.cols;
@@ -602,6 +602,17 @@ async function valuesCall({ market, timeframe, basis }: Calls['values']['args'])
   }
 }
 
+async function dailyCall({ market, days }: Calls['daily']['args']): Promise<DailyBars> {
+  const held = await hold(market, '1d', Math.max(1, Math.min(CHART_BARS, days)));
+  try {
+    const c = held.series.cols;
+    const bars = lastBars(fold_candles('1d', c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols, days);
+    return { time: [...bars.time], open: [...bars.open], high: [...bars.high], low: [...bars.low], close: [...bars.close], precision: precisionOf(bars) };
+  } finally {
+    held.release();
+  }
+}
+
 type Handlers = { [K in CallName]: (args: Calls[K]['args']) => Calls[K]['result'] | Promise<Calls[K]['result']> };
 
 const calls: Handlers = {
@@ -614,6 +625,7 @@ const calls: Handlers = {
     return used;
   },
   values: valuesCall,
+  daily: dailyCall,
 };
 
 async function answer(req: number, name: CallName, args: unknown): Promise<void> {

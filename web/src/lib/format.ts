@@ -53,6 +53,14 @@ export function formatTurnover(v: number | null | undefined): string {
   return v.toFixed(0);
 }
 
+/** A volume as TradingView's watchlist writes it: 112.35K, 1.20M, 845.3. */
+export function formatVolume(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  for (const [n, unit] of [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) if (abs >= n) return `${(v / n).toFixed(2)}${unit}`;
+  return abs >= 100 ? v.toFixed(1) : v.toFixed(2);
+}
+
 export function formatPct(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—';
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;

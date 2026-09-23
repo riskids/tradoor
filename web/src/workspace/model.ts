@@ -7,6 +7,9 @@
  * reconciles, so the tree functions stay plain and testable.
  */
 import { DEFAULT_MARKET, isMarket } from '../lib/markets';
+import { FLAGS, isSection, SECTION_NAME_MAX, sectionName } from '../lib/watchlist';
+
+const isSectionItem = (v: unknown): v is string => typeof v === 'string' && isSection(v) && v.length > 1 && v.length <= SECTION_NAME_MAX + 1;
 import { isTimeframe } from '../lib/timeframes';
 
 /** What a new panel can be. `tpo` is a preset: a chart drawn as TPO profiles. */
@@ -53,7 +56,12 @@ export interface ChartPanelState extends PanelBase {
 
 export interface WatchlistPanelState extends PanelBase {
   type: 'watchlist';
+  /** Markets and section headers (`#Name`) in order; see lib/watchlist. */
   markets: string[];
+  /** Sections folded shut, by name. */
+  collapsed: string[];
+  /** Colour flags by market. */
+  flags: Record<string, string>;
 }
 
 export interface ValuesPanelState extends PanelBase {
@@ -118,7 +126,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
     case 'chart':
       return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', tpoSettings: {} };
     case 'watchlist':
-      return { ...base, type, markets: [...DEFAULT_WATCHLIST] };
+      return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
       return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', tpoSettings: {} };
@@ -194,7 +202,12 @@ function readPanel(id: string, raw: unknown): Panel | null {
       }
     }
   } else if (p.type === 'watchlist') {
-    if (Array.isArray(raw.markets)) p.markets = [...new Set(raw.markets.filter(isMarket))].slice(0, 200);
+    if (Array.isArray(raw.markets)) p.markets = [...new Set(raw.markets.filter((m: unknown) => isMarket(m) || isSectionItem(m)))].slice(0, 200);
+    const names = new Set(p.markets.filter(isSection).map(sectionName));
+    if (Array.isArray(raw.collapsed)) p.collapsed = raw.collapsed.filter((n: unknown): n is string => typeof n === 'string' && names.has(n));
+    if (isObj(raw.flags)) {
+      for (const [m, c] of Object.entries(raw.flags)) if (p.markets.includes(m) && typeof c === 'string' && FLAGS.includes(c)) p.flags[m] = c;
+    }
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;

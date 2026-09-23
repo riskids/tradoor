@@ -211,16 +211,34 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 
 /* The symbol takes what the numbers leave; narrow panels drop the tag, then the change. */
 .wl { container-type: inline-size; }
-.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 54px; gap: 6px; align-items: center; padding: 2px 8px; font-size: 11px; }
+.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 54px 50px; gap: 6px; align-items: center; padding: 2px 8px; font-size: 11px; }
 .wl-head { flex: none; color: var(--dim); border-bottom: 1px solid var(--border); }
-.wl-row { position: relative; cursor: pointer; }
+.wl-list { position: relative; }
+.wl-row { position: relative; cursor: pointer; user-select: none; }
 .wl-row:hover { background: var(--surface-2); }
 .wl-row.active { background: var(--surface-3); }
 .wl-row.active .sym { color: var(--primary); }
 .wl-row .sym { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .wl-row .sym .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-row .flag { position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
 .wl-row .x { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; padding: 2px; color: var(--dim); background: var(--surface-3); opacity: 0; }
 .wl-row:hover .x { opacity: 1; }
+.wl-row.dragging, .wl-section.dragging { opacity: 0.35; }
+.wl-section { display: flex; align-items: center; gap: 4px; padding: 5px 8px 3px 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); cursor: pointer; user-select: none; border-top: 1px solid var(--border); }
+.wl-list > .wl-section:first-child { border-top: 0; }
+.wl-section:hover { background: var(--surface-2); color: var(--text); }
+.wl-section .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-section .chev { display: flex; transition: transform 0.12s; }
+.wl-section .chev.shut { transform: rotate(-90deg); }
+.wl-rename { flex: 1; min-width: 0; padding: 1px 4px; font: inherit; letter-spacing: normal; text-transform: none; color: var(--text); background: var(--surface-3); border: 1px solid var(--primary); outline: none; }
+.wl-drop { position: absolute; left: 7px; right: 0; height: 2px; background: var(--primary); pointer-events: none; z-index: 2; }
+.wl-drop::before { content: ''; position: absolute; left: -7px; top: -3px; width: 4px; height: 4px; border: 2px solid var(--primary); border-radius: 50%; background: var(--surface); }
+.wl-ghost { position: fixed; z-index: 60; padding: 2px 8px; font-size: 11px; font-weight: 600; color: var(--text); background: var(--surface-3); border: 1px solid var(--border); box-shadow: 0 4px 14px #0008; pointer-events: none; white-space: nowrap; }
+.wl-menu { z-index: 70; }
+.wl-flags { display: flex; gap: 6px; padding: 6px 8px; }
+.menu .wl-flags button.swatch { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: var(--flag); outline-offset: 2px; }
+.menu .wl-flags button.swatch:hover, .menu .wl-flags button.swatch.on { outline: 2px solid var(--flag); background: var(--flag); }
+@container (max-width: 290px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 72px 54px; } .wl .vol { display: none; } }
 @container (max-width: 250px) { .wl-row .kind { display: none; } }
 @container (max-width: 180px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 72px; } .wl .chg { display: none; } }
 .wl-row .x:hover { color: var(--bear); }
@@ -386,3 +404,35 @@ table.venues tr.off td { color: var(--dim); }
   transition: opacity 0.08s;
 }
 .tip.show { opacity: 1; }
+
+/* ------------------------------------------------------------ values panel */
+.vx { font-size: 11px; }
+.vx-price { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px 2px; }
+.vx-price .big { font-size: 16px; font-weight: 600; color: var(--text); }
+.vx-range { padding: 4px 8px 6px; }
+.vx-bar { position: relative; height: 4px; background: var(--surface-3); }
+.vx-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in oklab, var(--primary) 35%, transparent); }
+.vx-bar .mark { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: var(--primary); }
+.vx-legend { display: flex; justify-content: space-between; gap: 6px; margin-top: 3px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.vx-atr { margin-top: 2px; font-size: 10px; color: var(--dim); }
+.vx-atr b { font-weight: 600; color: var(--text); }
+.vx-atr b.warn { color: var(--warn, #f0b90b); }
+.vx-levelhead { align-items: center; flex-wrap: nowrap; gap: 4px; padding-top: 1px; padding-bottom: 1px; }
+.vx-levelhead select { max-width: 64px; }
+.vx-perf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; margin: 0 8px 8px; background: var(--border); border: 1px solid var(--border); }
+.vx-perf > div { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 3px 0; background: var(--surface); }
+.vx-perf .caps { color: var(--dim); font-size: 9px; }
+.vx-perf .num { color: var(--muted); }
+.vx-perf .bull .num { color: var(--bull); }
+.vx-perf .bear .num { color: var(--bear); }
+.vx-table { width: 100%; border-collapse: collapse; }
+.vx-table th { padding: 3px 8px; font-size: 9px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); text-align: right; }
+.vx-table th:first-child { text-align: left; }
+.vx-table td { padding: 2px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+.vx-table td:first-child { text-align: left; color: var(--muted); }
+.vx-table td.tf { font-weight: 600; color: var(--text); }
+.vx-levels td:first-child { overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 55%; }
+.vx-levels tr.here td { color: var(--primary); font-weight: 600; background: color-mix(in oklab, var(--primary) 10%, transparent); }
+.vx-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+.vx-row .caps { color: var(--dim); }
+.vx-row .num:last-child { margin-left: auto; }

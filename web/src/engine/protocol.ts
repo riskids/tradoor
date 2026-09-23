@@ -106,11 +106,23 @@ export interface IndicatorValues {
 
 export type ProfileBasis = 'volume' | 'tpo';
 
+export interface DailyBars {
+  time: number[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  precision: number;
+}
+
 /** Request/response calls, answered by `reply`. */
 export interface Calls {
   studyCatalog: { args: Record<string, never>; result: StudyDefinition[] };
   key: { args: { id: string; key: string }; result: boolean };
-  values: { args: { market: string; timeframe: string; basis: ProfileBasis }; result: IndicatorValues | null };
+  /** `profile: false` skips the session profile; `bars` caps the history read (1,500 by default). */
+  values: { args: { market: string; timeframe: string; basis: ProfileBasis; profile?: boolean; bars?: number }; result: IndicatorValues | null };
+  /** The last `days` closed UTC days. */
+  daily: { args: { market: string; days: number }; result: DailyBars };
 }
 
 export type CallName = keyof Calls;

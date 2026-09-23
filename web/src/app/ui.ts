@@ -4,7 +4,7 @@ import type { MagnetMode } from '../engine/protocol';
 import { readPref, writePref } from '../lib/prefs';
 
 export type Overlay =
-  | { kind: 'symbol'; panelId: string | null; initial: string }
+  | { kind: 'symbol'; panelId: string | null; initial: string; /** Where in a watchlist to add it. */ at?: number }
   | { kind: 'indicators'; panelId: string }
   | { kind: 'tpoSettings'; panelId: string }
   | { kind: 'palette' }

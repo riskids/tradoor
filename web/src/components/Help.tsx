@@ -26,6 +26,15 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
     ],
   },
   {
+    title: 'Watchlist',
+    keys: [
+      ['right-click', 'Flag a market, add a section or a symbol'],
+      ['drag a row', 'Move it; a section moves with its markets'],
+      ['click a section', 'Fold it shut or open'],
+      ['double-click a section', 'Rename it'],
+    ],
+  },
+  {
     title: 'Drawing',
     keys: [
       ['Ctrl Z', 'Undo the last drawing change'],

@@ -9,7 +9,7 @@ layout, toolbars, legend, dialogs  ──► ChartEngine per chart              
 pointer and wheel input            ──►   tradoor-render model → Frame        ◄─ exchange REST (klines)
                                    ◄──   WebGL2 triangles + 2D text           ◄─ exchange WS (kline, trades)
 legend, cursor, events, status     ◄──  history series, folding, live bars
-watchlist tickers  ◄─ exchange WS                                             /api (tradoor-server)
+watchlist days     ◄─ exchange WS                                             /api (tradoor-server)
 drawings, workspace ─────────────────────────────────────────────────────────►
 ```
 
@@ -114,7 +114,15 @@ instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
-Panels: chart, watchlist, indicator values and liquidations. TPO is a way of
+Panels: chart, watchlist, values and liquidations. The watchlist streams each
+market's daily candle, so its change and volume run from 00:00 UTC as
+TradingView's do, not over the rolling 24 hours an exchange ticker reports. It
+is one ordered list in which `#Name` entries head sections; a section folds
+shut and drags with its markets, and markets carry colour flags. Values reads
+one market at a glance: its day against the 14-day ATR, returns from 7 days to
+a year, RSI, StochRSI and EMA trend on 15m to 1W, the prior day's, week's and
+month's highs and lows with the prior session's value area, sorted around
+price, and for a perpetual the server's open interest and liquidation totals. TPO is a way of
 drawing a chart rather than a panel of its own: each candle of the chosen
 timeframe becomes a profile. The chart loads a smaller timeframe for its
 brackets — 1m under 15m, 5m under 4h, 30m under a day or a week — and the engine

@@ -2,18 +2,20 @@
  * The terminal layout: splits with draggable gutters, tab groups, and docking
  * by dragging a tab onto another group's centre or edge.
  */
-import { createSignal, For, Match, onCleanup, Show, Switch, untrack, type JSX } from 'solid-js';
+import { createSignal, For, lazy, Match, onCleanup, Show, Switch, untrack, type JSX } from 'solid-js';
 import { dragging, setDragging } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { Icon } from '../lib/icons';
 import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
-import { LiquidationsPanel } from '../panels/LiquidationsPanel';
-import { ValuesPanel } from '../panels/ValuesPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
 import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
 import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, timeframeOf, update } from './store';
+
+// Side panels, fetched when a layout shows one: the chart and watchlist come first.
+const ValuesPanel = lazy(() => import('../panels/ValuesPanel').then((m) => ({ default: m.ValuesPanel })));
+const LiquidationsPanel = lazy(() => import('../panels/LiquidationsPanel').then((m) => ({ default: m.LiquidationsPanel })));
 
 /** Smallest a cell may be dragged to, in pixels. */
 const MIN_CELL = 90;

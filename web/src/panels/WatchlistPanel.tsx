@@ -1,75 +1,90 @@
 /**
- * Markets worth a glance: last price and the day's change, streamed. Clicking a
- * row drives the linked group, or the last chart used. The list never reorders
- * itself — knowing where each symbol sits is the point of a fixed column.
+ * Markets worth a glance: last price, the day's change and volume, streamed.
+ * Clicking a row drives the linked group, or the last chart used. The list never
+ * reorders itself — knowing where each symbol sits is the point of a fixed
+ * column — but it can be split into sections, flagged and dragged into order.
+ *
+ * Change and volume are the current daily candle's, as TradingView's are: since
+ * 00:00 UTC, not a rolling 24 hours, which is what exchange tickers report.
  */
-import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
+import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { setOverlay } from '../app/ui';
-import { nativeOf } from '../lib/native';
-import { StreamHub } from '../engine/streams';
+import { watchDay, type Day } from '../lib/day-feed';
 import { catalog, type Catalog } from '../lib/api';
-import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
+import { useDismiss } from '../lib/dismiss';
+import { formatPct, formatPrice, formatVolume, priceDecimals } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { isPerp, parseMarket, symbolOf, venueLabel } from '../lib/markets';
+import { blockOf, FLAG_COLORS, FLAGS, freshName, isSection, move, SECTION_NAME_MAX, sectionEnd, sectionName, visible } from '../lib/watchlist';
 import type { WatchlistPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart } from '../workspace/store';
 
-/** Tickers are few and slow, so the page keeps its own sockets off the engine thread. */
-const hub = new StreamHub();
-
-interface Ticker {
+interface Row {
   last: number;
-  changePct: number | null;
-  quoteVolume: number | null;
+  /** The daily candle's, once one has arrived. */
+  day: Day | null;
 }
+
+interface Drag {
+  from: number;
+  label: string;
+  x: number;
+  y: number;
+  /** Where it would land, as an index into the list; null where it would not move. */
+  to: number | null;
+  lineY: number;
+}
+
+/** How far a press travels before it is a drag rather than a click. */
+const DRAG_PX = 4;
 
 export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
   const id = props.panel.id;
-  const [tickers, setTickers] = createStore<Record<string, Ticker>>({});
+  const [rows, setRows] = createStore<Record<string, Row>>({});
   const [products, setProducts] = createSignal<Catalog | null>(null);
-  const [dragged, setDragged] = createSignal<string | null>(null);
+  const [menu, setMenu] = createSignal<{ x: number; y: number; item: string | null } | null>(null);
+  const [editing, setEditing] = createSignal<string | null>(null);
+  const [drag, setDrag] = createSignal<Drag | null>(null);
+  let list!: HTMLDivElement;
 
+  useDismiss(menu, () => setMenu(null));
   catalog().then(setProducts, () => {});
 
-  // Seed from the catalogue so rows are not blank until the first tick.
+  const items = () => props.panel.markets;
+  const markets = () => items().filter((m) => !isSection(m));
+  const collapsed = () => props.panel.collapsed ?? [];
+  const flags = () => props.panel.flags ?? {};
+  const shown = () => visible(items(), collapsed()).map((i) => items()[i]!);
+
+  // Seed the price from the catalogue so rows are not blank until the first tick.
   createEffect(() => {
     const c = products();
     if (!c) return;
-    for (const m of props.panel.markets) {
+    for (const m of markets()) {
       const p = c.byMarket.get(m);
-      if (p?.lastPrice != null && !tickers[m]) setTickers(m, { last: p.lastPrice, changePct: p.changePct, quoteVolume: p.quoteVolume24h });
+      if (p?.lastPrice != null && !rows[m]) setRows(m, { last: p.lastPrice, day: null });
     }
   });
 
+  // One daily-candle stream per market, kept while the market stays listed.
+  const subs = new Map<string, () => void>();
   createEffect(() => {
-    let live = true;
-    const offs: (() => void)[] = [];
-    for (const m of props.panel.markets) {
-      const ref = parseMarket(m);
-      if (!ref) continue;
-      // The exchange's own name for it, which may take the catalogue to know.
-      void nativeOf(m).then((symbol) => {
-        if (!live) return;
-        offs.push(
-          hub.subscribe(
-            ref.venue,
-            { kind: 'ticker', symbol },
-            {
-              message: (msg) => {
-                if (msg.kind === 'ticker') setTickers(m, { last: msg.last, changePct: msg.changePct, quoteVolume: msg.quoteVolume });
-              },
-              state: () => {},
-            },
-          ),
-        );
-      });
+    const want = new Set(markets());
+    for (const [m, off] of subs) {
+      if (!want.has(m)) {
+        off();
+        subs.delete(m);
+      }
     }
-    onCleanup(() => {
-      live = false;
-      for (const off of offs.splice(0)) off();
-    });
+    for (const m of want) {
+      if (!subs.has(m)) subs.set(m, watchDay(m, (day) => setRows(m, { last: day.close, day })));
+    }
+  });
+  onCleanup(() => {
+    for (const off of subs.values()) off();
+    subs.clear();
   });
 
   const current = (): string | null => {
@@ -87,16 +102,139 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     if (chart) setPanelMarket(chart.id, market);
   };
 
-  const remove = (market: string) => patchPanel(id, { markets: props.panel.markets.filter((m) => m !== market) });
+  const changePct = (r: Row | undefined): number | null => (r?.day ? ((r.last - r.day.open) / r.day.open) * 100 : null);
+  const digits = (market: string, last: number) => products()?.byMarket.get(market)?.priceDecimals ?? priceDecimals(last);
 
-  const moveBefore = (market: string, before: string) => {
-    if (market === before) return;
-    const list = props.panel.markets.filter((m) => m !== market);
-    list.splice(list.indexOf(before), 0, market);
-    patchPanel(id, { markets: list });
+  // ------------------------------------------------------------ editing the list
+
+  const setFlag = (market: string, color: string | null) => {
+    const next = { ...flags() };
+    if (color && next[market] !== color) next[market] = color;
+    else delete next[market];
+    patchPanel(id, { flags: next });
   };
 
-  const digits = (market: string, last: number) => products()?.byMarket.get(market)?.priceDecimals ?? priceDecimals(last);
+  const remove = (item: string) => {
+    if (isSection(item)) {
+      // The section goes; its symbols stay, in the section above.
+      patchPanel(id, { markets: items().filter((m) => m !== item), collapsed: collapsed().filter((n) => n !== sectionName(item)) });
+      return;
+    }
+    const next = { ...flags() };
+    delete next[item];
+    patchPanel(id, { markets: items().filter((m) => m !== item), flags: next });
+  };
+
+  /** A new section above `before` (the end by default), named at once. */
+  const addSection = (before: string | null) => {
+    const name = freshName(items());
+    const list = [...items()];
+    const at = before === null ? list.length : list.indexOf(before);
+    list.splice(at === -1 ? list.length : at, 0, `#${name}`);
+    patchPanel(id, { markets: list });
+    setEditing(name);
+  };
+
+  const rename = (from: string, to: string) => {
+    setEditing(null);
+    const name = to.trim().slice(0, SECTION_NAME_MAX);
+    if (!name || name === from || items().includes(`#${name}`)) return;
+    patchPanel(id, {
+      markets: items().map((m) => (m === `#${from}` ? `#${name}` : m)),
+      collapsed: collapsed().map((n) => (n === from ? name : n)),
+    });
+  };
+
+  const toggle = (name: string) => {
+    const c = collapsed();
+    patchPanel(id, { collapsed: c.includes(name) ? c.filter((n) => n !== name) : [...c, name] });
+  };
+
+  const addSymbol = (at: number) => setOverlay({ kind: 'symbol', panelId: id, initial: '', at });
+
+  // ------------------------------------------------------------ dragging
+
+  let press: { from: number; x: number; y: number; started: boolean } | null = null;
+  let dragged = false;
+
+  /** Where a drop at `y` (viewport) lands, and where the line for it goes in the list. */
+  const dropAt = (from: number, y: number): { to: number | null; lineY: number } => {
+    const section = isSection(items()[from]!);
+    const box = list.getBoundingClientRect();
+    const els = [...list.querySelectorAll<HTMLElement>('[data-item]')];
+    let to = items().length;
+    let edge = els.length ? els[els.length - 1]!.getBoundingClientRect().bottom : box.top;
+    for (const el of els) {
+      const item = el.dataset.item!;
+      // A section lands only between sections.
+      if (section && !isSection(item)) continue;
+      const r = el.getBoundingClientRect();
+      if (y < r.top + r.height / 2) {
+        to = items().indexOf(item);
+        edge = r.top;
+        break;
+      }
+    }
+    const [start, end] = blockOf(items(), from);
+    return { to: to >= start && to <= end ? null : to, lineY: edge - box.top + list.scrollTop };
+  };
+
+  const onMove = (e: PointerEvent) => {
+    if (!press) return;
+    if (!press.started) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_PX) return;
+      press.started = true;
+      setMenu(null);
+    }
+    // Near an edge, the list scrolls to reach rows out of view.
+    const box = list.getBoundingClientRect();
+    if (e.clientY < box.top + 20) list.scrollTop -= 8;
+    else if (e.clientY > box.bottom - 20) list.scrollTop += 8;
+    const item = items()[press.from]!;
+    setDrag({ from: press.from, label: isSection(item) ? sectionName(item).toUpperCase() : symbolOf(item), x: e.clientX, y: e.clientY, ...dropAt(press.from, e.clientY) });
+  };
+
+  const onUp = () => {
+    removeEventListener('pointermove', onMove);
+    removeEventListener('pointerup', onUp);
+    removeEventListener('pointercancel', onUp);
+    const d = drag();
+    if (press?.started) {
+      dragged = true;
+      // The click this release makes is not a click on the row.
+      setTimeout(() => (dragged = false));
+    }
+    press = null;
+    batch(() => {
+      setDrag(null);
+      if (d && d.to !== null) patchPanel(id, { markets: move(items(), d.from, d.to) });
+    });
+  };
+
+  const onDown = (e: PointerEvent, item: string) => {
+    if (e.button !== 0 || editing() !== null || (e.target as HTMLElement).closest('button, input')) return;
+    press = { from: items().indexOf(item), x: e.clientX, y: e.clientY, started: false };
+    addEventListener('pointermove', onMove);
+    addEventListener('pointerup', onUp);
+    addEventListener('pointercancel', onUp);
+  };
+  onCleanup(onUp);
+
+  const openMenu = (e: MouseEvent, item: string | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: Math.min(e.clientX, innerWidth - 210), y: Math.min(e.clientY, innerHeight - 240), item });
+  };
+
+  const run = (f: () => void) => () => {
+    setMenu(null);
+    f();
+  };
+
+  const sectionCount = (item: string) => {
+    const i = items().indexOf(item);
+    return sectionEnd(items(), i) - i - 1;
+  };
 
   return (
     <div class="panelcol wl">
@@ -104,70 +242,165 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
         <span class="caps" style={{ padding: '0 4px' }}>
           Watchlist
         </span>
-        <span class="dim">{props.panel.markets.length}</span>
+        <span class="dim">{markets().length}</span>
         <span class="spacer" />
-        <button class="iconbtn" data-tip="Add a market" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
+        <button class="iconbtn" data-tip="Add a section" onClick={() => addSection(null)}>
+          <Icon name="section" size={13} />
+        </button>
+        <button class="iconbtn" data-tip="Add a market" onClick={() => addSymbol(items().length)}>
           <Icon name="plus" size={13} />
         </button>
       </div>
       <div class="wl-head">
         <span>Symbol</span>
         <span class="r">Last</span>
-        <span class="r chg">Chg%</span>
+        <span class="r chg" data-tip="Change since the day's open, 00:00 UTC — as TradingView counts it">
+          Chg%
+        </span>
+        <span class="r vol" data-tip="Volume since 00:00 UTC, in the base coin">
+          Vol
+        </span>
       </div>
-      <div class="scroll">
-        <For each={props.panel.markets}>
-          {(market) => {
-            const t = () => tickers[market];
-            return (
+      <div class="scroll wl-list" ref={list} onContextMenu={(e) => openMenu(e, null)}>
+        <For each={shown()}>
+          {(item) =>
+            isSection(item) ? (
+              <div
+                class="wl-section"
+                data-item={item}
+                classList={{ dragging: drag() !== null && items()[drag()!.from] === item }}
+                onPointerDown={(e) => onDown(e, item)}
+                onClick={() => !dragged && editing() === null && toggle(sectionName(item))}
+                onDblClick={() => setEditing(sectionName(item))}
+                onContextMenu={(e) => openMenu(e, item)}
+              >
+                <span class="chev" classList={{ shut: collapsed().includes(sectionName(item)) }}>
+                  <Icon name="chevron" size={11} stroke={2.2} />
+                </span>
+                <Show when={editing() === sectionName(item)} fallback={<span class="name">{sectionName(item)}</span>}>
+                  <input
+                    class="wl-rename"
+                    value={sectionName(item)}
+                    maxLength={SECTION_NAME_MAX}
+                    ref={(el) =>
+                      setTimeout(() => {
+                        el.focus();
+                        el.select();
+                      })
+                    }
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => rename(sectionName(item), e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                      if (e.key === 'Escape') {
+                        e.currentTarget.value = sectionName(item);
+                        e.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </Show>
+                <span class="dim num">{sectionCount(item)}</span>
+              </div>
+            ) : (
               <div
                 class="wl-row"
-                classList={{ active: market === current() }}
-                draggable={true}
-                data-tip={`${symbolOf(market)} · ${venueLabel(market)}${t()?.quoteVolume ? ` · 24h turnover ${formatTurnover(t()!.quoteVolume)}` : ''}`}
-                onClick={() => open(market)}
-                onDragStart={(e) => {
-                  e.dataTransfer?.setData('text/plain', market);
-                  setDragged(market);
-                }}
-                onDragEnd={() => setDragged(null)}
-                onDragOver={(e) => {
-                  if (dragged()) e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const m = dragged();
-                  if (m) moveBefore(m, market);
-                  setDragged(null);
-                }}
+                data-item={item}
+                classList={{ active: item === current(), dragging: drag() !== null && items()[drag()!.from] === item }}
+                data-tip={`${symbolOf(item)} · ${venueLabel(item)}`}
+                onPointerDown={(e) => onDown(e, item)}
+                onClick={() => !dragged && open(item)}
+                onContextMenu={(e) => openMenu(e, item)}
               >
+                <Show when={flags()[item]}>{(c) => <span class="flag" style={{ background: FLAG_COLORS[c()] }} />}</Show>
                 <span class="sym">
-                  <ExchangeLogo exchange={exchangeOfVenue(parseMarket(market)?.venue ?? 'binance')} size={13} />
-                  <span class="name">{symbolOf(market)}</span>
-                  <span class="kind">{isPerp(market) ? 'PERP' : 'SPOT'}</span>
+                  <ExchangeLogo exchange={exchangeOfVenue(parseMarket(item)?.venue ?? 'binance')} size={13} />
+                  <span class="name">{symbolOf(item)}</span>
+                  <span class="kind">{isPerp(item) ? 'PERP' : 'SPOT'}</span>
                 </span>
-                <span class="num r muted">{t() ? formatPrice(t()!.last, digits(market, t()!.last)) : '—'}</span>
-                <span class="num r chg" classList={{ bull: (t()?.changePct ?? 0) > 0, bear: (t()?.changePct ?? 0) < 0, dim: !t() }}>
-                  {formatPct(t()?.changePct)}
+                <span class="num r muted">{rows[item] ? formatPrice(rows[item]!.last, digits(item, rows[item]!.last)) : '—'}</span>
+                <span class="num r chg" classList={{ bull: (changePct(rows[item]) ?? 0) > 0, bear: (changePct(rows[item]) ?? 0) < 0, dim: changePct(rows[item]) === null }}>
+                  {formatPct(changePct(rows[item]))}
                 </span>
+                <span class="num r vol muted">{formatVolume(rows[item]?.day?.volume)}</span>
                 <button
                   class="x"
                   data-tip="Remove from the watchlist"
                   onClick={(e) => {
                     e.stopPropagation();
-                    remove(market);
+                    remove(item);
                   }}
                 >
                   <Icon name="close" size={10} stroke={2.4} />
                 </button>
               </div>
-            );
-          }}
+            )
+          }
         </For>
-        <Show when={props.panel.markets.length === 0}>
+        <Show when={items().length === 0}>
           <div class="empty">Empty. Add a market with + above.</div>
         </Show>
+        <Show when={drag()?.to != null}>
+          <div class="wl-drop" style={{ top: `${drag()!.lineY - 1}px` }} />
+        </Show>
       </div>
+      <Show when={drag()}>
+        {(d) => (
+          <div class="wl-ghost" style={{ left: `${d().x + 12}px`, top: `${d().y - 10}px` }}>
+            {d().label}
+          </div>
+        )}
+      </Show>
+      <Show when={menu()}>
+        {(m) => {
+          const item = m().item;
+          const at = item === null ? items().length : items().indexOf(item);
+          const anyFlag = Object.keys(flags()).length > 0;
+          return (
+            <div class="menu wl-menu" style={{ position: 'fixed', left: `${m().x}px`, top: `${m().y}px` }} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+              <Show when={item !== null && !isSection(item)}>
+                <div class="wl-flags">
+                  <For each={FLAGS}>
+                    {(c) => (
+                      <button
+                        class="swatch"
+                        classList={{ on: flags()[item!] === c }}
+                        style={{ '--flag': FLAG_COLORS[c] }}
+                        data-tip={flags()[item!] === c ? 'Unflag' : `Flag ${c}`}
+                        aria-label={`Flag ${c}`}
+                        onClick={run(() => setFlag(item!, c))}
+                      />
+                    )}
+                  </For>
+                </div>
+                <Show when={flags()[item!]}>
+                  <button onClick={run(() => setFlag(item!, null))}>Unflag {symbolOf(item!)}</button>
+                </Show>
+              </Show>
+              <Show when={anyFlag}>
+                <button onClick={run(() => patchPanel(id, { flags: {} }))}>Unflag all symbols</button>
+              </Show>
+              <Show when={item !== null && !isSection(item) && anyFlag}>
+                <hr />
+              </Show>
+              <Show when={item !== null && isSection(item)}>
+                <button onClick={run(() => setEditing(sectionName(item!)))}>Rename section</button>
+                <button onClick={run(() => toggle(sectionName(item!)))}>{collapsed().includes(sectionName(item!)) ? 'Expand section' : 'Collapse section'}</button>
+              </Show>
+              <button onClick={run(() => addSection(item))}>
+                Add section<span class="dim">{item === null ? 'at the end' : 'above'}</span>
+              </button>
+              <button onClick={run(() => addSymbol(item !== null && isSection(item) ? sectionEnd(items(), at) : item === null ? at : at + 1))}>
+                Add symbol…<span class="dim">{item !== null && isSection(item) ? 'to this section' : item === null ? '' : 'below'}</span>
+              </button>
+              <Show when={item !== null}>
+                <hr />
+                <button onClick={run(() => remove(item!))}>{isSection(item!) ? 'Remove section' : `Remove ${symbolOf(item!)}`}</button>
+              </Show>
+            </div>
+          );
+        }}
+      </Show>
     </div>
   );
 }
