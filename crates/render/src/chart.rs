@@ -238,6 +238,8 @@ pub struct Chart {
     dpr: f32,
     timeframe: ChartTimeframe,
     candles: Vec<Candle>,
+    /// The daily bars behind them, when the chart's own bars are longer.
+    days: Vec<Candle>,
     times: Vec<f64>,
     live: Option<LiveBar>,
     liquidations: Vec<Liquidation>,
@@ -309,6 +311,7 @@ impl Chart {
             engine: engine_series(&[]),
             ribbon: Vec::new(),
             study_specs: Vec::new(),
+            days: Vec::new(),
             open_interest: Vec::new(),
             studies: Vec::new(),
             hidden: BTreeSet::new(),
@@ -418,6 +421,17 @@ impl Chart {
         self.touch();
     }
 
+    /// The daily bars the chart's own were folded from, for the levels that open
+    /// inside a longer bar. Empty where the chart's bars are a day or shorter.
+    pub fn set_days(&mut self, days: Vec<Candle>) {
+        if self.days == days {
+            return;
+        }
+        self.days = days;
+        self.refresh_studies(StudyKind::KeyLevels);
+        self.touch();
+    }
+
     pub fn candles(&self) -> &[Candle] {
         &self.candles
     }
@@ -442,19 +456,24 @@ impl Chart {
     }
 
     fn refresh_open_interest(&mut self) {
-        if !self.study_specs.iter().any(|s| s.kind == StudyKind::OpenInterest) {
+        self.refresh_studies(StudyKind::OpenInterest);
+    }
+
+    /// Recompute the studies of one kind, after what they read changed.
+    fn refresh_studies(&mut self, kind: StudyKind) {
+        if !self.study_specs.iter().any(|s| s.kind == kind) {
             return;
         }
-        let inputs = StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)) };
+        let inputs = StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)), days: &self.days };
         for (spec, study) in self.study_specs.iter().zip(self.studies.iter_mut()) {
-            if spec.kind == StudyKind::OpenInterest {
+            if spec.kind == kind {
                 *study = compute_study_with(spec, &self.candles, &inputs);
             }
         }
     }
 
     fn study_inputs(&self) -> StudyInputs<'_> {
-        StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)) }
+        StudyInputs { open_interest: &self.open_interest, live: self.live.map(|l| (l.open_time, l.close)), days: &self.days }
     }
 
     fn compute_studies(&self, specs: &[StudySpec]) -> Vec<ComputedStudy> {

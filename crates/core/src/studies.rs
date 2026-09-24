@@ -229,6 +229,11 @@ pub struct StudyInputs<'a> {
     pub open_interest: &'a [(i64, [f64; 4])],
     /// The forming bar's open time and last price: open interest runs to it.
     pub live: Option<(i64, f64)>,
+    /// The daily bars the chart's own were folded from, oldest first. A bar
+    /// longer than a day straddles the turn of a week, month or year, so its
+    /// open is not the period's open; these say where the period really opened.
+    /// Empty when the chart's bars are a day or shorter, where they already do.
+    pub days: &'a [Candle],
 }
 
 /// A level that holds for a bounded stretch of time — last week's open is a fact
@@ -304,7 +309,7 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
             ];
         }
         StudyKind::Atr => study.lines.push(StudyLine::line("atr", label, indicators::atr(candles, param(0)))),
-        StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles),
+        StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles, inputs.days),
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
         StudyKind::SwingMap => (study.lines, study.markers, study.stats) = swing_map(candles, param(0), param(1)),
         StudyKind::OpenInterest => {
@@ -396,7 +401,11 @@ pub fn format_duration(ms: f64) -> String {
 /// Weekly / monthly / yearly opens and Monday's range ("Boyen_Clean Historical
 /// Key Levels"). The FIRST period in view is partial — its real open is before
 /// the data — so a run only starts once a boundary turns over inside the data.
-fn key_levels(candles: &[Candle]) -> (Vec<StudyLine>, Vec<StudySegment>) {
+///
+/// Levels are read from `days` when the page has them, because a bar longer
+/// than a day opens before the week, month or year it belongs to: the week of
+/// 29 December opens in the old year, and its open is not the year's open.
+fn key_levels(candles: &[Candle], days: &[Candle]) -> (Vec<StudyLine>, Vec<StudySegment>) {
     #[derive(Clone, Copy)]
     struct Run {
         price: f64,
@@ -407,72 +416,75 @@ fn key_levels(candles: &[Candle]) -> (Vec<StudyLine>, Vec<StudySegment>) {
     struct Monday {
         high: f64,
         low: f64,
+        week: i64,
         from: i64,
         to: i64,
     }
 
-    let n = candles.len();
-    let (mut wo, mut mo, mut yo, mut mon_high, mut mon_low) = (vec![None; n], vec![None; n], vec![None; n], vec![None; n], vec![None; n]);
-    let mut segments = Vec::new();
-    let (mut week_run, mut month_run, mut year_run): (Option<Run>, Option<Run>, Option<Run>) = (None, None, None);
-    let mut monday: Option<Monday> = None;
+    let source = if days.is_empty() { candles } else { days };
+    let (mut weeks, mut months, mut years) = (Vec::<Run>::new(), Vec::<Run>::new(), Vec::<Run>::new());
+    let mut mondays = Vec::<Monday>::new();
     let (mut week, mut month, mut year): (Option<i64>, Option<i64>, Option<i64>) = (None, None, None);
 
-    let close = |segments: &mut Vec<StudySegment>, run: Option<Run>, label: &'static str, color: &'static str| {
-        if let Some(r) = run {
-            segments.push(StudySegment { from: r.from, to: r.to, price: r.price, label, color });
-        }
-    };
-
-    for (i, c) in candles.iter().enumerate() {
+    for c in source {
         let (w, m, y) = (week_index(c.open_time), month_index(c.open_time), year_of(c.open_time));
         let start = Run { price: c.open, from: c.open_time, to: c.open_time };
-
-        if week.is_some_and(|prev| prev != w) {
-            close(&mut segments, week_run, "WO", WEEKLY);
-            week_run = Some(start);
-            monday = None;
-        }
-        week = Some(w);
-        if month.is_some_and(|prev| prev != m) {
-            close(&mut segments, month_run, "MO", MONTHLY);
-            month_run = Some(start);
-        }
-        month = Some(m);
-        if year.is_some_and(|prev| prev != y) {
-            close(&mut segments, year_run, "YO", YEARLY);
-            year_run = Some(start);
-        }
-        year = Some(y);
-
-        for run in [&mut week_run, &mut month_run, &mut year_run].into_iter().flatten() {
-            run.to = c.open_time;
-        }
-        if weekday(c.open_time) == 1 {
-            match monday.as_mut() {
-                None => monday = Some(Monday { high: c.high, low: c.low, from: c.open_time, to: c.open_time }),
-                Some(mon) => {
-                    mon.high = mon.high.max(c.high);
-                    mon.low = mon.low.min(c.low);
-                }
+        for (runs, turned) in [(&mut weeks, week.is_some_and(|p| p != w)), (&mut months, month.is_some_and(|p| p != m)), (&mut years, year.is_some_and(|p| p != y))] {
+            if turned {
+                runs.push(start);
+            }
+            if let Some(run) = runs.last_mut() {
+                run.to = c.open_time;
             }
         }
-        if let Some(mon) = monday.as_mut() {
+        (week, month, year) = (Some(w), Some(m), Some(y));
+
+        if weekday(c.open_time) == 1 && mondays.last().is_none_or(|mon| mon.week != w) {
+            mondays.push(Monday { high: c.high, low: c.low, week: w, from: c.open_time, to: c.open_time });
+        }
+        if let Some(mon) = mondays.last_mut().filter(|mon| mon.week == w) {
+            if weekday(c.open_time) == 1 {
+                mon.high = mon.high.max(c.high);
+                mon.low = mon.low.min(c.low);
+            }
             mon.to = c.open_time;
         }
-        wo[i] = week_run.map(|r| r.price);
-        mo[i] = month_run.map(|r| r.price);
-        yo[i] = year_run.map(|r| r.price);
-        mon_high[i] = monday.map(|m| m.high);
-        mon_low[i] = monday.map(|m| m.low);
     }
-    close(&mut segments, week_run, "WO", WEEKLY);
-    close(&mut segments, month_run, "MO", MONTHLY);
-    close(&mut segments, year_run, "YO", YEARLY);
+
+    let mut segments = Vec::new();
+    for (runs, label, color) in [(&weeks, "WO", WEEKLY), (&months, "MO", MONTHLY), (&years, "YO", YEARLY)] {
+        segments.extend(runs.iter().map(|r| StudySegment { from: r.from, to: r.to, price: r.price, label, color }));
+    }
     // Only the current week's Monday is still a reference.
-    if let Some(mon) = monday {
+    let last_week = source.last().map(|c| week_index(c.open_time));
+    if let Some(mon) = mondays.last().filter(|mon| last_week == Some(mon.week)) {
         segments.push(StudySegment { from: mon.from, to: mon.to, price: mon.high, label: "Mon H", color: MONDAY });
         segments.push(StudySegment { from: mon.from, to: mon.to, price: mon.low, label: "Mon L", color: MONDAY });
+    }
+
+    // What each of the chart's own bars reads: the level in force as it closed,
+    // so a bar that straddles the turn already carries the new one.
+    let n = candles.len();
+    let (mut wo, mut mo, mut yo, mut mon_high, mut mon_low) = (vec![None; n], vec![None; n], vec![None; n], vec![None; n], vec![None; n]);
+    let (mut wi, mut mi, mut yi, mut di) = (0, 0, 0, 0);
+    let walk = |runs: &[Run], at: &mut usize, t: i64| -> Option<f64> {
+        while *at + 1 < runs.len() && runs[*at + 1].from <= t {
+            *at += 1;
+        }
+        runs.get(*at).filter(|r| r.from <= t).map(|r| r.price)
+    };
+    for (i, c) in candles.iter().enumerate() {
+        let end = candles.get(i + 1).map_or(i64::MAX, |next| next.open_time - 1);
+        wo[i] = walk(&weeks, &mut wi, end);
+        mo[i] = walk(&months, &mut mi, end);
+        yo[i] = walk(&years, &mut yi, end);
+        while di + 1 < mondays.len() && mondays[di + 1].from <= end {
+            di += 1;
+        }
+        // A bar reads Monday's range only while it is in Monday's own week.
+        if let Some(mon) = mondays.get(di).filter(|mon| mon.from <= end && mon.week == week_index(c.open_time)) {
+            (mon_high[i], mon_low[i]) = (Some(mon.high), Some(mon.low));
+        }
     }
 
     let hidden = |key: &'static str, label: &'static str, values: Series, color: &'static str| StudyLine { style: LineStyle::None, color: Some(color), ..StudyLine::line(key, label, values) };
@@ -640,7 +652,7 @@ mod tests {
             (t0 + 2 * hour, [20.0, 21.0, 19.0, 20.0]),
             (t0 + 3 * hour, [30.0, 30.0, 30.0, 30.0]),
         ];
-        let inputs = StudyInputs { open_interest: &steps, live: Some((t0 + 3 * hour, 400.0)) };
+        let inputs = StudyInputs { open_interest: &steps, live: Some((t0 + 3 * hour, 400.0)), ..StudyInputs::default() };
         let study = compute_study_with(&parse_studies("oi", 12)[0], &candles, &inputs);
         assert_eq!(study.candles, vec![Some([10.0, 15.0, 8.0, 10.0]), Some([10.0; 4]), Some([20.0, 21.0, 19.0, 20.0]), Some([30.0; 4])]);
         assert_eq!(line(&study, "close"), &vec![Some(10.0), Some(10.0), Some(20.0), Some(30.0)]);
@@ -707,6 +719,31 @@ mod tests {
         let s = compute_study(&parse_studies("keylevels", 12)[0], &spiky);
         let mon_h = line(&s, "monH");
         assert_eq!((mon_h[0], mon_h[1], mon_h[7]), (Some(spiky[0].high), Some(spiky[0].high), Some(spiky[7].high)));
+    }
+
+    #[test]
+    fn weekly_bars_take_their_levels_from_the_daily_bars_under_them() {
+        // Weeks open on Monday, so the week holding 1 January opens in the old
+        // year: on a weekly chart the year's open is inside the first bar.
+        let days = series("2025-12-29", 14, DAY, |i| (Some(1000.0 + i as f64), None, None, None, None));
+        let weeks = series("2025-12-29", 2, 7 * DAY, |i| (Some(days[i * 7].open), None, None, None, None));
+        let spec = &parse_studies("keylevels", 12)[0];
+
+        let plain = compute_study_with(spec, &weeks, &StudyInputs::default());
+        assert_eq!(line(&plain, "yo")[1], Some(weeks[1].open), "without dailies the year opens a week late, at 5 January");
+
+        let study = compute_study_with(spec, &weeks, &StudyInputs { days: &days, ..StudyInputs::default() });
+        let new_year = days[3].open; // 1 January
+        assert_eq!(line(&study, "yo")[..], [Some(new_year), Some(new_year)], "both bars trade under the new year's open");
+        let yo: Vec<_> = study.segments.iter().filter(|s| s.label == "YO").collect();
+        assert_eq!(yo.len(), 1);
+        assert_eq!((yo[0].from, yo[0].price), (days[3].open_time, new_year), "the level starts where the year did");
+
+        // Monday's range is one day of the week, not the whole of it.
+        let mon: Vec<_> = study.segments.iter().filter(|s| s.label == "Mon H").collect();
+        assert_eq!(mon.len(), 1);
+        assert_eq!(mon[0].price, days[7].high, "the current week's Monday");
+        assert_eq!(line(&study, "monH")[0], Some(days[0].high), "the bar before reads its own week's Monday");
     }
 
     #[test]

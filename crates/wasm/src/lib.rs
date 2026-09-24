@@ -87,6 +87,13 @@ impl ChartEngine {
         self.chart.set_candles(candles(time, open, high, low, close, volume));
     }
 
+    /// The daily bars the chart's own were folded from, for key levels that open
+    /// inside a bar longer than a day. Empty clears them.
+    pub fn set_days(&mut self, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64]) {
+        let volume = vec![0.0; time.len()];
+        self.chart.set_days(candles(time, open, high, low, close, &volume));
+    }
+
     pub fn set_live(&mut self, open_time: f64, open: f64, high: f64, low: f64, close: f64, volume: f64) {
         self.chart.set_live(Some(LiveBar { open_time: open_time as i64, open, high, low, close, volume, closed: false }));
     }

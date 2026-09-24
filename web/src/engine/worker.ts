@@ -336,6 +336,7 @@ class Slot {
     this.markPrice();
     this.engine.clear_live();
     this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
+    this.engine.set_days(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.metaDirty = true;
     let tf: TfInfo;
     try {
@@ -387,6 +388,10 @@ class Slot {
   private pushCandles(): void {
     const k = this.closed;
     this.engine.set_candles(k.time, k.open, k.high, k.low, k.close, k.volume);
+    // A bar longer than a day opens before the week, month or year it sits in,
+    // so key levels read the daily bars it was folded from where there are any.
+    const days = this.series?.interval === '1d' && info(this.timeframe).barMs > intervalMs('1d') ? this.series.cols : null;
+    this.engine.set_days(days?.time ?? EMPTY, days?.open ?? EMPTY, days?.high ?? EMPTY, days?.low ?? EMPTY, days?.close ?? EMPTY);
     this.engine.set_message(k.time.length > 0 ? '' : 'No closed candles for this market and timeframe yet.');
     this.pushLive();
     this.metaDirty = true;
