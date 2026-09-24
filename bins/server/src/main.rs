@@ -7,6 +7,7 @@
 //! exception is the relay (`relay.rs`), which a browser falls back to only when
 //! its network blocks the exchanges' names.
 
+mod alert_watch;
 mod alerts;
 mod api;
 mod catalog;
@@ -114,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("TRADOOR_OPEN_INTEREST: {bad:?} is not a coin — write them like BTC,ETH,1000PEPE");
             }
             let open_interest = if coins.is_empty() { None } else { Some(open_interest::Recorder::start(pool.clone(), coins, &doh).await?) };
+            alert_watch::start(pool.clone(), doh.clone());
             let state = api::AppState {
                 open_interest,
                 liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),

@@ -103,7 +103,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 |---|---|
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
-| `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500) |
+| `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
@@ -125,9 +125,12 @@ browser watches the prices, each alert market's daily candle stream, and fires
 them — Crossing, Crossing Up or Down, Greater or Less Than — with a sound, a
 notice in the page and, when the tab is out of sight, a system notification.
 One tab watches, the one holding the `tradoor-alerts` Web Lock; the rest follow
-over a BroadcastChannel, and the server takes only the first trigger of an
-alert, so nothing fires twice. An alert fires while a tradoor tab is open
-somewhere; the chart draws each active one as a level to drag or delete. The watchlist streams each
+over a BroadcastChannel and read the list again every half minute. The server
+watches as well (`alert_watch`): every market with an active alert is followed
+on its exchange's public trade stream, so an alert fires with no browser open
+at all. Both sides record a trigger through the same two statements and the
+alert must still be active for them to take, so it fires once however many
+watchers see it. The chart draws each active one as a level to drag or delete. The watchlist streams each
 market's daily candle, so its change and volume run from 00:00 UTC as
 TradingView's do, not over the rolling 24 hours an exchange ticker reports. It
 is one ordered list in which `#Name` entries head sections; a section folds

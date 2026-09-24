@@ -1,7 +1,9 @@
-//! Price alerts, stored per browser id as drawings are. The browser watches the
-//! prices — it holds the exchanges' streams already — and reports a trigger
-//! here; the server keeps each alert's state and a log of what fired, so both
-//! follow the reader to any tab and survive a reload.
+//! Price alerts, stored per browser id as drawings are. Two watchers report a
+//! trigger here: the page, which holds the exchanges' streams already and so
+//! fires the moment a chart sees it, and the server's own watcher in
+//! `alert_watch`, which fires when no browser is open. The alert's state and
+//! the log of what fired live here, so both follow the reader to any tab and
+//! survive a reload.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -96,6 +98,33 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(body
     Ok((StatusCode::CREATED, Json(json!({ "alert": row_json(&row) }))))
 }
 
+/// Stop an alert at the price that met it and write its log line, returning
+/// both rows. `None` when it had already stopped: only an active alert fires,
+/// so a second watcher reporting the same cross is not a second trigger.
+pub async fn record_trigger(
+    client: &tokio_postgres::Client,
+    owner: &str,
+    id: i64,
+    value: f64,
+    now: i64,
+) -> Result<Option<(tokio_postgres::Row, tokio_postgres::Row)>, tokio_postgres::Error> {
+    let fired = client
+        .query_opt(&format!("UPDATE alert SET active = FALSE, triggered_at = $3, trigger_price = $4 WHERE id = $1 AND owner = $2 AND active RETURNING {COLUMNS}"), &[&id, &owner, &now, &value])
+        .await?;
+    let Some(fired) = fired else { return Ok(None) };
+    let log = client
+        .query_one(
+            "INSERT INTO alert_log (owner, alert_id, market, condition, price, message, time, value) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, alert_id, market, condition, price, message, time, value",
+            &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM alert_log WHERE owner = $1 AND id NOT IN (SELECT id FROM alert_log WHERE owner = $1 ORDER BY time DESC, id DESC LIMIT $2)", &[&owner, &LOG_KEPT])
+        .await?;
+    Ok(Some((fired, log)))
+}
+
 /// Edit, restart or trigger one alert:
 /// `{price?, condition?, message?}` edits it (and restarts it, as TradingView does);
 /// `{active: true}` restarts a stopped one; `{triggered: {value}}` records a trigger
@@ -109,20 +138,9 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
 
     if let Some(t) = b.get("triggered") {
         let value = t.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| ApiError::bad_request("triggered.value must be the price that fired it"))?;
-        // Only an active alert fires: a second tab reporting the same cross is not a second trigger.
-        let now = now_ms();
-        let fired = client.query_opt(&format!("UPDATE alert SET active = FALSE, triggered_at = $3, trigger_price = $4 WHERE id = $1 AND owner = $2 AND active RETURNING {COLUMNS}"), &[&id, &owner, &now, &value]).await?;
-        let Some(fired) = fired else { return Ok(Json(json!({ "alert": row_json(&row), "log": null }))) };
-        let log = client
-            .query_one(
-                "INSERT INTO alert_log (owner, alert_id, market, condition, price, message, time, value) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                 RETURNING id, alert_id, market, condition, price, message, time, value",
-                &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value],
-            )
-            .await?;
-        client
-            .execute("DELETE FROM alert_log WHERE owner = $1 AND id NOT IN (SELECT id FROM alert_log WHERE owner = $1 ORDER BY time DESC, id DESC LIMIT $2)", &[&owner, &LOG_KEPT])
-            .await?;
+        let Some((fired, log)) = record_trigger(&client, &owner, id, value, now_ms()).await? else {
+            return Ok(Json(json!({ "alert": row_json(&row), "log": null })));
+        };
         return Ok(Json(json!({ "alert": row_json(&fired), "log": log_json(&log) })));
     }
 

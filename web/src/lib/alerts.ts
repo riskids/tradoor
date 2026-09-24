@@ -3,10 +3,11 @@
  * watcher that fires them.
  *
  * The browser watches prices — it holds the exchanges' streams already — so an
- * alert fires while a tradoor tab is open anywhere. One tab watches (the one
- * holding the `tradoor-alerts` lock); the others follow its changes over a
- * BroadcastChannel, so two tabs never fire one alert twice. The server also
- * refuses a second trigger of an alert that already stopped.
+ * alert fires the moment a chart sees it. One tab watches (the one holding the
+ * `tradoor-alerts` lock); the others follow its changes over a BroadcastChannel,
+ * so two tabs never fire one alert twice. The server watches too, for the alerts
+ * nobody has open, and refuses a second trigger of one that already stopped —
+ * which is why every tab reads the list again now and then, watching or not.
  */
 import { createEffect, createRoot, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
@@ -27,6 +28,9 @@ interface State {
 
 const [state, setState] = createStore<State>({ alerts: [], log: [], loaded: false, error: null });
 export const alertState = state;
+
+/** How often a tab reads the list again, for what fired elsewhere. */
+const REFRESH_MS = 30_000;
 
 const SEEN_KEY = 'tradoor:alerts-seen';
 const readSeen = (): number => {
@@ -266,22 +270,16 @@ export function startAlerts(): void {
   void loadAlerts();
   // Another tab fired, made or deleted one: read the list again.
   if (channel) channel.onmessage = () => void loadAlerts();
-  let leader = false;
-  const lead = () => {
-    leader = true;
-    watch();
-  };
   if (navigator.locks) {
     // Held until the tab closes; the next tab in line then takes over watching.
     void navigator.locks.request('tradoor-alerts', () => {
-      lead();
+      watch();
       return new Promise<void>(() => {});
     });
   } else {
-    lead();
+    watch();
   }
-  // Tabs that do not watch still catch up now and then, should a message be missed.
-  setInterval(() => {
-    if (!leader) void loadAlerts();
-  }, 60_000);
+  // Every tab catches up now and then: the server fires the alerts no tab is
+  // watching, and a message from another tab can be missed.
+  setInterval(() => void loadAlerts(), REFRESH_MS);
 }
