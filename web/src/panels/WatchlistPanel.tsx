@@ -17,7 +17,7 @@ import { formatPct, formatPrice, formatVolume, priceDecimals } from '../lib/form
 import { Icon } from '../lib/icons';
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { isPerp, parseMarket, symbolOf, venueLabel } from '../lib/markets';
-import { blockOf, FLAG_COLORS, FLAGS, freshName, isSection, move, SECTION_NAME_MAX, sectionEnd, sectionName, visible } from '../lib/watchlist';
+import { blockOf, FLAG_COLORS, FLAGS, freshName, isSection, move, SECTION_NAME_MAX, sectionEnd, sectionName, sectionStops, visible } from '../lib/watchlist';
 import type { WatchlistPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart } from '../workspace/store';
 
@@ -159,24 +159,34 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
 
   /** Where a drop at `y` (viewport) lands, and where the line for it goes in the list. */
   const dropAt = (from: number, y: number): { to: number | null; lineY: number } => {
-    const section = isSection(items()[from]!);
     const box = list.getBoundingClientRect();
     const els = [...list.querySelectorAll<HTMLElement>('[data-item]')];
+    const [start, end] = blockOf(items(), from);
+    const bottom = els.length ? els[els.length - 1]!.getBoundingClientRect().bottom : box.top;
+    const landing = (to: number, edge: number) => ({ to: to >= start && to <= end ? null : to, lineY: edge - box.top + list.scrollTop });
+    // A section carries its markets, so it lands between whole sections, never
+    // among another's rows: the line snaps to the nearest of those places.
+    if (isSection(items()[from]!)) {
+      const top = (to: number) => (to >= items().length ? bottom : (els.find((el) => el.dataset.item === items()[to])?.getBoundingClientRect().top ?? null));
+      let best: { to: number; edge: number } | null = null;
+      for (const to of sectionStops(items())) {
+        const edge = top(to);
+        if (edge === null) continue;
+        if (!best || Math.abs(edge - y) < Math.abs(best.edge - y)) best = { to, edge };
+      }
+      return best ? landing(best.to, best.edge) : { to: null, lineY: 0 };
+    }
     let to = items().length;
-    let edge = els.length ? els[els.length - 1]!.getBoundingClientRect().bottom : box.top;
+    let edge = bottom;
     for (const el of els) {
-      const item = el.dataset.item!;
-      // A section lands only between sections.
-      if (section && !isSection(item)) continue;
       const r = el.getBoundingClientRect();
       if (y < r.top + r.height / 2) {
-        to = items().indexOf(item);
+        to = items().indexOf(el.dataset.item!);
         edge = r.top;
         break;
       }
     }
-    const [start, end] = blockOf(items(), from);
-    return { to: to >= start && to <= end ? null : to, lineY: edge - box.top + list.scrollTop };
+    return landing(to, edge);
   };
 
   const onMove = (e: PointerEvent) => {
@@ -231,6 +241,15 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     f();
   };
 
+  /** Rows that would move with the drag under way. */
+  const moving = (item: string): boolean => {
+    const d = drag();
+    if (!d) return false;
+    const [start, end] = blockOf(items(), d.from);
+    const i = items().indexOf(item);
+    return i >= start && i < end;
+  };
+
   const sectionCount = (item: string) => {
     const i = items().indexOf(item);
     return sectionEnd(items(), i) - i - 1;
@@ -268,7 +287,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
               <div
                 class="wl-section"
                 data-item={item}
-                classList={{ dragging: drag() !== null && items()[drag()!.from] === item }}
+                classList={{ dragging: moving(item) }}
                 onPointerDown={(e) => onDown(e, item)}
                 onClick={() => !dragged && editing() === null && toggle(sectionName(item))}
                 onDblClick={() => setEditing(sectionName(item))}
@@ -306,7 +325,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
               <div
                 class="wl-row"
                 data-item={item}
-                classList={{ active: item === current(), dragging: drag() !== null && items()[drag()!.from] === item }}
+                classList={{ active: item === current(), dragging: moving(item) }}
                 data-tip={`${symbolOf(item)} · ${venueLabel(item)}`}
                 onPointerDown={(e) => onDown(e, item)}
                 onClick={() => !dragged && open(item)}
@@ -341,7 +360,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
           <div class="empty">Empty. Add a market with + above.</div>
         </Show>
         <Show when={drag()?.to != null}>
-          <div class="wl-drop" style={{ top: `${drag()!.lineY - 1}px` }} />
+          <div class="wl-drop" style={{ top: `${Math.max(0, drag()!.lineY - 1)}px` }} />
         </Show>
       </div>
       <Show when={drag()}>

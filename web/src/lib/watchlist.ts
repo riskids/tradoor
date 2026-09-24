@@ -36,6 +36,15 @@ export function move(items: readonly string[], from: number, to: number): string
   return rest;
 }
 
+/** Where a whole section may land: the top, before another section, and the end. */
+export function sectionStops(items: readonly string[]): number[] {
+  const stops = new Set<number>([0, items.length]);
+  items.forEach((item, i) => {
+    if (isSection(item)) stops.add(i);
+  });
+  return [...stops].sort((a, b) => a - b);
+}
+
 /** A section name not yet used here: `Section`, `Section 2`, … */
 export function freshName(items: readonly string[], base = 'Section'): string {
   const taken = new Set(items.filter(isSection).map(sectionName));

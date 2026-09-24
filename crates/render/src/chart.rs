@@ -35,8 +35,9 @@ const VERTICAL_PAN_SLOP: f32 = 24.0;
 const HIT_TOLERANCE: f32 = 8.0;
 /// A weak magnet takes a bar's open, high, low or close within this many pixels.
 const MAGNET_PX: f32 = 14.0;
-/// How near an alert's line the pointer must be to take it.
-const ALERT_HIT_PX: f32 = 4.0;
+/// How near an alert's line the pointer must be to take it. A hairline is hard
+/// to hit, so the grab reaches further than the line is drawn.
+const ALERT_HIT_PX: f32 = 7.0;
 
 /// TradingView's magnet: anchors placed or dragged land on a bar's open, high,
 /// low or close — when near one (weak, elsewhere on a whole tick) or always
@@ -570,6 +571,32 @@ impl Chart {
             .map(|a| (a.id, pane.scale.y(a.price) as f32))
             .filter(|(_, ay)| (ay - y).abs() <= ALERT_HIT_PX)
             .min_by(|a, b| (a.1 - y).abs().total_cmp(&(b.1 - y).abs()))
+    }
+
+    /// The alert whose price badge on the axis is at (x, y): the label is a
+    /// handle too, as it is on TradingView.
+    fn alert_badge_at(&self, x: f32, y: f32) -> Option<i64> {
+        let pane = self.panes.first()?;
+        if x < pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
+            return None;
+        }
+        let reach = (self.theme.font_px + 6.0) / 2.0;
+        self.alerts
+            .iter()
+            .map(|a| (a.id, pane.scale.y(a.price) as f32))
+            .filter(|(_, ay)| (ay - y).abs() <= reach)
+            .min_by(|a, b| (a.1 - y).abs().total_cmp(&(b.1 - y).abs()))
+            .map(|(id, _)| id)
+    }
+
+    /// The alert the pointer is on, by its line or by its badge, and its y.
+    pub fn alert_handle_at(&self, x: f32, y: f32) -> Option<(i64, f32)> {
+        self.alert_at(x, y).or_else(|| {
+            let id = self.alert_badge_at(x, y)?;
+            let pane = self.panes.first()?;
+            let a = self.alerts.iter().find(|a| a.id == id)?;
+            Some((id, pane.scale.y(a.price) as f32))
+        })
     }
 
     /// Soft edges on slanted drawing lines — for a GPU surface; see `Frame::smooth`.
@@ -1175,7 +1202,7 @@ impl Chart {
         // ring by the axis as TradingView marks them.
         let held_alert = match self.drag {
             Drag::Alert { id, .. } => Some(id),
-            _ => self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.alert_at(x, y)).map(|(id, _)| id),
+            _ => self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.alert_handle_at(x, y)).map(|(id, _)| id),
         };
         for a in &self.alerts {
             let y = f.snap(price.scale.y(a.price) as f32);
@@ -1447,7 +1474,7 @@ impl Chart {
                 .filter(|(x, y)| matches!(self.drag, Drag::None) && *x >= 0.0 && *x < pane.plot.w && *y >= pane.plot.y && *y <= pane.plot.bottom())
                 .map(|(_, y)| (y, pane.scale.price(f64::from(y)))),
             axis_x: pane.plot.w,
-            alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_at(x, y)),
+            alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_handle_at(x, y)),
         }
     }
 
@@ -1759,6 +1786,11 @@ impl Chart {
         let free = self.tool.is_none();
         self.drag = match self.zone(x, y) {
             Zone::Separator(i) if free => Drag::Separator { upper: i, last_y: y },
+            // An alert's badge on the axis moves the alert; the bare axis scales.
+            Zone::PriceAxis(0) if free => match self.alert_badge_at(x, y) {
+                Some(id) => Drag::Alert { id, moved: false },
+                None => Drag::PriceAxis { pane: 0, last_y: y },
+            },
             Zone::PriceAxis(p) if free => Drag::PriceAxis { pane: p, last_y: y },
             Zone::TimeAxis if free => Drag::TimeAxis { last_x: x },
             Zone::Plot(0) if self.tool == Some(DrawingKind::Brush) => match self.anchor_at(x, y) {
@@ -2724,6 +2756,27 @@ mod tests {
         let expected = c.anchor_at(300.0, 260.0).unwrap().price;
         assert!(moved.is_some_and(|p| (p - expected).abs() < 0.01 * expected.abs()), "{moved:?} vs {expected}");
         assert!(moved.unwrap() < level, "dragged down is lower");
+    }
+
+    #[test]
+    fn an_alert_is_dragged_by_its_badge_on_the_price_axis_too() {
+        let mut c = chart();
+        let level = c.anchor_at(300.0, 200.0).unwrap().price;
+        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.render(1_800_000_000_000);
+        let axis_x = c.plot_width() + 10.0;
+        assert_eq!(c.alert_handle_at(axis_x, 203.0).map(|(id, _)| id), Some(9), "the badge is a handle");
+        assert_eq!(c.alert_handle_at(axis_x, 260.0), None, "the bare axis is not");
+
+        c.pointer_down(axis_x, 200.0, 0);
+        c.pointer_move(axis_x, 150.0);
+        c.pointer_up(axis_x, 150.0);
+        let moved = c.take_events().into_iter().find_map(|e| match e {
+            Event::AlertMoved { id: 9, price } => Some(price),
+            _ => None,
+        });
+        assert!(moved.is_some_and(|p| p > level), "dragged up is higher, not a price scale zoom: {moved:?}");
+        assert!(c.auto_scale(), "the scale was not touched");
     }
 
     #[test]
