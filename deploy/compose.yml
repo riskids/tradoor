@@ -12,6 +12,9 @@ x-app: &app
       condition: service_healthy
   environment:
     DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    # Settings named here reach the program; the rest of .env only fills in this
+    # file. Empty is the same as unset: no bot, and Settings says so.
+    TRADOOR_TELEGRAM_TOKEN: ${TRADOOR_TELEGRAM_TOKEN:-}
   volumes:
     - data:/data
 
