@@ -90,13 +90,6 @@ pub struct Print<'a> {
     pub at: i64,
 }
 
-impl Print<'_> {
-    /// What it was worth, in the quote currency.
-    pub fn usd(&self) -> f64 {
-        self.price * self.qty
-    }
-}
-
 /// A time an exchange writes as a string of milliseconds.
 fn millis(v: &Value) -> i64 {
     v.as_str().and_then(|t| t.parse().ok()).or_else(|| v.as_i64()).unwrap_or_default()
@@ -226,11 +219,11 @@ mod tests {
     }
 
     #[test]
-    fn a_trade_is_worth_price_times_size() {
+    fn a_trade_carries_its_price_and_size() {
         let frame: Value = serde_json::from_str(r#"{"e":"aggTrade","s":"BTCUSDT","p":"80000","q":"0.25","m":false}"#).unwrap();
         let mut into = Vec::new();
         read_prints(Venue::BinancePerp, &frame, &mut into);
-        assert_eq!(into[0].usd(), 20_000.0);
+        assert_eq!((into[0].price, into[0].qty, into[0].buy), (80_000.0, 0.25, true));
     }
 
     #[test]

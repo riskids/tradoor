@@ -19,6 +19,8 @@ import { patchPanel } from '../workspace/store';
 const POLL_MS = 5_000;
 
 const money = (v: number): string => `${v < 0 ? '-' : '+'}$${formatTurnover(Math.abs(v))}`;
+/** `BTC` — the coin the followed markets share, whatever each quotes it in. */
+const coinOf = (market: string): string => symbolOf(market).replace(/(USDT|USDC|USD)$/, '');
 const tone = (v: number): string => (v > 0 ? 'bull' : v < 0 ? 'bear' : 'dim');
 
 /** `Binance Perp` — which exchange and which kind, since all four are one coin. */
@@ -77,7 +79,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
 
       <div class="flow-table">
         <div class="flow-head">
-          <span>{symbolOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
+          <span>{coinOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
           <span class="r">1m</span>
           <span class="r">1h</span>
         </div>

@@ -488,9 +488,9 @@ table.venues tr.off td { color: var(--dim); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
 /* Flow: net taker flow per market, and the minutes that crossed. */
-.flow .flow-table { flex: none; border-bottom: 1px solid var(--border); }
+.flow .flow-table { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--border); }
 .flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: 1fr 78px 78px; align-items: center; gap: 6px; padding: 4px 8px; font-size: 11px; }
-.flow .flow-head { color: var(--muted); border-bottom: 1px solid var(--border); }
+.flow .flow-head { position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); }
 .flow .flow-line { border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); }
 .flow .flow-line:last-child { border-bottom: 0; }
 .flow .sym { display: flex; align-items: center; gap: 5px; min-width: 0; }

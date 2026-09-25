@@ -27,20 +27,28 @@ use tradoor_store::now_ms;
 use tradoor_venues::{MarketRef, Venue};
 
 use crate::api::{owner, ApiError, ApiResult, AppState};
+use crate::catalog::Catalog;
 use crate::dns::Doh;
 use crate::telegram::{self, Telegram};
 use crate::trades::{self, Print};
 
-/// The coin followed. One to begin with: it is the one whose flow is read.
-pub const TICKER: &str = "BTCUSDT";
 /// The markets followed, and what a minute's flow is measured against on each
-/// until the reader says otherwise — a perpetual turns over ten times what its
-/// spot does, so the same number would speak every minute there and never here.
-const MARKETS: [(Venue, f64); 4] = [
-    (Venue::BinanceSpot, 1_000_000.0),
-    (Venue::BinancePerp, 5_000_000.0),
-    (Venue::BybitSpot, 1_000_000.0),
-    (Venue::BybitPerp, 2_000_000.0),
+/// until the reader says otherwise. The sizes differ by two orders of magnitude
+/// between them — a quiet minute on Binance's perpetual is a busy hour on
+/// Bitget's spot — so each threshold is about three times what a minute's flow
+/// usually comes to there, measured on the live streams.
+const MARKETS: [(&str, f64); 11] = [
+    ("binance-spot:BTCUSDT", 1_000_000.0),
+    ("binance-perp:BTCUSDT", 5_000_000.0),
+    ("bybit-spot:BTCUSDT", 1_000_000.0),
+    ("bybit-perp:BTCUSDT", 2_000_000.0),
+    ("okx-spot:BTCUSDT", 200_000.0),
+    ("okx-perp:BTCUSDT", 2_500_000.0),
+    ("bitget-spot:BTCUSDT", 150_000.0),
+    ("bitget-perp:BTCUSDT", 1_500_000.0),
+    ("hyperliquid-perp:BTCUSD", 2_000_000.0),
+    ("kraken-spot:BTCUSD", 400_000.0),
+    ("kraken-perp:BTCUSD", 100_000.0),
 ];
 /// How far back a crossing looks: the flow of the last minute.
 const WINDOW_MS: i64 = 60_000;
@@ -60,17 +68,20 @@ const EVENTS_KEPT: i64 = 500;
 const MIN_THRESHOLD: f64 = 10_000.0;
 const MAX_THRESHOLD: f64 = 1e10;
 
-pub fn market_of(venue: Venue) -> String {
-    format!("{}:{TICKER}", venue.id())
-}
-
 /// The markets this server follows, in the order the panel shows them.
 pub fn markets() -> Vec<String> {
-    MARKETS.iter().map(|(venue, _)| market_of(*venue)).collect()
+    MARKETS.iter().map(|(market, _)| (*market).to_string()).collect()
 }
 
 fn default_threshold(market: &str) -> f64 {
-    MARKETS.iter().find(|(venue, _)| market_of(*venue) == market).map_or(1_000_000.0, |(_, t)| *t)
+    MARKETS.iter().find(|(m, _)| *m == market).map_or(1_000_000.0, |(_, t)| *t)
+}
+
+/// What a trade was worth. Everywhere but OKX's swaps a size is coins, and the
+/// money is price times size; there it is contracts of a hundredth of a coin,
+/// so a print of fifty is half a coin and not fifty of them.
+fn notional(venue: Venue, price: f64, qty: f64, contract: f64) -> f64 {
+    if venue == Venue::OkxPerp { price * qty * contract } else { price * qty }
 }
 
 /// What one reader wants of one market.
@@ -103,6 +114,10 @@ impl Live {
 pub struct Flow {
     pool: deadpool_postgres::Pool,
     doh: Arc<Doh>,
+    /// The exchanges' own names for the markets followed.
+    catalog: Arc<Catalog>,
+    /// Reaches the exchanges past a blocked resolver, for what is not streamed.
+    http: reqwest::Client,
     telegram: Option<Arc<Telegram>>,
     /// Per market, the minute in hand. Written down every few seconds.
     live: Mutex<HashMap<String, Live>>,
@@ -112,21 +127,27 @@ pub struct Flow {
     watches: Mutex<Vec<Watch>>,
     /// Markets already reported, per reader and side, until the flow calms.
     said: Mutex<HashMap<(String, String, bool), ()>>,
+    /// The coins in one contract, where a size is counted in contracts.
+    contracts: Mutex<HashMap<String, f64>>,
 }
 
 impl Flow {
-    pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, telegram: Option<Arc<Telegram>>) -> Arc<Self> {
+    pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, catalog: Arc<Catalog>, telegram: Option<Arc<Telegram>>) -> Arc<Self> {
+        let http = reqwest::Client::builder().dns_resolver(doh.resolver()).timeout(Duration::from_secs(20)).build().unwrap_or_default();
         let flow = Arc::new(Self {
             pool,
             doh,
+            catalog,
+            http,
             telegram,
             live: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             watches: Mutex::new(Vec::new()),
             said: Mutex::new(HashMap::new()),
+            contracts: Mutex::new(HashMap::new()),
         });
-        for (venue, _) in MARKETS {
-            tokio::spawn(follow(venue, flow.clone()));
+        for market in markets() {
+            tokio::spawn(follow(market, flow.clone()));
         }
         tokio::spawn(keep(flow.clone()));
         tokio::spawn(weigh(flow.clone()));
@@ -135,7 +156,7 @@ impl Flow {
     }
 
     /// One trade, counted to the side that took it.
-    fn record(&self, market: &str, print: &Print<'_>, at: i64) {
+    fn record(&self, market: &str, print: &Print<'_>, usd: f64, at: i64) {
         let Ok(mut live) = self.live.lock() else { return };
         let entry = live.entry(market.to_string()).or_default();
         let minute = at - at.rem_euclid(60_000);
@@ -143,7 +164,6 @@ impl Flow {
             entry.minute = minute;
             (entry.buy, entry.sell, entry.trades) = (0.0, 0.0, 0);
         }
-        let usd = print.usd();
         if print.buy {
             entry.buy += usd;
         } else {
@@ -158,6 +178,25 @@ impl Flow {
         if let Ok(mut pending) = self.pending.lock() {
             pending.insert((market.to_string(), minute), (entry.buy, entry.sell, entry.trades, entry.price));
         }
+    }
+
+    /// The coins in one OKX swap contract, asked for once and kept: a size
+    /// there is contracts, and a hundredth of a coin is not a coin.
+    async fn contract_size(&self, native: &str) -> f64 {
+        if let Some(size) = self.contracts.lock().ok().and_then(|c| c.get(native).copied()) {
+            return size;
+        }
+        let sizes = async {
+            let body = self.http.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP").send().await.ok()?.text().await.ok()?;
+            Some(crate::liquidations::parse_okx_sizes(&serde_json::from_str::<Value>(&body).ok()?))
+        }
+        .await
+        .unwrap_or_default();
+        let size = sizes.get(native).copied().unwrap_or(1.0);
+        if let Ok(mut held) = self.contracts.lock() {
+            held.extend(sizes);
+        }
+        size
     }
 
     /// The flow of the last minute on each market, with the last price.
@@ -175,12 +214,16 @@ impl Flow {
 }
 
 /// Keeps one exchange connected for as long as the server runs.
-async fn follow(venue: Venue, flow: Arc<Flow>) {
+async fn follow(market: String, flow: Arc<Flow>) {
+    let Some(venue) = MarketRef::parse(&market).map(|m| m.venue) else { return };
     let urls = trades::stream_urls(venue);
+    if urls.is_empty() {
+        return;
+    }
     let (mut attempt, mut at) = (0, 0);
     loop {
-        let url = urls[at % urls.len().max(1)];
-        if let Err(e) = session(venue, url, &flow).await {
+        let url = urls[at % urls.len()];
+        if let Err(e) = session(&market, venue, url, &flow).await {
             tracing::warn!(venue = venue.id(), url, error = %e, "flow stream lost");
             sleep(Duration::from_secs(RETRY_SECS[attempt.min(RETRY_SECS.len() - 1)])).await;
             (attempt, at) = (attempt + 1, at + 1);
@@ -190,15 +233,24 @@ async fn follow(venue: Venue, flow: Arc<Flow>) {
     }
 }
 
-async fn session(venue: Venue, url: &str, flow: &Flow) -> anyhow::Result<()> {
+async fn session(market: &str, venue: Venue, url: &str, flow: &Flow) -> anyhow::Result<()> {
+    let symbol = MarketRef::parse(market).map(|m| m.symbol).unwrap_or_default();
+    // Asked for in the exchange's own name, and answered in it: OKX says
+    // BTC-USDT-SWAP, Hyperliquid BTC, Kraken PF_XBTUSD.
+    let theirs = if trades::renames(venue) {
+        flow.catalog.native_names(venue, std::slice::from_ref(&symbol)).await.get(&symbol).cloned().unwrap_or_else(|| symbol.clone())
+    } else {
+        symbol.clone()
+    };
+    // What one contract holds, where a size is not coins.
+    let contract = if venue == Venue::OkxPerp { flow.contract_size(&theirs).await } else { 1.0 };
+
     let connect = flow.doh.connect_ws(url);
     let mut ws = tokio::time::timeout(Duration::from_secs(15), connect).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
-    for frame in trades::subscribe(venue, &[TICKER.to_string()]) {
+    for frame in trades::subscribe(venue, std::slice::from_ref(&theirs)) {
         ws.send(Message::text(frame)).await?;
     }
-    tracing::info!(venue = venue.id(), "reading flow");
-
-    let market = market_of(venue);
+    tracing::info!(venue = venue.id(), symbol = %theirs, contract, "reading flow");
     let (mut heard, mut traded) = (Instant::now(), Instant::now());
     let mut ping = tokio::time::interval(PING);
     loop {
@@ -217,13 +269,13 @@ async fn session(venue: Venue, url: &str, flow: &Flow) -> anyhow::Result<()> {
                 trades::read_prints(venue, &value, &mut prints);
                 let now = now_ms();
                 for print in &prints {
-                    if print.symbol != TICKER {
+                    if print.symbol != theirs {
                         continue;
                     }
                     traded = Instant::now();
                     // An exchange's clock can be a little ahead; the minute a
                     // trade lands in is ours, so the panel and the table agree.
-                    flow.record(&market, print, now);
+                    flow.record(market, print, notional(venue, print.price, print.qty, contract), now);
                 }
             }
             _ = ping.tick() => {
@@ -476,41 +528,55 @@ mod tests {
 
     #[test]
     fn each_market_is_measured_against_its_own_size() {
-        assert_eq!(markets().len(), 4);
-        assert!(markets().contains(&"binance-perp:BTCUSDT".to_string()));
+        assert_eq!(markets().len(), 11);
+        assert!(markets().contains(&"binance-perp:BTCUSDT".to_string()) && markets().contains(&"hyperliquid-perp:BTCUSD".to_string()));
+        assert!(markets().iter().all(|m| MarketRef::parse(m).is_some_and(|r| !trades::stream_urls(r.venue).is_empty())), "every one of them has a stream to read");
         assert!(default_threshold("binance-perp:BTCUSDT") > default_threshold("binance-spot:BTCUSDT"), "a perpetual turns over more, so it takes more to speak");
         assert_eq!(default_threshold("nowhere:BTCUSDT"), 1_000_000.0);
     }
 
     #[test]
+    fn a_contract_is_not_a_coin() {
+        assert_eq!(notional(Venue::BinancePerp, 80_000.0, 0.5, 1.0), 40_000.0);
+        assert_eq!(notional(Venue::OkxPerp, 80_000.0, 50.0, 0.01), 40_000.0, "fifty contracts of a hundredth of a coin");
+        for venue in [Venue::KrakenPerp, Venue::HyperliquidPerp, Venue::BitgetPerp, Venue::KrakenSpot] {
+            assert_eq!(notional(venue, 80_000.0, 0.5, 1.0), 40_000.0, "{} counts its sizes in coins", venue.id());
+        }
+    }
+
+    #[test]
     fn the_window_slides_and_counts_each_side() {
+        let doh = crate::dns::Doh::new().unwrap();
         let flow = Flow {
             pool: deadpool_postgres::Config { url: Some("postgres://nobody@127.0.0.1:1/none".into()), ..Default::default() }
                 .create_pool(Some(deadpool_postgres::Runtime::Tokio1), tokio_postgres::NoTls)
                 .unwrap(),
-            doh: crate::dns::Doh::new().unwrap(),
+            catalog: Arc::new(crate::catalog::Catalog::new("https://api.binance.com".into(), &doh).unwrap()),
+            http: reqwest::Client::new(),
+            doh,
             telegram: None,
             live: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             watches: Mutex::new(Vec::new()),
             said: Mutex::new(HashMap::new()),
+            contracts: Mutex::new(HashMap::new()),
         };
-        let market = market_of(Venue::BinancePerp);
+        let market = "binance-perp:BTCUSDT";
         let at = 1_800_000_000_000;
-        let print = |price: f64, qty: f64, buy: bool| Print { symbol: TICKER, price, qty, buy, at };
-        flow.record(&market, &print(100.0, 30.0, true), at);
-        flow.record(&market, &print(100.0, 10.0, false), at + 1_000);
+        let print = |price: f64, qty: f64, buy: bool| Print { symbol: "BTCUSDT", price, qty, buy, at };
+        flow.record(market, &print(100.0, 30.0, true), 3_000.0, at);
+        flow.record(market, &print(100.0, 10.0, false), 1_000.0, at + 1_000);
         {
             let live = flow.live.lock().unwrap();
-            let entry = live.get(&market).unwrap();
+            let entry = live.get(market).unwrap();
             assert_eq!((entry.buy, entry.sell, entry.trades), (3_000.0, 1_000.0, 2));
             assert_eq!(entry.delta(at), 2_000.0, "bought less sold");
             assert_eq!(entry.delta(at + 500), -1_000.0, "the window drops what fell out of it");
         }
         // A trade a minute later starts the minute afresh and slides the window.
-        flow.record(&market, &print(100.0, 1.0, true), at + 70_000);
+        flow.record(market, &print(100.0, 1.0, true), 100.0, at + 70_000);
         let live = flow.live.lock().unwrap();
-        let entry = live.get(&market).unwrap();
+        let entry = live.get(market).unwrap();
         assert_eq!((entry.buy, entry.sell, entry.trades), (100.0, 0.0, 1), "a new minute counts from nothing");
         assert_eq!(entry.recent.len(), 1, "the older trades are out of the window");
     }

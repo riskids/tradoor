@@ -130,7 +130,11 @@ spread less what the sellers did — kept minute by minute for two days
 (`flow`, `flow_minute`). Spot and perpetual are counted apart, since the same
 number means something different on each, and each carries its own threshold:
 a minute that runs harder than it is a crossing, told to the reader here and on
-Telegram, and marked on the candles where it traded. The chart's marks are the
+Telegram, and marked on the candles where it traded. Eleven markets are read —
+Binance, Bybit, OKX, Bitget, Hyperliquid and Kraken, spot and perpetual — each
+in the exchange's own name for it, and each size in whatever that exchange
+counts in: an OKX swap trades in contracts of a hundredth of a coin, so a print
+of fifty is half a coin and not fifty of them. The chart's marks are the
 minutes themselves, so they show at any timeframe; hovering one names the
 money, the minute and the price. After a crossing a market stays quiet until
 its flow falls back to half the threshold, so one push does not ring over.

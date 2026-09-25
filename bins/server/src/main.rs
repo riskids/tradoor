@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
             let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
             let catalog = Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?);
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
-            let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), telegram.clone()));
+            let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone()));
             let state = api::AppState {
                 open_interest,
                 flow,
