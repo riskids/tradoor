@@ -36,7 +36,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, overlay, setOverlay, TOOL_KEYS } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, overlay, setOverlay, TOOL_KEYS } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -150,7 +150,13 @@ function onKeyDown(e: KeyboardEvent): void {
     const kind = TOOL_KEYS[code];
     const focus = focusedPanel();
     const chart = focus?.type === 'chart' ? focus : targetChart();
-    const control = kind && chart ? chartControllers.get(chart.id) : undefined;
+    const control = chart ? chartControllers.get(chart.id) : undefined;
+    // A picture of the chart in use: shift saves the file instead of copying.
+    if (code === CAPTURE_KEY && control) {
+      e.preventDefault();
+      control.capture(e.shiftKey);
+      return;
+    }
     if (kind && control) {
       e.preventDefault();
       control.tool(kind);

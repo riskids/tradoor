@@ -25,6 +25,8 @@ export interface ChartController {
   /** Undo or redo the last drawing change; false when there was none. */
   undo(): boolean;
   redo(): boolean;
+  /** Copy a picture of the chart, or save the file instead. */
+  capture(save: boolean): void;
 }
 
 export const chartControllers = new Map<string, ChartController>();
@@ -47,6 +49,8 @@ export const TOOL_KEYS: Record<string, string> = {
 };
 /** Alt + this key turns the magnet through off, weak and strong. */
 export const MAGNET_KEY = 'KeyG';
+/** Alt + this key copies a picture of the chart; with shift, saves the file. */
+export const CAPTURE_KEY = 'KeyK';
 
 /** The drawing magnet, one setting for every chart, remembered by this browser. */
 const MAGNETS: readonly MagnetMode[] = ['off', 'weak', 'strong'];

@@ -256,6 +256,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       showRange: (days) => send({ t: 'range', id: sid, days }),
       undo,
       redo,
+      capture,
     });
     onCleanup(() => {
       observer.disconnect();
@@ -446,6 +447,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     }
   }
 
+  /** A picture of this chart, to the clipboard — or to a file when `save`. */
+  const capture = (save: boolean) => captureChart(sid, `tradoor ${symbolOf(market())} ${tfLabel(timeframe())} ${formatFileTime(Date.now())}.png`, save);
+
   const undo = () => {
     const step = history.takeUndo();
     if (step) replay(step, true);
@@ -601,9 +605,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <span class="sep" />
         <button
           class="tb"
-          data-tip="Copy a 4K picture of this chart — hold shift to save the file"
+          data-tip="Copy a 4K picture of this chart · alt K — hold shift to save the file"
           aria-label="Copy a picture of this chart"
-          onClick={(e) => captureChart(sid, `tradoor ${symbolOf(market())} ${tfLabel(timeframe())} ${formatFileTime(Date.now())}.png`, e.shiftKey)}
+          onClick={(e) => capture(e.shiftKey)}
         >
           <Icon name="camera" size={13} />
         </button>
