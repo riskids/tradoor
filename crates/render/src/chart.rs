@@ -987,22 +987,23 @@ impl Chart {
         self.tpo_profiles = tpo::build(&bars, split, tick, bar_ms, &self.tpo_settings);
     }
 
-    /// The tradoor mark and name, bottom left of the price pane. Part of the frame
-    /// itself, so every capture of a chart carries it.
+    /// The tradoor mark, bottom left of the price pane, drawn on the icon's own
+    /// sixteen-unit grid. Part of the frame itself, so every capture of a chart
+    /// carries it — the name is not written out; the door is what is known.
     fn paint_watermark(&self, f: &mut Frame, plot: Rect) {
-        const MARK: f32 = 14.0;
-        if plot.w < 160.0 || plot.h < 80.0 {
+        const MARK: f32 = 34.0;
+        if plot.w < 160.0 || plot.h < 110.0 {
             return;
         }
-        let (x, y) = (plot.x + 10.0, plot.bottom() - 10.0 - MARK);
+        let u = MARK / 16.0;
+        let (x, y) = (plot.x + 12.0, plot.bottom() - 12.0 - MARK);
+        let (at, line) = (|dx: f32, dy: f32| (x + dx * u, y + dy * u), (1.5 * u).max(1.0));
         let accent = self.theme.ribbon_fast;
-        // The doorway with the chart inside it, as the icons carry it.
-        f.stroke_rect(x, y + 1.0, 8.0, 12.0, 1.0, accent.with_alpha(110));
-        let door = [(8.0, 1.0), (12.5, -1.0), (12.5, 15.0), (8.0, 13.0), (8.0, 1.0)];
-        f.polyline(&door.iter().map(|(dx, dy)| (x + dx, y + dy)).collect::<Vec<_>>(), 1.0, accent.with_alpha(150));
-        f.rect(x + 2.0, y + 7.0, 2.0, 4.0, accent.with_alpha(190));
-        f.rect(x + 5.0, y + 4.0, 2.0, 6.0, accent.with_alpha(190));
-        f.text(x + MARK + 7.0, y + MARK / 2.0, "tradoor", self.theme.text.with_alpha(170), Align::Left, Baseline::Middle, self.theme.font_px + 2.0, None, Some(plot));
+        f.stroke_rect(x + 1.8 * u, y + 3.0 * u, 7.6 * u, 10.0 * u, line, accent.with_alpha(150));
+        let door = [(9.4, 3.0), (13.6, 1.2), (13.6, 14.8), (9.4, 13.0), (9.4, 3.0)];
+        f.polyline(&door.iter().map(|(dx, dy)| at(*dx, *dy)).collect::<Vec<_>>(), line, accent.with_alpha(175));
+        f.rect(x + 3.3 * u, y + 7.6 * u, 1.7 * u, 3.4 * u, accent.with_alpha(205));
+        f.rect(x + 6.2 * u, y + 5.6 * u, 1.7 * u, 5.2 * u, accent.with_alpha(205));
     }
 
     fn request_history_if_near_start(&mut self) {
@@ -1035,10 +1036,9 @@ impl Chart {
             }
         }
 
-        // ---- price pane: the watermark first so candles pass over its mark, then
-        // the ribbon under the candles, volume at the foot
+        // ---- price pane: the ribbon under the candles, volume at the foot, and
+        // the mark over the volume — the bars sit where it does and would bury it
         f.clip(Some(price.plot));
-        self.paint_watermark(f, price.plot);
         let tpo = self.tpo().is_some() && self.tpo_profiles.is_some();
         if let (true, Some(profiles)) = (tpo, self.tpo_profiles.as_ref()) {
             let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None }).collect();
@@ -1075,6 +1075,7 @@ impl Chart {
                 }
             }
         }
+        self.paint_watermark(f, price.plot);
         for i in (i0..=i1).filter(|_| !tpo) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
@@ -2835,11 +2836,21 @@ mod tests {
     fn the_watermark_sits_bottom_left_of_the_price_pane() {
         let mut c = chart();
         c.set_studies("rsi:14");
-        let texts = c.render(1_800_000_000_000).texts.clone();
+        let frame = c.render(1_800_000_000_000).clone();
         let price = c.panes[0].plot;
-        let mark = texts.iter().find(|t| t.text == "tradoor").expect("watermark text");
-        assert!(mark.x < price.x + 60.0, "left");
-        assert!(mark.y > price.bottom() - 30.0 && mark.y < price.bottom(), "bottom of the price pane, above the lower panes");
+        assert!(!frame.texts.iter().any(|t| t.text == "tradoor"), "the mark stands alone; the name is not written out");
+
+        // The mark is drawn in the accent, and nowhere else is down there.
+        let accent = c.theme.ribbon_fast;
+        let corner: Vec<(f32, f32)> = frame
+            .positions
+            .chunks(2)
+            .zip(frame.colors.chunks(4))
+            .filter(|(_, c)| *c == [accent.r, accent.g, accent.b, 205])
+            .map(|(p, _)| (p[0], p[1]))
+            .collect();
+        assert!(!corner.is_empty(), "the mark is painted");
+        assert!(corner.iter().all(|(x, y)| *x < price.x + 60.0 && *y > price.bottom() - 60.0 && *y < price.bottom()), "bottom left of the price pane");
     }
 
     #[test]

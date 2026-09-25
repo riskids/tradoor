@@ -11,6 +11,7 @@ import { api, catalog, errorText, type ChartKind, type Drawing, type Product } f
 import type { DrawingPatch } from '../components/DrawingSettings';
 import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
+import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, MAX_PRICE_DECIMALS } from '../lib/format';
@@ -18,7 +19,7 @@ import type { LastPrice } from '../lib/last-price';
 import { Icon, type IconName } from '../lib/icons';
 import { VenueTag } from '../lib/exchanges';
 import { liquidationVenues } from '../lib/liquidation-venues';
-import { zoneLabel } from '../lib/timezone';
+import { formatFileTime, zoneLabel } from '../lib/timezone';
 import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { symbolOf, venueLabel } from '../lib/markets';
 import { alertState, createAlert, deleteAlert, digitsFor, editAlert, titleOf } from '../lib/alerts';
@@ -577,6 +578,15 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         </Show>
         <button ref={tfButton} class="tb" data-tip="Every timeframe" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft : null))}>
           <Icon name="chevron" size={11} />
+        </button>
+        <span class="sep" />
+        <button
+          class="tb"
+          data-tip="Copy a 4K picture of this chart — hold shift to save the file"
+          aria-label="Copy a picture of this chart"
+          onClick={(e) => captureChart(sid, `tradoor ${symbolOf(market())} ${tfLabel(timeframe())} ${formatFileTime(Date.now())}.png`, e.shiftKey)}
+        >
+          <Icon name="camera" size={13} />
         </button>
         <span class="sep" />
         <button class="tb" data-tip="Add an indicator" onClick={() => setOverlay({ kind: 'indicators', panelId: id })}>

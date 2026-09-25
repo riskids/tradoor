@@ -130,6 +130,8 @@ export interface Calls {
   values: { args: { market: string; timeframe: string; basis: ProfileBasis; profile?: boolean; bars?: number }; result: IndicatorValues | null };
   /** The last `days` closed UTC days. */
   daily: { args: { market: string; days: number }; result: DailyBars };
+  /** A picture of one chart as it stands, `wide` pixels across at most. */
+  capture: { args: { id: string; wide: number }; result: Blob };
 }
 
 export type CallName = keyof Calls;

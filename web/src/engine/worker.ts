@@ -210,6 +210,18 @@ class Slot {
     this.metaDirty = true;
   }
 
+  /** The size it is drawn at, which a capture draws again larger. */
+  private shown = { width: 0, height: 0, dpr: 1 };
+
+  resize(width: number, height: number, dpr: number): void {
+    this.shown = { width, height, dpr };
+    this.engine.resize(width, height, dpr);
+  }
+
+  size(): { width: number; height: number; dpr: number } {
+    return this.shown;
+  }
+
   setStudies(value: string): void {
     this.studies = value;
     this.engine.set_studies(value);
@@ -631,7 +643,34 @@ const calls: Handlers = {
   },
   values: valuesCall,
   daily: dailyCall,
+  capture: captureCall,
 };
+
+/** The most a picture is blown up: past this it is pixels, not detail. */
+const MAX_CAPTURE_SCALE = 6;
+
+/**
+ * The chart as it stands, drawn again into canvases of its own at `wide`
+ * pixels across. Nothing on screen changes: the engine goes back to the size it
+ * was at the moment it is done.
+ */
+async function captureCall({ id, wide }: Calls['capture']['args']): Promise<Blob> {
+  const slot = slots.get(id);
+  if (!slot) throw new Error('that chart is not open');
+  const { width, height, dpr } = slot.size();
+  if (!(width > 0 && height > 0)) throw new Error('that chart has no size yet');
+  const scale = Math.min(MAX_CAPTURE_SCALE, Math.max(1, wide / (width * dpr)));
+  const [w, h] = [Math.round(width * dpr * scale), Math.round(height * dpr * scale)];
+  const shapes = new OffscreenCanvas(w, h);
+  const labels = new OffscreenCanvas(w, h);
+  slot.engine.draw_into(shapes, labels, scale, Date.now());
+  const out = new OffscreenCanvas(w, h);
+  const ctx = out.getContext('2d');
+  if (!ctx) throw new Error('this browser will not draw the picture');
+  ctx.drawImage(shapes, 0, 0);
+  ctx.drawImage(labels, 0, 0);
+  return await out.convertToBlob({ type: 'image/png' });
+}
 
 async function answer(req: number, name: CallName, args: unknown): Promise<void> {
   try {
@@ -694,7 +733,7 @@ function handle(msg: ToWorker): void {
   if (msg.t === 'create') {
     try {
       const slot = new Slot(msg.id, msg.gl, msg.text, msg.flat === true);
-      slot.engine.resize(msg.width, msg.height, msg.dpr);
+      slot.resize(msg.width, msg.height, msg.dpr);
       slots.set(msg.id, slot);
       schedule();
     } catch (e) {
@@ -710,7 +749,7 @@ function handle(msg: ToWorker): void {
       slots.delete(msg.id);
       break;
     case 'resize':
-      slot.engine.resize(msg.width, msg.height, msg.dpr);
+      slot.resize(msg.width, msg.height, msg.dpr);
       break;
     case 'visible':
       slot.show(msg.value);

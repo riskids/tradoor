@@ -53,6 +53,8 @@ pub struct ChartEngine {
     chart: Chart,
     gl: gl::Surface,
     text: text::TextLayer,
+    /// The size it is shown at, to go back to after drawing a picture larger.
+    size: (f32, f32, f32),
 }
 
 #[wasm_bindgen]
@@ -66,7 +68,7 @@ impl ChartEngine {
         chart.set_char_width(text.char_width(chart.theme().font_px));
         let gl = if flat { gl::Surface::Flat(gl::Flat::new(gl_canvas)?) } else { gl::Surface::new(gl_canvas)? };
         chart.set_smooth_lines(matches!(gl, gl::Surface::Gpu(_)));
-        Ok(Self { chart, gl, text })
+        Ok(Self { chart, gl, text, size: (0.0, 0.0, 1.0) })
     }
 
     /// What draws the shapes: `webgl2`, or `2d` where a worker has no WebGL2.
@@ -75,7 +77,30 @@ impl ChartEngine {
     }
 
     pub fn resize(&mut self, width: f32, height: f32, dpr: f32) {
+        self.size = (width, height, dpr);
         self.chart.resize(width, height, dpr);
+    }
+
+    /// Draw the chart as it stands into `canvas` at `scale` the pixels, for a
+    /// picture to keep. The 2D renderer draws it: a still costs nothing to draw
+    /// slowly, and its pixels can be read back where a GPU canvas in a worker
+    /// cannot be counted on to hold them.
+    pub fn draw_into(&mut self, shapes: web_sys::OffscreenCanvas, labels: web_sys::OffscreenCanvas, scale: f32, now: f64) -> Result<(), JsValue> {
+        let (width, height, dpr) = self.size;
+        let mut surface = gl::Surface::Flat(gl::Flat::new(shapes)?);
+        let mut text = text::TextLayer::new(labels)?;
+        let smooth = matches!(self.gl, gl::Surface::Gpu(_));
+        self.chart.set_smooth_lines(false);
+        self.chart.resize(width, height, dpr * scale);
+        self.chart.touch();
+        let frame = self.chart.render(now as i64);
+        surface.draw(frame);
+        text.draw(frame);
+        // Back to the size and the renderer it is shown at.
+        self.chart.set_smooth_lines(smooth);
+        self.chart.resize(width, height, dpr);
+        self.chart.touch();
+        Ok(())
     }
 
     pub fn set_timeframe(&mut self, tf: &str) -> Result<(), JsValue> {

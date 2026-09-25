@@ -92,3 +92,9 @@ export function formatAlertTime(ms: number, zone = timeZone()): string {
   const weekday = WEEKDAYS[new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day))).getUTCDay()];
   return `${weekday} ${Number(p.day)} ${MONTHS[Number(p.month) - 1]} '${String(p.year).slice(-2)} ${p.hour}:${p.minute}`;
 }
+
+/** For a file's name: `2026-09-25 12-30`, in the zone the reader keeps. */
+export function formatFileTime(ms: number, zone = timeZone()): string {
+  const p = parts(zone, ms);
+  return `${p.year}-${p.month}-${p.day} ${p.hour}-${p.minute}`;
+}
