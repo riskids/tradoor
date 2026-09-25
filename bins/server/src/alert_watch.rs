@@ -28,14 +28,19 @@ use crate::trades::{self, stream_urls};
 
 /// The venues whose trades this server follows, and so the ones whose alerts
 /// fire with no browser open. The rest are watched by the page alone.
-const VENUES: [Venue; 7] = [
+const VENUES: [Venue; 12] = [
     Venue::BinanceSpot,
     Venue::BinancePerp,
     Venue::BybitSpot,
     Venue::BybitPerp,
     Venue::OkxSpot,
     Venue::OkxPerp,
+    Venue::BitgetSpot,
+    Venue::BitgetPerp,
     Venue::HyperliquidPerp,
+    Venue::KrakenSpot,
+    Venue::KrakenPerp,
+    Venue::LighterPerp,
 ];
 /// How often the alerts to watch are read again.
 const REFRESH: Duration = Duration::from_secs(10);

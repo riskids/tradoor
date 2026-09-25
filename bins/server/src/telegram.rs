@@ -135,6 +135,12 @@ impl Telegram {
                 return;
             }
         };
+        if chats.is_empty() {
+            // Silence here is what makes a missing link hard to see: an alert
+            // fires, nothing arrives, and no line says why.
+            tracing::info!(owner, "nothing told: this browser has no telegram chat linked");
+            return;
+        }
         for chat in chats {
             if self.out.try_send((chat.chat_id, text(chat.utc_offset), chat.clear_after_hours)).is_err() {
                 tracing::warn!(chat = chat.chat_id, "telegram queue full, message dropped");

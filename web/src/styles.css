@@ -511,3 +511,6 @@ table.venues tr.off td { color: var(--dim); }
 .legend .fold:hover { color: var(--text); }
 .legend .fold svg { transition: transform 0.12s; }
 .legend .fold.shut svg { transform: rotate(-90deg); }
+
+.al-notice { display: block; width: 100%; padding: 6px 8px; text-align: left; font-size: 11px; line-height: 1.5; color: var(--bear); background: color-mix(in oklab, var(--bear) 12%, transparent); border-bottom: 1px solid var(--border); }
+.al-notice:hover { background: color-mix(in oklab, var(--bear) 20%, transparent); }

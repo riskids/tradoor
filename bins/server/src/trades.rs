@@ -4,7 +4,7 @@
 //! place and both see the same trade.
 
 use serde_json::Value;
-use tradoor_venues::Venue;
+use tradoor_venues::{Kind, Venue};
 
 /// The public streams each venue's trades come on, best first. A venue with
 /// more than one is tried in turn: an address that answers but then says
@@ -18,14 +18,19 @@ pub fn stream_urls(venue: Venue) -> &'static [&'static str] {
         Venue::BybitPerp => &["wss://stream.bybit.com/v5/public/linear"],
         Venue::OkxSpot | Venue::OkxPerp => &["wss://ws.okx.com:8443/ws/v5/public"],
         Venue::HyperliquidPerp => &["wss://api.hyperliquid.xyz/ws"],
-        _ => &[],
+        Venue::BitgetSpot | Venue::BitgetPerp => &["wss://ws.bitget.com/v2/ws/public"],
+        Venue::KrakenSpot => &["wss://ws.kraken.com/v2"],
+        Venue::KrakenPerp => &["wss://futures.kraken.com/ws/v1"],
+        Venue::LighterPerp => &["wss://mainnet.zklighter.elliot.ai/stream"],
     }
 }
 
 /// Whether a venue calls its markets something other than we do, so the names
-/// asked for and the names answered with have to be translated.
+/// asked for and the names answered with have to be translated. Binance and
+/// Bybit use ours; the rest have their own — `BTC-USDT-SWAP`, `BTC`, `BTC/USD`,
+/// `PI_XBTUSD`, or a market number.
 pub fn renames(venue: Venue) -> bool {
-    matches!(venue, Venue::OkxSpot | Venue::OkxPerp | Venue::HyperliquidPerp)
+    !matches!(venue, Venue::BinanceSpot | Venue::BinancePerp | Venue::BybitSpot | Venue::BybitPerp)
 }
 
 /// What to send to ask for these markets' trades, in the exchange's own names.
@@ -41,6 +46,15 @@ pub fn subscribe(venue: Venue, symbols: &[String]) -> Vec<String> {
             vec![format!("{{\"op\":\"subscribe\",\"args\":[{}]}}", args.join(","))]
         }
         Venue::HyperliquidPerp => symbols.iter().map(|s| format!("{{\"method\":\"subscribe\",\"subscription\":{{\"type\":\"trades\",\"coin\":\"{s}\"}}}}")).collect(),
+        Venue::BitgetSpot | Venue::BitgetPerp => {
+            let inst = if venue.kind() == Kind::Perp { "USDT-FUTURES" } else { "SPOT" };
+            let args: Vec<String> = symbols.iter().map(|s| format!("{{\"instType\":\"{inst}\",\"channel\":\"trade\",\"instId\":\"{s}\"}}")).collect();
+            vec![format!("{{\"op\":\"subscribe\",\"args\":[{}]}}", args.join(","))]
+        }
+        Venue::KrakenSpot => vec![format!("{{\"method\":\"subscribe\",\"params\":{{\"channel\":\"trade\",\"symbol\":[{}]}}}}", quoted(symbols))],
+        Venue::KrakenPerp => vec![format!("{{\"event\":\"subscribe\",\"feed\":\"trade\",\"product_ids\":[{}]}}", quoted(symbols))],
+        // Lighter is asked with a slash and answers with a colon.
+        Venue::LighterPerp => symbols.iter().map(|s| format!("{{\"type\":\"subscribe\",\"channel\":\"market_stats/{s}\"}}")).collect(),
         _ => {
             let params: Vec<String> = symbols.iter().map(|s| format!("\"{}@aggTrade\"", s.to_lowercase())).collect();
             vec![format!("{{\"method\":\"SUBSCRIBE\",\"params\":[{}],\"id\":1}}", params.join(","))]
@@ -52,11 +66,17 @@ pub fn subscribe(venue: Venue, symbols: &[String]) -> Vec<String> {
 pub fn ping(venue: Venue) -> Option<&'static str> {
     match venue {
         Venue::BybitSpot | Venue::BybitPerp => Some("{\"op\":\"ping\"}"),
-        // OKX wants the bare word, and closes a socket that says nothing for 30 seconds.
-        Venue::OkxSpot | Venue::OkxPerp => Some("ping"),
-        Venue::HyperliquidPerp => Some("{\"method\":\"ping\"}"),
+        // OKX and Bitget want the bare word, and close a socket that says
+        // nothing for thirty seconds.
+        Venue::OkxSpot | Venue::OkxPerp | Venue::BitgetSpot | Venue::BitgetPerp => Some("ping"),
+        Venue::HyperliquidPerp | Venue::KrakenSpot => Some("{\"method\":\"ping\"}"),
+        Venue::KrakenPerp => Some("{\"event\":\"ping\"}"),
         _ => None,
     }
+}
+
+fn quoted(symbols: &[String]) -> String {
+    symbols.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(",")
 }
 
 /// One trade as both readers need it: what it cost, how much, and whether the
@@ -75,6 +95,11 @@ impl Print<'_> {
     pub fn usd(&self) -> f64 {
         self.price * self.qty
     }
+}
+
+/// A time an exchange writes as a string of milliseconds.
+fn millis(v: &Value) -> i64 {
+    v.as_str().and_then(|t| t.parse().ok()).or_else(|| v.as_i64()).unwrap_or_default()
 }
 
 fn num(v: &Value) -> Option<f64> {
@@ -98,7 +123,7 @@ pub fn read_prints<'a>(venue: Venue, frame: &'a Value, into: &mut Vec<Print<'a>>
             let Some(rows) = frame["data"].as_array() else { return };
             for r in rows {
                 let (Some(symbol), Some(price), Some(qty)) = (r["instId"].as_str(), num(&r["px"]), num(&r["sz"])) else { continue };
-                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: r["ts"].as_str().and_then(|t| t.parse().ok()).unwrap_or_default() });
+                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: millis(&r["ts"]) });
             }
         }
         Venue::HyperliquidPerp => {
@@ -111,6 +136,45 @@ pub fn read_prints<'a>(venue: Venue, frame: &'a Value, into: &mut Vec<Print<'a>>
                 // `B` is the aggressor buying, `A` taking the ask away.
                 into.push(Print { symbol, price, qty, buy: r["side"] == "B", at: r["time"].as_i64().unwrap_or_default() });
             }
+        }
+        Venue::BitgetSpot | Venue::BitgetPerp => {
+            if frame["arg"]["channel"] != "trade" {
+                return;
+            }
+            let (Some(symbol), Some(rows)) = (frame["arg"]["instId"].as_str(), frame["data"].as_array()) else { return };
+            for r in rows {
+                let (Some(price), Some(qty)) = (num(&r["price"]), num(&r["size"])) else { continue };
+                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: millis(&r["ts"]) });
+            }
+        }
+        Venue::KrakenSpot => {
+            if frame["channel"] != "trade" {
+                return;
+            }
+            let Some(rows) = frame["data"].as_array() else { return };
+            for r in rows {
+                let (Some(symbol), Some(price), Some(qty)) = (r["symbol"].as_str(), num(&r["price"]), num(&r["qty"])) else { continue };
+                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: 0 });
+            }
+        }
+        Venue::KrakenPerp => {
+            // One trade a frame, or a snapshot of the last few on subscribing.
+            let rows: Vec<&Value> = match frame["feed"].as_str() {
+                Some("trade") => vec![frame],
+                Some("trade_snapshot") => frame["trades"].as_array().map(|r| r.iter().collect()).unwrap_or_default(),
+                _ => return,
+            };
+            for r in rows {
+                let (Some(symbol), Some(price), Some(qty)) = (r["product_id"].as_str().or_else(|| frame["product_id"].as_str()), num(&r["price"]), num(&r["qty"])) else { continue };
+                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: r["time"].as_i64().unwrap_or_default() });
+            }
+        }
+        Venue::LighterPerp => {
+            // Lighter streams the market rather than each trade: the last price
+            // is there, which is what an alert reads; flow is not followed here.
+            let Some(market) = frame["channel"].as_str().and_then(|c| c.strip_prefix("market_stats:")) else { return };
+            let Some(price) = num(&frame["market_stats"]["last_trade_price"]) else { return };
+            into.push(Print { symbol: market, price, qty: 0.0, buy: false, at: 0 });
         }
         Venue::BybitSpot | Venue::BybitPerp => {
             if !frame["topic"].as_str().is_some_and(|t| t.starts_with("publicTrade.")) {
@@ -186,6 +250,29 @@ mod tests {
     }
 
     #[test]
+    fn the_smaller_exchanges_are_read_too() {
+        let bitget = r#"{"action":"snapshot","arg":{"instType":"USDT-FUTURES","channel":"trade","instId":"BTCUSDT"},"data":[{"ts":"1790000000000","price":"84100","size":"0.3","side":"buy"}]}"#;
+        assert_eq!(prints(Venue::BitgetPerp, bitget), [("BTCUSDT".to_string(), 84_100.0, 0.3, true)]);
+        assert!(prints(Venue::BitgetPerp, r#"{"event":"subscribe","arg":{"channel":"trade"}}"#).is_empty());
+
+        let kraken = r#"{"channel":"trade","data":[{"symbol":"BTC/USD","side":"sell","price":84090.1,"qty":0.02,"timestamp":"2026-09-25T08:10:49.1Z"}]}"#;
+        let read = prints(Venue::KrakenSpot, kraken);
+        assert_eq!((read[0].0.as_str(), read[0].1, read[0].3), ("BTC/USD", 84_090.1, false));
+
+        let futures = r#"{"feed":"trade","product_id":"PI_XBTUSD","side":"buy","price":84080.0,"qty":100,"time":1790000000000}"#;
+        assert_eq!(prints(Venue::KrakenPerp, futures), [("PI_XBTUSD".to_string(), 84_080.0, 100.0, true)]);
+        let snapshot = r#"{"feed":"trade_snapshot","product_id":"PI_XBTUSD","trades":[{"price":84070.0,"qty":5,"side":"sell","time":1}]}"#;
+        assert_eq!(prints(Venue::KrakenPerp, snapshot).len(), 1, "the trades it opens with are trades too");
+        assert!(prints(Venue::KrakenPerp, r#"{"feed":"heartbeat","time":1}"#).is_empty());
+
+        // Lighter gives the market, not each trade: the last price is the alert's.
+        let lighter = r#"{"type":"update/market_stats","channel":"market_stats:1","market_stats":{"last_trade_price":"84050.5"}}"#;
+        let read = prints(Venue::LighterPerp, lighter);
+        assert_eq!((read[0].0.as_str(), read[0].1), ("1", 84_050.5));
+        assert!(prints(Venue::LighterPerp, r#"{"type":"connected"}"#).is_empty());
+    }
+
+    #[test]
     fn each_exchange_is_asked_in_its_own_words() {
         let symbols = ["BTCUSDT".to_string(), "ETHUSDT".to_string()];
         assert_eq!(subscribe(Venue::BinanceSpot, &symbols), [r#"{"method":"SUBSCRIBE","params":["btcusdt@aggTrade","ethusdt@aggTrade"],"id":1}"#]);
@@ -199,7 +286,11 @@ mod tests {
             "Hyperliquid takes one subscription at a time"
         );
 
-        assert!(stream_urls(Venue::KrakenPerp).is_empty(), "a venue nothing follows has no trades to read");
+        assert_eq!(subscribe(Venue::KrakenSpot, &["BTC/USD".to_string()]), [r#"{"method":"subscribe","params":{"channel":"trade","symbol":["BTC/USD"]}}"#]);
+        assert_eq!(subscribe(Venue::KrakenPerp, &["PI_XBTUSD".to_string()]), [r#"{"event":"subscribe","feed":"trade","product_ids":["PI_XBTUSD"]}"#]);
+        assert_eq!(subscribe(Venue::BitgetSpot, &["BTCUSDT".to_string()]), [r#"{"op":"subscribe","args":[{"instType":"SPOT","channel":"trade","instId":"BTCUSDT"}]}"#]);
+        assert!(subscribe(Venue::BitgetPerp, &["BTCUSDT".to_string()])[0].contains("USDT-FUTURES"), "a perpetual is another instrument type there");
+        assert_eq!(subscribe(Venue::LighterPerp, &["1".to_string()]), [r#"{"type":"subscribe","channel":"market_stats/1"}"#], "asked with a slash, answered with a colon");
         assert!(stream_urls(Venue::BinancePerp).len() > 1, "an address that goes quiet is retried on the next one");
         assert!(ping(Venue::BybitSpot).is_some() && ping(Venue::BinanceSpot).is_none());
         assert_eq!(ping(Venue::OkxPerp), Some("ping"), "OKX wants the bare word");

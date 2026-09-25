@@ -3,7 +3,8 @@
  * or Stopped once it has triggered — and a log of what fired. An alert is made
  * from the chart's price axis (the clock by the crosshair's price) or here.
  */
-import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
+import { setOverlay } from '../app/ui';
 import { lastPrice } from '../engine/client';
 import { conditionLabel, CONDITIONS, rose } from '../lib/alert-rules';
 import {
@@ -21,7 +22,7 @@ import {
   titleOf,
   unread,
 } from '../lib/alerts';
-import { errorText, type Alert, type AlertCondition } from '../lib/api';
+import { api, errorText, type Alert, type AlertCondition } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { formatPrice } from '../lib/format';
@@ -103,6 +104,22 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
   const log = createMemo(() => alertState.log.filter((l) => matches(l.market, l.message ?? '')));
   const stopped = () => alertState.alerts.filter((a) => !a.active).length;
 
+  // The bot is set up on this server but this browser never linked a chat, so
+  // everything that fires goes nowhere: the panel says so rather than keeping
+  // the quiet to itself.
+  const [telegramMissing, setTelegramMissing] = createSignal(false);
+  const readTelegram = async () => {
+    try {
+      const state = await api.telegram();
+      setTelegramMissing(state.enabled && state.chats.length === 0);
+    } catch {
+      setTelegramMissing(false);
+    }
+  };
+  void readTelegram();
+  const telegramTimer = setInterval(() => void readTelegram(), 60_000);
+  onCleanup(() => clearInterval(telegramTimer));
+
   /** A new alert on the chart in use, at its last price. */
   const newAlert = () => {
     const chart = targetChart();
@@ -157,6 +174,11 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
           </Show>
         </button>
       </div>
+      <Show when={telegramMissing()}>
+        <button class="al-notice" onClick={() => setOverlay({ kind: 'settings' })}>
+          ▲ Alerts are not going to Telegram — this browser has no chat linked. Connect it in Settings.
+        </button>
+      </Show>
       <div class="toolbar">
         <Show when={tab() === 'alerts'}>
           <button class="iconbtn" data-tip="Create an alert on the chart's market" onClick={newAlert}>
