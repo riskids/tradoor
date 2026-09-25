@@ -13,12 +13,14 @@ mod api;
 mod catalog;
 mod dns;
 mod drawings;
+mod flow;
 mod import;
 mod limits;
 mod liquidations;
 mod open_interest;
 mod relay;
 mod telegram;
+mod trades;
 mod workspaces;
 
 use std::net::SocketAddr;
@@ -123,8 +125,10 @@ async fn main() -> anyhow::Result<()> {
             let token = cli.telegram_token.trim().to_string();
             let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
             alert_watch::start(pool.clone(), doh.clone(), telegram.clone());
+            let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), telegram.clone()));
             let state = api::AppState {
                 open_interest,
+                flow,
                 telegram,
                 liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),
                 pool,

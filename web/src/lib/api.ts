@@ -168,6 +168,51 @@ export interface AlertLog {
   startPrice: number | null;
 }
 
+/** One market's taker flow: what buyers took less what sellers took. */
+export interface FlowMarket {
+  market: string;
+  price: number;
+  /** Net flow over the last minute, and over longer stretches. */
+  minute: number;
+  m5: number;
+  m15: number;
+  h1: number;
+  day: number;
+  thresholdUsd: number;
+  notify: boolean;
+}
+
+export interface FlowWatch {
+  market: string;
+  thresholdUsd: number;
+  notify: boolean;
+}
+
+/** A minute whose flow passed the threshold. */
+export interface FlowEvent {
+  id: number;
+  market: string;
+  at: number;
+  deltaUsd: number;
+  windowMs: number;
+  price: number;
+}
+
+/** A minute whose flow ran harder than the reader asks, to mark on a chart. */
+export interface FlowMinute {
+  at: number;
+  deltaUsd: number;
+  price: number;
+}
+
+export interface FlowState {
+  /** Whether this server follows any market's flow. */
+  watching: boolean;
+  windowMs?: number;
+  markets: FlowMarket[];
+  events: FlowEvent[];
+}
+
 /** A Telegram chat an alert is sent to. */
 export interface TelegramChat {
   chatId: number;
@@ -222,6 +267,9 @@ export const api = {
   telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
+  flow: () => json<FlowState>('/api/flow'),
+  flowMinutes: (market: string) => json<{ market: string; thresholdUsd: number; minutes: FlowMinute[] }>(`/api/flow/minutes?market=${encodeURIComponent(market)}`),
+  flowWatch: (market: string, watch: { thresholdUsd: number; notify: boolean }) => json<FlowWatch>(`/api/flow/${encodeURIComponent(market)}`, { method: 'PUT', body: watch }),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
     const res = await request<{ version: number; doc?: unknown; error?: string }>(`/api/workspaces/${id}`, { method: 'PUT', body });

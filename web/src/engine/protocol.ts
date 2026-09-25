@@ -18,6 +18,8 @@ export interface Legend {
   axisX: number;
   /** The alert line under the pointer. */
   alert: { id: number; y: number } | null;
+  /** The flow mark under the pointer: which one, and where it sits. */
+  flow: { index: number; x: number; y: number } | null;
 }
 
 export interface StudyLine {
@@ -164,6 +166,8 @@ export type ToWorker =
   | { t: 'drawings'; id: string; list: DrawingShape[] }
   /** The market's active price alerts. */
   | { t: 'alerts'; id: string; list: { id: number; price: number }[] }
+  /** Minutes whose taker flow ran hard, marked on the candles. */
+  | { t: 'flow'; id: string; marks: { at: number; price: number; usd: number }[] }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }

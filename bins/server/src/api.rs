@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{alerts, catalog::Catalog, drawings, limits, liquidations, open_interest, relay, telegram, workspaces};
+use crate::{alerts, catalog::Catalog, drawings, flow, limits, liquidations, open_interest, relay, telegram, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +24,8 @@ pub struct AppState {
     pub liquidations: Option<Arc<liquidations::Collector>>,
     /// Absent when no coin's open interest is being recorded.
     pub open_interest: Option<Arc<open_interest::Recorder>>,
+    /// The net taker flow of the markets followed.
+    pub flow: Option<Arc<flow::Flow>>,
     /// Absent when no Telegram bot token was given.
     pub telegram: Option<Arc<telegram::Telegram>>,
     /// The exchanges' market data, for browsers on networks that block them.
@@ -99,6 +101,9 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/alerts/restart", axum::routing::post(alerts::restart_all))
         .route("/alerts/log", delete(alerts::clear_log))
         .route("/alerts/{id}", delete(alerts::delete_one).patch(alerts::update))
+        .route("/flow", get(flow::state))
+        .route("/flow/minutes", get(flow::minutes))
+        .route("/flow/{market}", axum::routing::put(flow::watch))
         .route("/telegram", get(telegram::status).patch(telegram::set_clock))
         .route("/telegram/link", axum::routing::post(telegram::link))
         .route("/telegram/test", axum::routing::post(telegram::test))

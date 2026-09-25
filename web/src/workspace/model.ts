@@ -13,7 +13,7 @@ const isSectionItem = (v: unknown): v is string => typeof v === 'string' && isSe
 import { isTimeframe } from '../lib/timeframes';
 
 /** What a new panel can be. `tpo` is a preset: a chart drawn as TPO profiles. */
-export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations' | 'alerts';
+export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations' | 'flow' | 'alerts';
 
 /**
  * How TPO profiles are split, as Exocharts names it: one profile per UTC day,
@@ -28,8 +28,8 @@ export const TPO_SPLITS: readonly { value: string; label: string }[] = [
 export type LinkColor = 'green' | 'blue' | 'red' | 'yellow';
 
 export const LINK_COLORS: readonly LinkColor[] = ['green', 'blue', 'red', 'yellow'];
-export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values', 'liquidations', 'alerts'];
-export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values', liquidations: 'Liquidations', alerts: 'Alerts' };
+export const PANEL_TYPES: readonly PanelType[] = ['chart', 'watchlist', 'tpo', 'values', 'liquidations', 'flow', 'alerts'];
+export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlist: 'Watchlist', tpo: 'TPO', values: 'Values', liquidations: 'Liquidations', flow: 'Flow', alerts: 'Alerts' };
 
 interface PanelBase {
   id: string;
@@ -75,6 +75,12 @@ export interface LiquidationsPanelState extends PanelBase {
   minUsd: number;
 }
 
+export interface FlowPanelState extends PanelBase {
+  type: 'flow';
+  /** Crossings, or the markets and their settings. */
+  tab: 'crossings' | 'markets';
+}
+
 export type AlertSort = 'newest' | 'symbol' | 'state';
 
 export interface AlertsPanelState extends PanelBase {
@@ -83,7 +89,7 @@ export interface AlertsPanelState extends PanelBase {
   sort: AlertSort;
 }
 
-export type Panel = ChartPanelState | WatchlistPanelState | ValuesPanelState | LiquidationsPanelState | AlertsPanelState;
+export type Panel = ChartPanelState | WatchlistPanelState | ValuesPanelState | LiquidationsPanelState | FlowPanelState | AlertsPanelState;
 
 export interface SplitNode {
   kind: 'split';
@@ -142,6 +148,8 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
       return { ...base, type, minUsd: 0 };
+    case 'flow':
+      return { ...base, type, tab: 'crossings' };
     case 'alerts':
       return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
@@ -222,6 +230,8 @@ function readPanel(id: string, raw: unknown): Panel | null {
   } else if (p.type === 'alerts') {
     if (raw.tab === 'log') p.tab = 'log';
     if (raw.sort === 'symbol' || raw.sort === 'state') p.sort = raw.sort;
+  } else if (p.type === 'flow') {
+    if (raw.tab === 'markets') p.tab = 'markets';
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;

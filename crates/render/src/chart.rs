@@ -35,6 +35,9 @@ const VERTICAL_PAN_SLOP: f32 = 24.0;
 const HIT_TOLERANCE: f32 = 8.0;
 /// A weak magnet takes a bar's open, high, low or close within this many pixels.
 const MAGNET_PX: f32 = 14.0;
+/// How large a flow mark is drawn, by how hard its minute ran.
+const FLOW_MIN_RADIUS: f32 = 3.0;
+const FLOW_MAX_RADIUS: f32 = 9.0;
 /// How near an alert's line the pointer must be to take it. A hairline is hard
 /// to hit, so the grab reaches further than the line is drawn.
 const ALERT_HIT_PX: f32 = 7.0;
@@ -81,6 +84,15 @@ pub enum Event {
     AutoScaleChanged(bool),
     /// A price alert's line was dragged to a new price.
     AlertMoved { id: i64, price: f64 },
+}
+
+/// A minute whose taker flow ran hard one way, marked where it traded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlowMark {
+    pub at: i64,
+    pub price: f64,
+    /// Net dollars: buyers took more above zero, sellers below.
+    pub usd: f64,
 }
 
 /// An active price alert, drawn as a level across the price pane.
@@ -135,6 +147,8 @@ pub struct Legend {
     pub axis_x: f32,
     /// The alert line under the pointer, and its y.
     pub alert: Option<(i64, f32)>,
+    /// The flow mark under the pointer: which one, and where it sits.
+    pub flow: Option<(usize, f32, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,6 +280,8 @@ pub struct Chart {
     axis_width: f32,
     crosshair: Option<(f32, f32)>,
     alerts: Vec<AlertLine>,
+    /// Minutes whose flow ran hard, oldest first, as the page sent them.
+    flow: Vec<FlowMark>,
     drag: Drag,
     drawings: Vec<DrawingShape>,
     selected: Option<i64>,
@@ -323,6 +339,7 @@ impl Chart {
             axis_width: MIN_AXIS_WIDTH,
             crosshair: None,
             alerts: Vec::new(),
+            flow: Vec::new(),
             drag: Drag::None,
             drawings: Vec::new(),
             tool_style: DrawingStyle::default(),
@@ -577,6 +594,47 @@ impl Chart {
             self.alerts = alerts;
             self.touch();
         }
+    }
+
+    /// The minutes whose flow ran hard, to mark on the candles. Oldest first.
+    pub fn set_flow(&mut self, marks: Vec<FlowMark>) {
+        if self.flow != marks {
+            self.flow = marks;
+            self.touch();
+        }
+    }
+
+    /// The flow mark under (x, y), and where it sits — for the page's label.
+    pub fn flow_at(&self, x: f32, y: f32) -> Option<(usize, f32, f32)> {
+        let pane = self.panes.first()?;
+        if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
+            return None;
+        }
+        self.flow
+            .iter()
+            .enumerate()
+            .filter_map(|(i, mark)| {
+                let (mx, my) = self.flow_xy(mark, pane)?;
+                let reach = self.flow_radius(mark) + 3.0;
+                ((mx - x).hypot(my - y) <= reach).then_some((i, mx, my))
+            })
+            .min_by(|a, b| (a.1 - x).hypot(a.2 - y).total_cmp(&(b.1 - x).hypot(b.2 - y)))
+    }
+
+    /// Where a mark sits, or nothing when its minute is off the chart.
+    fn flow_xy(&self, mark: &FlowMark, pane: &PaneView) -> Option<(f32, f32)> {
+        let logical = time_to_logical(&self.times, mark.at as f64)?;
+        let x = self.time.x(logical) as f32;
+        let y = pane.scale.y(mark.price) as f32;
+        (x.is_finite() && y.is_finite()).then_some((x, y))
+    }
+
+    /// How big a mark is drawn: the bigger the flow, the bigger the dot, within
+    /// reason — a minute ten times the threshold is not ten times the circle.
+    fn flow_radius(&self, mark: &FlowMark) -> f32 {
+        let biggest = self.flow.iter().map(|m| m.usd.abs()).fold(1.0, f64::max);
+        let share = (mark.usd.abs() / biggest).clamp(0.0, 1.0) as f32;
+        FLOW_MIN_RADIUS + (FLOW_MAX_RADIUS - FLOW_MIN_RADIUS) * share.sqrt()
     }
 
     /// The alert line within a few pixels of (x, y) on the price pane.
@@ -1150,6 +1208,23 @@ impl Chart {
             }
         }
 
+        // ---- flow marks: a minute that ran hard one way, where it traded
+        if !self.flow.is_empty() {
+            let hovered = self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.flow_at(x, y)).map(|(i, _, _)| i);
+            for (i, mark) in self.flow.iter().enumerate() {
+                let Some((x, y)) = self.flow_xy(mark, &price) else { continue };
+                if x < -FLOW_MAX_RADIUS || x > plot_w + FLOW_MAX_RADIUS {
+                    continue;
+                }
+                let base = if mark.usd > 0.0 { t.bull } else { t.bear };
+                let on = hovered == Some(i);
+                f.circle(x, y, self.flow_radius(mark), base.with_alpha(if on { 220 } else { 90 }));
+                if on {
+                    f.ring(x, y, self.flow_radius(mark) + 2.0, 1.0, base);
+                }
+            }
+        }
+
         // ---- liquidation feed: hits land above the volume and ride up and out
         if !self.hidden.contains("liquidations") {
             f.clip(Some(price.plot));
@@ -1498,6 +1573,7 @@ impl Chart {
                 .map(|(_, y)| (y, pane.scale.price(f64::from(y)))),
             axis_x: pane.plot.w,
             alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_handle_at(x, y)),
+            flow: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.flow_at(x, y)),
         }
     }
 
@@ -2830,6 +2906,30 @@ mod tests {
         }
         c.pointer_up(200.0, 120.0);
         assert!(matches!(&c.take_events()[0], Event::DrawingCreated { kind: DrawingKind::Brush, points } if points.len() > 10));
+    }
+
+    #[test]
+    fn a_minute_that_ran_hard_is_marked_where_it_traded_and_found_under_the_pointer() {
+        let mut c = chart();
+        let bar = c.candles()[400];
+        let (green, red) = (FlowMark { at: bar.open_time, price: bar.close, usd: 5_000_000.0 }, FlowMark { at: c.candles()[402].open_time, price: c.candles()[402].close, usd: -1_000_000.0 });
+        c.set_flow(vec![green, red]);
+        let t = c.theme.clone();
+        let frame = c.render(1_800_000_000_000).clone();
+        let painted = |color: Color| frame.colors.chunks(4).filter(|p| *p == [color.r, color.g, color.b, color.a]).count();
+        assert!(painted(t.bull.with_alpha(90)) > 0, "the buyers' minute is green");
+        assert!(painted(t.bear.with_alpha(90)) > 0, "the sellers' minute is red");
+
+        // The bigger flow draws the bigger dot, and the pointer finds it.
+        let pane = c.panes[0];
+        let (x, y) = c.flow_xy(&green, &pane).unwrap();
+        assert!(c.flow_radius(&green) > c.flow_radius(&red));
+        assert_eq!(c.flow_at(x + 1.0, y + 1.0).map(|(i, _, _)| i), Some(0));
+        assert_eq!(c.flow_at(x, y + 40.0), None, "nowhere near it");
+        c.pointer_move(x, y);
+        assert_eq!(c.legend().flow.map(|(i, _, _)| i), Some(0), "the page is told which one is hovered");
+        assert!(painted(t.bull.with_alpha(220)) == 0, "and it brightens only once drawn again");
+        assert!(c.render(1_800_000_000_000).colors.chunks(4).any(|p| *p == [t.bull.r, t.bull.g, t.bull.b, 220]));
     }
 
     #[test]

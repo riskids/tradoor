@@ -795,6 +795,9 @@ function handle(msg: ToWorker): void {
     case 'alerts':
       slot.engine.set_alerts(Float64Array.from(msg.list.flatMap((a) => [a.id, a.price])));
       break;
+    case 'flow':
+      slot.engine.set_flow(Float64Array.from(msg.marks.flatMap((m) => [m.at, m.price, m.usd])));
+      break;
     case 'selected':
       slot.engine.set_selected(msg.value ?? Number.NaN);
       break;

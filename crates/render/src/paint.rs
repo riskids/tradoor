@@ -281,6 +281,19 @@ impl Frame {
         }
     }
 
+    /// A circle's outline, for marking the one under the pointer.
+    pub fn ring(&mut self, cx: f32, cy: f32, r: f32, width: f32, color: Color) {
+        let segments = ((r * 2.5) as usize).clamp(8, 32);
+        let step = std::f32::consts::TAU / segments as f32;
+        let (inner, outer) = ((r - width / 2.0).max(0.1), r + width / 2.0);
+        for i in 0..segments {
+            let (a0, a1) = (i as f32 * step, (i + 1) as f32 * step);
+            let (c0, s0, c1, s1) = (a0.cos(), a0.sin(), a1.cos(), a1.sin());
+            self.triangle((cx + inner * c0, cy + inner * s0), (cx + outer * c0, cy + outer * s0), (cx + outer * c1, cy + outer * s1), color);
+            self.triangle((cx + inner * c0, cy + inner * s0), (cx + outer * c1, cy + outer * s1), (cx + inner * c1, cy + inner * s1), color);
+        }
+    }
+
     pub fn stroke_rect(&mut self, x: f32, y: f32, w: f32, h: f32, width: f32, color: Color) {
         let (l, r, t, b) = (x.min(x + w), x.max(x + w), y.min(y + h), y.max(y + h));
         self.hline(l, r, t, width, color);

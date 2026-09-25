@@ -18,6 +18,7 @@ import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, t
 const ValuesPanel = lazy(() => import('../panels/ValuesPanel').then((m) => ({ default: m.ValuesPanel })));
 const AlertsPanel = lazy(() => import('../panels/AlertsPanel').then((m) => ({ default: m.AlertsPanel })));
 const LiquidationsPanel = lazy(() => import('../panels/LiquidationsPanel').then((m) => ({ default: m.LiquidationsPanel })));
+const FlowPanel = lazy(() => import('../panels/FlowPanel').then((m) => ({ default: m.FlowPanel })));
 
 /** Smallest a cell may be dragged to, in pixels. */
 const MIN_CELL = 90;
@@ -347,6 +348,8 @@ function PanelView(props: { panel: Panel }) {
       return <ValuesPanel panel={p} />;
     case 'liquidations':
       return <LiquidationsPanel panel={p} />;
+    case 'flow':
+      return <FlowPanel panel={p} />;
     case 'alerts':
       return <AlertsPanel panel={p} />;
   }

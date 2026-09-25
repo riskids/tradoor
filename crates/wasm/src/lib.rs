@@ -403,6 +403,16 @@ impl ChartEngine {
             }
             None => set(&o, "alert", JsValue::NULL),
         }
+        match l.flow {
+            Some((index, x, y)) => {
+                let m = obj();
+                set(&m, "index", index as f64);
+                set(&m, "x", f64::from(x));
+                set(&m, "y", f64::from(y));
+                set(&o, "flow", m);
+            }
+            None => set(&o, "flow", JsValue::NULL),
+        }
         o.into()
     }
 
@@ -410,6 +420,16 @@ impl ChartEngine {
     pub fn set_alerts(&mut self, flat: &[f64]) {
         let alerts = flat.chunks_exact(2).filter(|c| c[1].is_finite() && c[1] > 0.0).map(|c| tradoor_render::chart::AlertLine { id: c[0] as i64, price: c[1] }).collect();
         self.chart.set_alerts(alerts);
+    }
+
+    /// Minutes whose taker flow ran hard, as `[at, price, usd, …]`, oldest first.
+    pub fn set_flow(&mut self, flat: &[f64]) {
+        let marks = flat
+            .chunks_exact(3)
+            .filter(|c| c[1].is_finite() && c[1] > 0.0 && c[2].is_finite())
+            .map(|c| tradoor_render::chart::FlowMark { at: c[0] as i64, price: c[1], usd: c[2] })
+            .collect();
+        self.chart.set_flow(marks);
     }
 
     pub fn studies(&self) -> Array {

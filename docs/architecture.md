@@ -88,6 +88,7 @@ The file format is described in [format.md](format.md).
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
+| `GET /api/flow` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | every followed market's flow and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
 | `GET PATCH /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; the reader's zone and how long messages stay; a link code; a test message; unlink |
@@ -105,6 +106,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
+| `flow_minute`, `flow_watch`, `flow_event` | net taker flow by the minute for two days, what each reader asks of each market, and the crossings they were told about |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
@@ -121,7 +123,17 @@ instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
-Panels: chart, watchlist, values, liquidations and alerts.
+Panels: chart, watchlist, values, liquidations, flow and alerts.
+
+Flow is the net taker volume of a market — what the buyers took across the
+spread less what the sellers did — kept minute by minute for two days
+(`flow`, `flow_minute`). Spot and perpetual are counted apart, since the same
+number means something different on each, and each carries its own threshold:
+a minute that runs harder than it is a crossing, told to the reader here and on
+Telegram, and marked on the candles where it traded. The chart's marks are the
+minutes themselves, so they show at any timeframe; hovering one names the
+money, the minute and the price. After a crossing a market stays quiet until
+its flow falls back to half the threshold, so one push does not ring over.
 
 Price alerts are rows per browser id, like drawings (`/api/alerts`); the
 browser watches the prices, each alert market's daily candle stream, and fires

@@ -486,3 +486,20 @@ table.venues tr.off td { color: var(--dim); }
 .toast .x { display: flex; padding: 3px; color: var(--dim); }
 .toast .x:hover { color: var(--text); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* Flow: net taker flow per market, and the minutes that crossed. */
+.flow .flow-now { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 4px; background: var(--border); }
+.flow .flow-cell { display: flex; align-items: center; gap: 5px; padding: 4px 6px; background: var(--surface); font-size: 11px; white-space: nowrap; overflow: hidden; }
+.flow .flow-cell .sym { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.flow .flow-cell .name { overflow: hidden; text-overflow: ellipsis; }
+.flow .flow-row, .flow .flow-event { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.flow .flow-row .sym, .flow .flow-event .sym { display: flex; align-items: center; gap: 5px; }
+.flow .grow { flex: 1; }
+.flow .flow-row .box { width: 84px; text-align: right; }
+.flow .note { padding: 8px; line-height: 1.5; }
+
+.flow-label { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); font-size: 11px; white-space: nowrap; pointer-events: none; box-shadow: 0 3px 12px #0008; }
+.flow-label.bull { border-color: color-mix(in oklab, var(--bull) 60%, transparent); }
+.flow-label.bear { border-color: color-mix(in oklab, var(--bear) 60%, transparent); }
+.flow-label.bull b { color: var(--bull); }
+.flow-label.bear b { color: var(--bear); }
