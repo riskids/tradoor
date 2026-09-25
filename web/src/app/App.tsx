@@ -388,11 +388,11 @@ export function App() {
     <div class="shell">
       <header class="topbar">
         <div class="brand">
-          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1">
-            <rect x="2.5" y="3.5" width="7" height="9" rx="1" stroke-opacity="0.7" />
-            <path d="M9.5 3.5 L13 2 L13 14 L9.5 12.5 Z" fill="currentColor" fill-opacity="0.3" stroke-linejoin="round" />
-            <rect x="4" y="7.5" width="1.6" height="3.2" fill="currentColor" stroke="none" />
-            <rect x="6.6" y="5.8" width="1.6" height="4.4" fill="currentColor" stroke="none" />
+          <svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.1">
+            <rect x="1.8" y="3" width="7.6" height="10" rx="1" stroke-opacity="0.8" />
+            <path d="M9.4 3 L13.6 1.2 L13.6 14.8 L9.4 13 Z" fill="currentColor" fill-opacity="0.32" stroke-linejoin="round" />
+            <rect x="3.3" y="7.6" width="1.7" height="3.4" fill="currentColor" stroke="none" />
+            <rect x="6.2" y="5.6" width="1.7" height="5.2" fill="currentColor" stroke="none" />
           </svg>
           TRADOOR
         </div>
