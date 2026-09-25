@@ -271,6 +271,10 @@ export type SeriesSource = 'archive' | 'exchange';
 
 /** Base bars fetched per scroll past the oldest one held. */
 const OLDER_BARS = 5_000;
+/** Enough to draw a chart with at once: a screenful, and EMA 200 warmed. */
+const FIRST_BARS = 600;
+/** Intervals of a fixed length, whose pages can be worked out in advance. */
+const EXACT_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']);
 const MAX_TAIL_PAGES = 12;
 const TAIL_THROTTLE_MS = 30_000;
 /** A series nobody reads is dropped after this long — a deep 1m history is large. */
@@ -321,17 +325,38 @@ export class Series {
     return next;
   }
 
-  /** Hold at least `bars` of the newest bars, or all there are. */
+  /**
+   * Hold at least `bars` of the newest bars, or all there are — resolving as
+   * soon as there is enough to draw with. A chart shows a screenful and warms
+   * an EMA on a few hundred bars; the rest is for scrolling back, and arrives
+   * behind it. Waiting for all of it means waiting for every page in turn.
+   */
   ensure(bars: number): Promise<void> {
-    return this.run(async () => {
-      if (this.cols.time.length === 0 && this.source === 'archive') {
-        await this.loadPartitions(bars);
-        await this.tail();
-      }
-      while (this.cols.time.length < bars && !this.exhausted) {
-        if ((await this.olderChunk(bars - this.cols.time.length)) === 0) this.exhausted = true;
-      }
-    });
+    const first = Math.min(bars, FIRST_BARS);
+    const ready = this.run(() => this.fill(first));
+    if (bars > first) {
+      void this.run(async () => {
+        const before = this.cols.time.length;
+        await this.fill(bars);
+        if (this.cols.time.length !== before) this.emit();
+      });
+    }
+    return ready;
+  }
+
+  private async fill(bars: number): Promise<void> {
+    if (this.cols.time.length === 0 && this.source === 'archive') {
+      // The stored files and the bars since them are fetched together: the
+      // manifest already says where the newest file ends.
+      const newest = this.partitions.length > 0 ? this.partitions[this.partitions.length - 1]!.lastOpen : 0;
+      const [, tail] = await Promise.all([this.loadPartitions(bars), this.tailFrom(intervalEnd(this.interval, newest))]);
+      const held = this.cols.time;
+      const from = held.length > 0 ? intervalEnd(this.interval, held[held.length - 1]!) : 0;
+      this.cols = joinCols(this.cols, sliceCols(tail, lowerBound(tail.time, from)));
+    }
+    while (this.cols.time.length < bars && !this.exhausted) {
+      if ((await this.olderChunk(bars - this.cols.time.length)) === 0) this.exhausted = true;
+    }
   }
 
   /** Load bars older than the oldest held. Resolves false once there are none. */
@@ -379,9 +404,16 @@ export class Series {
 
   private async pageBack(want: number): Promise<number> {
     const limit = pageLimit(this.ref);
+    const end0 = this.cols.time.length > 0 ? this.cols.time[0]! - 1 : Date.now();
+    // Bars are evenly spaced, so where each page ends is known before any of
+    // them answers: asking in turn would be one round trip per page, and an
+    // exchange that gives a hundred at a time would take fifteen of them.
+    const parallel = await this.pagesAtOnce(want, limit, end0);
+    if (parallel > 0) return parallel;
+
     const pages: Cols[] = [];
     let added = 0;
-    let end = this.cols.time.length > 0 ? this.cols.time[0]! - 1 : Date.now();
+    let end = end0;
     while (added < want) {
       const page = await klines(this.ref, this.interval, { end });
       if (page.cols.time.length > 0) {
@@ -398,13 +430,43 @@ export class Series {
     return added;
   }
 
+  /**
+   * The pages a `want` needs, fetched together. Zero when that cannot be
+   * counted on — a month's bars are not a fixed length, and one page is no
+   * faster in parallel — and the caller walks them in turn instead.
+   */
+  private async pagesAtOnce(want: number, limit: number, end: number): Promise<number> {
+    const step = EXACT_INTERVALS.has(this.interval) ? intervalMs(this.interval) : 0;
+    const count = Math.ceil(want / limit);
+    if (step <= 0 || count < 2) return 0;
+    const windows = Array.from({ length: Math.min(count, MAX_TAIL_PAGES) }, (_, k) => ({ start: end - (k + 1) * limit * step, end: end - k * limit * step }));
+    const pages = await Promise.all(windows.map((w) => klines(this.ref, this.interval, w)));
+    const cols = pages.map((p) => p.cols).filter((c) => c.time.length > 0).sort((a, b) => a.time[0]! - b.time[0]!);
+    if (cols.length === 0) {
+      this.exhausted = true;
+      return 0;
+    }
+    const loaded = concatCols(cols);
+    const before = this.cols.time.length;
+    this.cols = joinCols(loaded, this.cols);
+    // The oldest window coming back empty is the start of the market.
+    if (pages[pages.length - 1]!.cols.time.length === 0) this.exhausted = true;
+    return this.cols.time.length - before;
+  }
+
   private async tail(): Promise<void> {
-    this.tailAt = Date.now();
     const times = this.cols.time;
     if (times.length === 0) return;
-    const now = Date.now();
     const from = intervalEnd(this.interval, times[times.length - 1]!);
-    if (intervalEnd(this.interval, from) > now) return; // the next bar has not closed yet
+    const tail = await this.tailFrom(from);
+    this.cols = joinCols(this.cols, sliceCols(tail, lowerBound(tail.time, from)));
+  }
+
+  /** The bars that closed since `from`, without touching what is held. */
+  private async tailFrom(from: number): Promise<Cols> {
+    this.tailAt = Date.now();
+    const now = Date.now();
+    if (from <= 0 || intervalEnd(this.interval, from) > now) return emptyCols(); // the next bar has not closed yet
     const limit = pageLimit(this.ref);
     const pages: Cols[] = [];
     if ((now - from) / intervalMs(this.interval) < limit - 1) {
@@ -421,8 +483,7 @@ export class Series {
         end = page.cols.time[0]! - 1;
       }
     }
-    const tail = concatCols(pages);
-    this.cols = joinCols(this.cols, sliceCols(tail, lowerBound(tail.time, from)));
+    return concatCols(pages);
   }
 }
 

@@ -52,6 +52,8 @@ export interface ChartPanelState extends PanelBase {
   tpo: string;
   /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
   tpoSettings: Record<string, string>;
+  /** The layers under the symbol are folded away. */
+  legendShut: boolean;
 }
 
 export interface WatchlistPanelState extends PanelBase {
@@ -138,12 +140,12 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', tpoSettings: {} };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', tpoSettings: {}, legendShut: false };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
-      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', tpoSettings: {} };
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', tpoSettings: {}, legendShut: false };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -210,6 +212,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
     p.studies = str(raw.studies, p.studies);
     p.hidden = str(raw.hidden, '');
     p.log = raw.log === true;
+    p.legendShut = raw.legendShut === true;
     p.paneWeights = str(raw.paneWeights, '');
     // A TPO panel from before TPO was a chart style keeps its weekly split, as
     // does a chart saved while TPO was an on/off switch.

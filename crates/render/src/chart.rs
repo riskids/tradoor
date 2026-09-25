@@ -628,7 +628,7 @@ impl Chart {
             .enumerate()
             .filter_map(|(i, mark)| {
                 let (mx, my) = self.flow_xy(mark, pane)?;
-                let reach = self.flow_radius(mark) + 3.0;
+                let reach = self.flow_radius(mark) + 5.0;
                 ((mx - x).hypot(my - y) <= reach).then_some((i, mx, my))
             })
             .min_by(|a, b| (a.1 - x).hypot(a.2 - y).total_cmp(&(b.1 - x).hypot(b.2 - y)))

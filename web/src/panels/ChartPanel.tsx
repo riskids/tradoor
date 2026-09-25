@@ -807,6 +807,19 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               </button>
             )}
           </Show>
+          <Show when={hoveredFlow()}>
+            {(h) => (
+              <div class="flow-label" classList={{ bull: h().mark.deltaUsd > 0, bear: h().mark.deltaUsd < 0 }} style={{ left: `${h().x + 12}px`, top: `${h().y - 30}px` }}>
+                <span class="dim">Flow</span>
+                <b>
+                  {h().mark.deltaUsd > 0 ? '+' : '-'}${formatTurnover(Math.abs(h().mark.deltaUsd))}
+                </b>
+                <span class="dim">{h().mark.deltaUsd > 0 ? 'net bought in a minute' : 'net sold in a minute'}</span>
+                <span>{formatClock(h().mark.at)}</span>
+                <span class="dim">{formatPrice(h().mark.price, digitsFor(market(), h().mark.price))}</span>
+              </div>
+            )}
+          </Show>
           <Show when={hoveredAlert()}>
             {(h) => (
               <div
@@ -833,6 +846,15 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
           <div class="legend">
             <div class="line">
+              <button
+                class="fold"
+                classList={{ shut: props.panel.legendShut }}
+                data-tip={props.panel.legendShut ? 'Show the layers' : 'Hide the layers'}
+                aria-label={props.panel.legendShut ? 'Show the layers' : 'Hide the layers'}
+                onClick={() => patchPanel(id, { legendShut: !props.panel.legendShut })}
+              >
+                <Icon name="chevron" size={11} stroke={2.2} />
+              </button>
               <span class="title">{symbolOf(market())}</span>
               <span class="dim">
                 {tfLabel(timeframe())}
@@ -850,8 +872,10 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                 )}
               </Show>
             </div>
-            <For each={LAYERS.filter((layer) => !(tpoShown() && layer.candles))}>{(layer) => <LayerRow label={layer.label} off={hidden().has(layer.id)} onToggle={() => toggleLayer(layer.id)} />}</For>
-            <For each={studies()}>
+            <Show when={!props.panel.legendShut}>
+              <For each={LAYERS.filter((layer) => !(tpoShown() && layer.candles))}>{(layer) => <LayerRow label={layer.label} off={hidden().has(layer.id)} onToggle={() => toggleLayer(layer.id)} />}</For>
+            </Show>
+            <For each={props.panel.legendShut ? [] : studies()}>
               {(s) => (
                 <LayerRow
                   label={s.label}

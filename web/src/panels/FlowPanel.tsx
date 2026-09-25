@@ -8,7 +8,7 @@ import { createSignal, For, onCleanup, Show } from 'solid-js';
 import { api, errorText, type FlowEvent, type FlowMarket, type FlowState } from '../lib/api';
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { formatPrice, formatTurnover, priceDecimals } from '../lib/format';
-import { isPerp, parseMarket, symbolOf } from '../lib/markets';
+import { parseMarket, symbolOf, venueLabel } from '../lib/markets';
 import { readUsd, shortUsd } from '../lib/flow';
 import { formatClock } from '../lib/timezone';
 import { toast } from '../lib/toasts';
@@ -20,14 +20,14 @@ const POLL_MS = 5_000;
 
 const money = (v: number): string => `${v < 0 ? '-' : '+'}$${formatTurnover(Math.abs(v))}`;
 const tone = (v: number): string => (v > 0 ? 'bull' : v < 0 ? 'bear' : 'dim');
-const name = (market: string): string => `${symbolOf(market)} ${isPerp(market) ? 'perp' : 'spot'}`;
 
+/** `Binance Perp` — which exchange and which kind, since all four are one coin. */
 function Venue(props: { market: string }) {
   const ref = () => parseMarket(props.market);
   return (
     <span class="sym">
       <ExchangeLogo exchange={exchangeOfVenue(ref()?.venue ?? 'binance')} size={13} />
-      <span class="name">{name(props.market)}</span>
+      <span class="name">{venueLabel(props.market)}</span>
     </span>
   );
 }
@@ -75,15 +75,18 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
         </button>
       </div>
 
-      <div class="flow-now">
+      <div class="flow-table">
+        <div class="flow-head">
+          <span>{symbolOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
+          <span class="r">1m</span>
+          <span class="r">1h</span>
+        </div>
         <For each={markets()}>
           {(m) => (
-            <div class="flow-cell">
+            <div class="flow-line">
               <Venue market={m.market} />
-              <span class={`num ${tone(m.minute)}`}>{money(m.minute)}</span>
-              <span class="dim">1m</span>
-              <span class={`num ${tone(m.h1)}`}>{money(m.h1)}</span>
-              <span class="dim">1h</span>
+              <span class={`num r ${tone(m.minute)}`}>{money(m.minute)}</span>
+              <span class={`num r ${tone(m.h1)}`}>{money(m.h1)}</span>
             </div>
           )}
         </For>
