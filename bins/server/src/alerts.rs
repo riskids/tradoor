@@ -22,13 +22,13 @@ pub const MAX_PER_OWNER: i64 = 800;
 const LOG_KEPT: i64 = 500;
 const MAX_MESSAGE: usize = 280;
 
-const COLUMNS: &str = "id, market, condition, price, message, active, created_at, triggered_at, trigger_price";
+const COLUMNS: &str = "id, market, condition, price, message, active, created_at, triggered_at, trigger_price, start_price";
 
 fn row_json(r: &tokio_postgres::Row) -> Value {
     json!({
         "id": r.get::<_, i64>(0), "market": r.get::<_, String>(1), "condition": r.get::<_, String>(2), "price": r.get::<_, f64>(3),
         "message": r.get::<_, Option<String>>(4), "active": r.get::<_, bool>(5), "createdAt": r.get::<_, i64>(6),
-        "triggeredAt": r.get::<_, Option<i64>>(7), "triggerPrice": r.get::<_, Option<f64>>(8),
+        "triggeredAt": r.get::<_, Option<i64>>(7), "triggerPrice": r.get::<_, Option<f64>>(8), "startPrice": r.get::<_, Option<f64>>(9),
     })
 }
 
@@ -36,6 +36,7 @@ fn log_json(r: &tokio_postgres::Row) -> Value {
     json!({
         "id": r.get::<_, i64>(0), "alertId": r.get::<_, Option<i64>>(1), "market": r.get::<_, String>(2), "condition": r.get::<_, String>(3),
         "price": r.get::<_, f64>(4), "message": r.get::<_, Option<String>>(5), "time": r.get::<_, i64>(6), "value": r.get::<_, f64>(7),
+        "startPrice": r.get::<_, Option<f64>>(8),
     })
 }
 
@@ -45,6 +46,24 @@ pub struct AlertInput {
     pub condition: String,
     pub price: f64,
     pub message: Option<String>,
+    /// What the market cost when the level was set, for which way it was reached.
+    pub at_price: Option<f64>,
+}
+
+/// Which way the price came to the level: `Some(true)` it rose to it, `Some(false)`
+/// it fell, `None` when nothing says. The price when the alert was set decides
+/// it; without that, the condition does, and a bare crossing says nothing.
+pub fn rose(condition: &str, level: f64, start: Option<f64>) -> Option<bool> {
+    match start {
+        Some(start) if start < level => return Some(true),
+        Some(start) if start > level => return Some(false),
+        _ => {}
+    }
+    match condition {
+        "greater" | "crossing_up" => Some(true),
+        "less" | "crossing_down" => Some(false),
+        _ => None,
+    }
 }
 
 fn price(v: Option<&Value>) -> Result<f64, String> {
@@ -68,7 +87,8 @@ fn message(v: Option<&Value>) -> Result<Option<String>, String> {
 pub fn parse_body(body: &Value) -> Result<AlertInput, String> {
     let b = body.as_object().ok_or("body must be a JSON object")?;
     let market = b.get("market").and_then(Value::as_str).and_then(MarketRef::parse).ok_or("market must be venue:SYMBOL")?.to_string();
-    Ok(AlertInput { market, condition: condition(b.get("condition"))?, price: price(b.get("price"))?, message: message(b.get("message"))? })
+    let at_price = b.get("atPrice").and_then(Value::as_f64).filter(|p| p.is_finite() && *p > 0.0);
+    Ok(AlertInput { market, condition: condition(b.get("condition"))?, price: price(b.get("price"))?, message: message(b.get("message"))?, at_price })
 }
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
@@ -76,7 +96,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     let client = state.pool.get().await?;
     let alerts = client.query(&format!("SELECT {COLUMNS} FROM alert WHERE owner = $1 ORDER BY id DESC"), &[&owner]).await?;
     let log = client
-        .query("SELECT id, alert_id, market, condition, price, message, time, value FROM alert_log WHERE owner = $1 ORDER BY time DESC, id DESC LIMIT $2", &[&owner, &LOG_KEPT])
+        .query("SELECT id, alert_id, market, condition, price, message, time, value, start_price FROM alert_log WHERE owner = $1 ORDER BY time DESC, id DESC LIMIT $2", &[&owner, &LOG_KEPT])
         .await?;
     Ok(Json(json!({ "alerts": alerts.iter().map(row_json).collect::<Vec<_>>(), "log": log.iter().map(log_json).collect::<Vec<_>>() })))
 }
@@ -91,8 +111,8 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(body
     }
     let row = client
         .query_one(
-            &format!("INSERT INTO alert (owner, market, condition, price, message, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING {COLUMNS}"),
-            &[&owner, &input.market, &input.condition, &input.price, &input.message, &now_ms()],
+            &format!("INSERT INTO alert (owner, market, condition, price, message, created_at, start_price) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {COLUMNS}"),
+            &[&owner, &input.market, &input.condition, &input.price, &input.message, &now_ms(), &input.at_price],
         )
         .await?;
     Ok((StatusCode::CREATED, Json(json!({ "alert": row_json(&row) }))))
@@ -114,9 +134,9 @@ pub async fn record_trigger(
     let Some(fired) = fired else { return Ok(None) };
     let log = client
         .query_one(
-            "INSERT INTO alert_log (owner, alert_id, market, condition, price, message, time, value) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING id, alert_id, market, condition, price, message, time, value",
-            &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value],
+            "INSERT INTO alert_log (owner, alert_id, market, condition, price, message, time, value, start_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             RETURNING id, alert_id, market, condition, price, message, time, value, start_price",
+            &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value, &fired.get::<_, Option<f64>>(9)],
         )
         .await?;
     client
@@ -161,15 +181,18 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let restart = b.get("active") == Some(&Value::Bool(true)) || b.contains_key("price") || b.contains_key("condition");
     let stop = b.get("active") == Some(&Value::Bool(false));
     let active = if stop { false } else { restart || row.get::<_, bool>(5) };
+    // A level moved is a level set afresh: the price it was moved from is the
+    // one that says which way it is reached.
+    let start = b.get("atPrice").and_then(Value::as_f64).filter(|p| p.is_finite() && *p > 0.0).or_else(|| row.get(9));
     let updated = client
         .query_one(
             &format!(
-                "UPDATE alert SET price = $3, condition = $4, message = $5, active = $6,
+                "UPDATE alert SET price = $3, condition = $4, message = $5, active = $6, start_price = $8,
                         triggered_at = CASE WHEN $7 THEN NULL ELSE triggered_at END,
                         trigger_price = CASE WHEN $7 THEN NULL ELSE trigger_price END
                  WHERE id = $1 AND owner = $2 RETURNING {COLUMNS}"
             ),
-            &[&id, &owner, &new_price, &new_condition, &new_message, &active, &restart],
+            &[&id, &owner, &new_price, &new_condition, &new_message, &active, &restart, &start],
         )
         .await?;
     Ok(Json(json!({ "alert": row_json(&updated) })))
@@ -225,9 +248,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_level_set_above_the_price_rises_to_it_and_one_below_falls() {
+        assert_eq!(rose("crossing", 100.0, Some(90.0)), Some(true), "set above and reached");
+        assert_eq!(rose("crossing", 100.0, Some(110.0)), Some(false), "set below and reached");
+        assert_eq!(rose("crossing", 100.0, None), None, "a bare crossing with nothing to compare");
+        assert_eq!(rose("greater", 100.0, None), Some(true), "the condition says it without help");
+        assert_eq!(rose("less", 100.0, None), Some(false));
+        assert_eq!(rose("less", 100.0, Some(90.0)), Some(true), "the price it was set from wins");
+    }
+
+    #[test]
     fn an_alert_needs_a_market_a_condition_and_a_price() {
         let ok = parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 75547.8, "message": "  " })).unwrap();
-        assert_eq!(ok, AlertInput { market: "binance-perp:BTCUSDT".into(), condition: "crossing".into(), price: 75547.8, message: None });
+        assert_eq!(ok, AlertInput { market: "binance-perp:BTCUSDT".into(), condition: "crossing".into(), price: 75547.8, message: None, at_price: None });
+        let placed = parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 80000, "atPrice": 83000 })).unwrap();
+        assert_eq!(placed.at_price, Some(83_000.0), "the price it was set from");
+        assert_eq!(parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 1, "atPrice": 0 })).unwrap().at_price, None);
         assert!(parse_body(&json!({ "market": "nowhere", "condition": "crossing", "price": 1 })).unwrap_err().contains("market"));
         assert!(parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "above", "price": 1 })).unwrap_err().contains("condition"));
         assert!(parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "less", "price": -1 })).unwrap_err().contains("price"));

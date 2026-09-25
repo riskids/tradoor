@@ -151,6 +151,8 @@ export interface Alert {
   createdAt: number;
   triggeredAt: number | null;
   triggerPrice: number | null;
+  /** What the market cost when the level was set: which way it is reached. */
+  startPrice: number | null;
 }
 
 /** One trigger, kept after its alert is edited or deleted. */
@@ -163,6 +165,7 @@ export interface AlertLog {
   message: string | null;
   time: number;
   value: number;
+  startPrice: number | null;
 }
 
 /** A Telegram chat an alert is sent to. */
@@ -170,6 +173,15 @@ export interface TelegramChat {
   chatId: number;
   name: string | null;
   linkedAt: number;
+  /** The clock messages to this chat are written in. */
+  offsetMinutes: number;
+  zone: string | null;
+}
+
+/** The reader's clock, as the page reads it now. */
+export interface Clock {
+  offsetMinutes: number;
+  zone: string;
 }
 
 export interface TelegramStatus {
@@ -192,15 +204,16 @@ export const api = {
   deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string, chart: ChartKind) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'DELETE' }),
   alerts: () => json<{ alerts: Alert[]; log: AlertLog[] }>('/api/alerts'),
-  createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
-  updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
+  createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null; atPrice?: number }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
+  updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean; atPrice?: number }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
   triggerAlert: (id: number, value: number) => json<{ alert: Alert; log: AlertLog | null }>(`/api/alerts/${id}`, { method: 'PATCH', body: { triggered: { value } } }),
   deleteAlert: (id: number) => send(`/api/alerts/${id}`, { method: 'DELETE' }),
   clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),
   restartAlerts: () => json<{ restarted: number }>('/api/alerts/restart', { method: 'POST' }),
   clearAlertLog: () => send('/api/alerts/log', { method: 'DELETE' }),
   telegram: () => json<TelegramStatus>('/api/telegram'),
-  telegramLink: () => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST' }),
+  telegramLink: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST', body: clock }),
+  telegramClock: (clock: Clock) => json<{ chats: number }>('/api/telegram', { method: 'PATCH', body: clock }),
   telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),

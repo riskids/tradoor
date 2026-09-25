@@ -5,7 +5,7 @@
  */
 import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import { lastPrice } from '../engine/client';
-import { conditionLabel, CONDITIONS } from '../lib/alert-rules';
+import { conditionLabel, CONDITIONS, rose } from '../lib/alert-rules';
 import {
   alertState,
   clearAlertLog,
@@ -58,6 +58,16 @@ function MarketTag(props: { market: string }) {
   );
 }
 
+/** Which way the price came to the level: green up, red down, nothing unknown. */
+function Way(props: { condition: AlertCondition; level: number; startPrice: number | null }) {
+  const way = () => rose(props.condition, props.level, props.startPrice);
+  return (
+    <Show when={way() !== null}>
+      <span class={way() ? 'bull' : 'bear'}>{way() ? '▲' : '▼'} </span>
+    </Show>
+  );
+}
+
 export function AlertsPanel(props: { panel: AlertsPanelState }) {
   const id = props.panel.id;
   const [query, setQuery] = createSignal('');
@@ -104,6 +114,13 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
   };
   const edit = (a: Alert) => setForm({ id: a.id, market: a.market, condition: a.condition, price: String(a.price), message: a.message ?? '' });
 
+  /** What the market costs now, which says which way a level is reached. */
+  const marketPrice = (market: string): number | undefined => {
+    const chart = targetChart();
+    const p = chart && lastPrice(chart.id);
+    return p && p.market === market && Number.isFinite(p.price) ? p.price : undefined;
+  };
+
   const save = async () => {
     const f = form();
     if (!f) return;
@@ -112,9 +129,10 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
       toast({ tone: 'warn', title: 'Enter a price above zero' });
       return;
     }
+    const atPrice = marketPrice(f.market);
     try {
-      if (f.id === null) await createAlert(f.market, f.condition, price, f.message.trim() || null);
-      else await editAlert(f.id, { condition: f.condition, price, message: f.message.trim() || null });
+      if (f.id === null) await createAlert(f.market, f.condition, price, f.message.trim() || null, atPrice);
+      else await editAlert(f.id, { condition: f.condition, price, message: f.message.trim() || null, atPrice });
       setForm(null);
     } catch (e) {
       failed(f.id === null ? 'Alert not created' : 'Alert not saved')(e);
@@ -239,7 +257,10 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
           <For each={alerts()} fallback={<div class="empty">{alertState.error ? `▲ ${alertState.error}` : query() ? 'No alert matches.' : 'No alerts. Hover the chart’s price axis and click the clock, or use the clock above.'}</div>}>
             {(a) => (
               <div class="al-row" classList={{ stopped: !a.active }} onClick={() => openMarket(a.market)}>
-                <div class="al-title">{titleOf(a)}</div>
+                <div class="al-title">
+                  <Way condition={a.condition} level={a.price} startPrice={a.startPrice} />
+                  {titleOf(a)}
+                </div>
                 <Show when={a.message}>
                   <div class="al-message">{a.message}</div>
                 </Show>
@@ -274,7 +295,10 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
           <For each={log()} fallback={<div class="empty">Nothing has triggered yet.</div>}>
             {(l) => (
               <div class="al-row" onClick={() => openMarket(l.market)}>
-                <div class="al-title">{titleOf(l)}</div>
+                <div class="al-title">
+                  <Way condition={l.condition} level={l.price} startPrice={l.startPrice} />
+                  {titleOf(l)}
+                </div>
                 <Show when={l.message}>
                   <div class="al-message">{l.message}</div>
                 </Show>

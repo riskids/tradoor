@@ -996,9 +996,12 @@ impl Chart {
         }
         let (x, y) = (plot.x + 10.0, plot.bottom() - 10.0 - MARK);
         let accent = self.theme.ribbon_fast;
-        f.stroke_rect(x - 2.0, y - 2.0, MARK + 4.0, MARK + 4.0, 1.0, accent.with_alpha(80));
-        let line: Vec<(f32, f32)> = [(1.0, 11.0), (5.0, 6.0), (8.5, 8.5), (13.0, 2.5)].iter().map(|(dx, dy)| (x + dx, y + dy)).collect();
-        f.polyline(&line, 2.0, accent.with_alpha(150));
+        // The doorway with the chart inside it, as the icons carry it.
+        f.stroke_rect(x, y + 1.0, 8.0, 12.0, 1.0, accent.with_alpha(110));
+        let door = [(8.0, 1.0), (12.5, -1.0), (12.5, 15.0), (8.0, 13.0), (8.0, 1.0)];
+        f.polyline(&door.iter().map(|(dx, dy)| (x + dx, y + dy)).collect::<Vec<_>>(), 1.0, accent.with_alpha(150));
+        f.rect(x + 2.0, y + 7.0, 2.0, 4.0, accent.with_alpha(190));
+        f.rect(x + 5.0, y + 4.0, 2.0, 6.0, accent.with_alpha(190));
         f.text(x + MARK + 7.0, y + MARK / 2.0, "tradoor", self.theme.text.with_alpha(170), Align::Left, Baseline::Middle, self.theme.font_px + 2.0, None, Some(plot));
     }
 

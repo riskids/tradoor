@@ -178,10 +178,11 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     const a = h && alertState.alerts.find((x) => x.id === h.id && x.active);
     return a && h ? { alert: a, y: h.y } : null;
   };
-  const addAlertAt = (price: number) => {
-    const digits = digitsFor(market(), price);
-    const rounded = Number(price.toFixed(digits));
-    createAlert(market(), 'crossing', rounded).then(
+  const addAlertAt = (level: number) => {
+    const digits = digitsFor(market(), level);
+    const rounded = Number(level.toFixed(digits));
+    // The price it was set from says which way it is reached.
+    createAlert(market(), 'crossing', rounded, null, price()?.price).then(
       (a) => toast({ tone: 'info', title: 'Alert created', body: titleOf(a) }, 4_000),
       (err) => toast({ tone: 'warn', title: 'Alert not created', body: errorText(err) }),
     );
@@ -502,7 +503,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         setAutoScale(e.value);
         break;
       case 'alertMoved':
-        editAlert(e.id, { price: e.price }).catch((err) => toast({ tone: 'warn', title: 'Alert not moved', body: errorText(err) }));
+        editAlert(e.id, { price: e.price, atPrice: price()?.price }).catch((err) => toast({ tone: 'warn', title: 'Alert not moved', body: errorText(err) }));
         break;
       case 'needHistory':
         break;

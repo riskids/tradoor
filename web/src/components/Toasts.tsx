@@ -1,4 +1,4 @@
-import { For } from 'solid-js';
+import { For, Show } from 'solid-js';
 import { Icon } from '../lib/icons';
 import { dismiss, toasts } from '../lib/toasts';
 
@@ -19,7 +19,12 @@ export function Toasts() {
               <Icon name={t.tone === 'alert' ? 'alarm' : 'info'} size={14} />
             </span>
             <span class="text">
-              <b>{t.title}</b>
+              <b>
+                <Show when={t.way !== null && t.way !== undefined}>
+                  <span class={t.way ? 'bull' : 'bear'}>{t.way ? '▲' : '▼'} </span>
+                </Show>
+                {t.title}
+              </b>
               {t.body ? <span>{t.body}</span> : null}
             </span>
             <button

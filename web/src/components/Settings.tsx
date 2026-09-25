@@ -57,10 +57,23 @@ function TelegramRow() {
   const [note, setNote] = createSignal<string | null>(null);
   const [waiting, setWaiting] = createSignal(false);
 
+  /** The clock the reader reads the page in, which their messages follow. */
+  const clock = () => {
+    const zone = timeZone() === LOCAL_ZONE ? deviceZone() : timeZone();
+    return { zone, offsetMinutes: offsetMinutes(timeZone(), Date.now()) };
+  };
+
   const load = async () => {
     try {
-      setStatus(await api.telegram());
+      const next = await api.telegram();
+      setStatus(next);
       setError(null);
+      // Their zone changed, or summer time moved it: the chats follow.
+      const now = clock();
+      if (next.chats.some((c) => c.offsetMinutes !== now.offsetMinutes || c.zone !== now.zone)) {
+        await api.telegramClock(now);
+        setStatus(await api.telegram());
+      }
     } catch (e) {
       setError(errorText(e));
     }
@@ -73,7 +86,7 @@ function TelegramRow() {
   const connect = async () => {
     setError(null);
     try {
-      const { url } = await api.telegramLink();
+      const { url } = await api.telegramLink(clock());
       setWaiting(true);
       open(url, '_blank', 'noopener');
       setNote('Press Start in Telegram; this list fills in when the bot has the chat.');
@@ -123,7 +136,9 @@ function TelegramRow() {
               </Show>
             </div>
             <div class="dim">
-              {s().chats.length > 0 ? 'Alerts that fire are sent to these chats, whether or not a tab is open.' : 'Alerts fire on the server, so they reach Telegram with no browser open.'}
+              {s().chats.length > 0
+                ? `Alerts that fire are sent to these chats, whether or not a tab is open, written in ${offsetLabel(clock().offsetMinutes)}.`
+                : 'Alerts fire on the server, so they reach Telegram with no browser open.'}
             </div>
           </Show>
         )}

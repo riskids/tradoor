@@ -99,7 +99,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/alerts/restart", axum::routing::post(alerts::restart_all))
         .route("/alerts/log", delete(alerts::clear_log))
         .route("/alerts/{id}", delete(alerts::delete_one).patch(alerts::update))
-        .route("/telegram", get(telegram::status))
+        .route("/telegram", get(telegram::status).patch(telegram::set_clock))
         .route("/telegram/link", axum::routing::post(telegram::link))
         .route("/telegram/test", axum::routing::post(telegram::test))
         .route("/telegram/{chat_id}", delete(telegram::unlink))

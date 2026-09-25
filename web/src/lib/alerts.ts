@@ -12,7 +12,7 @@
 import { createEffect, createRoot, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import { api, catalog, errorText, type Alert, type AlertCondition, type AlertLog, type Catalog } from './api';
-import { alertTitle, fires } from './alert-rules';
+import { alertTitle, fires, rose } from './alert-rules';
 import { watchDay } from './day-feed';
 import { formatPrice, priceDecimals } from './format';
 import { toast } from './toasts';
@@ -85,16 +85,16 @@ function upsert(alert: Alert): void {
 
 // ------------------------------------------------------------------ actions
 
-export async function createAlert(market: string, condition: AlertCondition, price: number, message: string | null = null): Promise<Alert> {
+export async function createAlert(market: string, condition: AlertCondition, price: number, message: string | null = null, atPrice?: number): Promise<Alert> {
   askNotifications();
-  const { alert } = await api.createAlert({ market, condition, price, message });
+  const { alert } = await api.createAlert({ market, condition, price, message, atPrice });
   ensurePanel();
   upsert(alert);
   changed();
   return alert;
 }
 
-export async function editAlert(id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null }): Promise<void> {
+export async function editAlert(id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; atPrice?: number }): Promise<void> {
   const { alert } = await api.updateAlert(id, patch);
   upsert(alert);
   changed();
@@ -203,8 +203,9 @@ function chime(): void {
 
 function announce(a: Alert, value: number): void {
   const title = titleOf(a);
+  const way = rose(a.condition, a.price, a.startPrice);
   const body = `${a.message ? `${a.message} · ` : ''}price ${formatPrice(value, digitsFor(a.market, value))}`;
-  toast({ tone: 'alert', title, body, action: () => openMarket(a.market) }, 30_000);
+  toast({ tone: 'alert', title, body, way, action: () => openMarket(a.market) }, 30_000);
   chime();
   // A notice from the system too when the page is out of sight.
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {

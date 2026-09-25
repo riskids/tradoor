@@ -6,6 +6,8 @@ export interface Toast {
   title: string;
   body?: string;
   tone: 'alert' | 'info' | 'warn';
+  /** An arrow before the title: up in green, down in red. */
+  way?: boolean | null;
   /** Clicking the notice does this, then dismisses it. */
   action?: () => void;
 }

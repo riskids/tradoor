@@ -36,6 +36,19 @@ export function fires(condition: AlertCondition, level: number, prev: number | n
   }
 }
 
+/**
+ * Which way the price came to the level: true it rose to it, false it fell,
+ * null when nothing says. The price the level was set from decides it — set it
+ * above the market and reaching it is a rise — and without that the condition
+ * does, leaving a bare crossing with nothing to say.
+ */
+export function rose(condition: AlertCondition, level: number, startPrice: number | null): boolean | null {
+  if (startPrice !== null && startPrice !== level) return startPrice < level;
+  if (condition === 'greater' || condition === 'crossing_up') return true;
+  if (condition === 'less' || condition === 'crossing_down') return false;
+  return null;
+}
+
 /** A market as TradingView names it: `BTCUSDT.P` for a perpetual. */
 export const tvName = (market: string): string => (isPerp(market) ? `${symbolOf(market)}.P` : symbolOf(market));
 

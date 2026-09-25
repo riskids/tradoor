@@ -387,7 +387,15 @@ export function App() {
   return (
     <div class="shell">
       <header class="topbar">
-        <div class="brand">TRADOOR</div>
+        <div class="brand">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1">
+            <rect x="2.5" y="3.5" width="7" height="9" rx="1" stroke-opacity="0.7" />
+            <path d="M9.5 3.5 L13 2 L13 14 L9.5 12.5 Z" fill="currentColor" fill-opacity="0.3" stroke-linejoin="round" />
+            <rect x="4" y="7.5" width="1.6" height="3.2" fill="currentColor" stroke="none" />
+            <rect x="6.6" y="5.8" width="1.6" height="4.4" fill="currentColor" stroke="none" />
+          </svg>
+          TRADOOR
+        </div>
         <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={12} /> Commands <kbd>/</kbd>
         </button>

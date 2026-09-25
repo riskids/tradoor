@@ -43,7 +43,11 @@ pub struct Chat {
     pub chat_id: i64,
     pub name: Option<String>,
     pub linked_at: i64,
+    /// Minutes east of UTC, as the reader's own settings write times.
+    pub utc_offset: i32,
+    pub zone: Option<String>,
 }
+
 
 pub struct Telegram {
     http: reqwest::Client,
@@ -82,16 +86,22 @@ impl Telegram {
     }
 
     /// A code for this browser, and the link that hands it to the bot.
-    pub async fn link(&self, owner: &str) -> ApiResult<(String, String)> {
+    pub async fn link(&self, owner: &str, offset: i32, zone: Option<&str>) -> ApiResult<(String, String)> {
         let bot = self.bot().ok_or_else(|| ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, "the bot has not answered yet — try again in a moment".into()))?;
-        let code = mint_code(&self.pool, owner).await?;
+        let code = mint_code(&self.pool, owner, offset, zone).await?;
         Ok((code.clone(), format!("https://t.me/{bot}?start={code}")))
+    }
+
+    /// The reader moved, or chose another zone: later messages follow it.
+    pub async fn set_clock(&self, owner: &str, offset: i32, zone: Option<&str>) -> ApiResult<u64> {
+        let client = self.pool.get().await?;
+        Ok(client.execute("UPDATE telegram_chat SET utc_offset = $2, zone = $3 WHERE owner = $1", &[&owner, &offset, &zone]).await?)
     }
 
     pub async fn chats(&self, owner: &str) -> ApiResult<Vec<Chat>> {
         let client = self.pool.get().await?;
-        let rows = client.query("SELECT chat_id, name, linked_at FROM telegram_chat WHERE owner = $1 ORDER BY linked_at", &[&owner]).await?;
-        Ok(rows.iter().map(|r| Chat { chat_id: r.get(0), name: r.get(1), linked_at: r.get(2) }).collect())
+        let rows = client.query("SELECT chat_id, name, linked_at, utc_offset, zone FROM telegram_chat WHERE owner = $1 ORDER BY linked_at", &[&owner]).await?;
+        Ok(rows.iter().map(|r| Chat { chat_id: r.get(0), name: r.get(1), linked_at: r.get(2), utc_offset: r.get(3), zone: r.get(4) }).collect())
     }
 
     pub async fn unlink(&self, owner: &str, chat_id: i64) -> ApiResult<bool> {
@@ -99,9 +109,10 @@ impl Telegram {
         Ok(client.execute("DELETE FROM telegram_chat WHERE owner = $1 AND chat_id = $2", &[&owner, &chat_id]).await? > 0)
     }
 
-    /// Queue `text` to every chat this browser has linked. Dropped when the
-    /// queue is full: an alert is not worth stalling the watcher for.
-    pub async fn send_to_owner(&self, owner: &str, text: &str) {
+    /// Queue a message to every chat this browser has linked, written in that
+    /// chat's own hours. Dropped when the queue is full: an alert is not worth
+    /// stalling the watcher for.
+    pub async fn send_to_owner(&self, owner: &str, text: impl Fn(i32) -> String) {
         let chats = match self.chats(owner).await {
             Ok(chats) => chats,
             Err(e) => {
@@ -110,7 +121,7 @@ impl Telegram {
             }
         };
         for chat in chats {
-            if self.out.try_send((chat.chat_id, text.to_string())).is_err() {
+            if self.out.try_send((chat.chat_id, text(chat.utc_offset))).is_err() {
                 tracing::warn!(chat = chat.chat_id, "telegram queue full, message dropped");
             }
         }
@@ -118,11 +129,11 @@ impl Telegram {
 }
 
 /// A code this browser can spend once, and a sweep of the stale ones.
-async fn mint_code(pool: &deadpool_postgres::Pool, owner: &str) -> ApiResult<String> {
+async fn mint_code(pool: &deadpool_postgres::Pool, owner: &str, offset: i32, zone: Option<&str>) -> ApiResult<String> {
     let code = fresh_code();
     let client = pool.get().await?;
     client.execute("DELETE FROM telegram_link WHERE created_at < $1", &[&(now_ms() - CODE_GOOD_FOR)]).await?;
-    client.execute("INSERT INTO telegram_link (code, owner, created_at) VALUES ($1, $2, $3)", &[&code, &owner, &now_ms()]).await?;
+    client.execute("INSERT INTO telegram_link (code, owner, created_at, utc_offset, zone) VALUES ($1, $2, $3, $4, $5)", &[&code, &owner, &now_ms(), &offset, &zone]).await?;
     Ok(code)
 }
 
@@ -254,14 +265,15 @@ async fn handle(telegram: &Telegram, update: &Incoming) -> String {
 /// Spend the code and remember the chat. A code works once.
 async fn claim(pool: &deadpool_postgres::Pool, code: &str, update: &Incoming) -> anyhow::Result<bool> {
     let client = pool.get().await?;
-    let row = client.query_opt("DELETE FROM telegram_link WHERE code = $1 AND created_at > $2 RETURNING owner", &[&code, &(now_ms() - CODE_GOOD_FOR)]).await?;
+    let row = client.query_opt("DELETE FROM telegram_link WHERE code = $1 AND created_at > $2 RETURNING owner, utc_offset, zone", &[&code, &(now_ms() - CODE_GOOD_FOR)]).await?;
     let Some(row) = row else { return Ok(false) };
     let owner: String = row.get(0);
+    let (offset, zone): (i32, Option<String>) = (row.get(1), row.get(2));
     client
         .execute(
-            "INSERT INTO telegram_chat (owner, chat_id, name, linked_at) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (owner, chat_id) DO UPDATE SET name = EXCLUDED.name",
-            &[&owner, &update.chat_id, &update.name, &now_ms()],
+            "INSERT INTO telegram_chat (owner, chat_id, name, linked_at, utc_offset, zone) VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (owner, chat_id) DO UPDATE SET name = EXCLUDED.name, utc_offset = EXCLUDED.utc_offset, zone = EXCLUDED.zone",
+            &[&owner, &update.chat_id, &update.name, &now_ms(), &offset, &zone],
         )
         .await?;
     tracing::info!(chat = update.chat_id, "telegram chat linked");
@@ -273,10 +285,38 @@ async fn forget(pool: &deadpool_postgres::Pool, chat_id: i64) -> anyhow::Result<
     Ok(client.execute("DELETE FROM telegram_chat WHERE chat_id = $1", &[&chat_id]).await?)
 }
 
-/// What an alert says when it fires, in the page's own wording.
-pub fn alert_text(market: &str, condition: &str, level: f64, value: f64, message: Option<&str>, at: i64) -> String {
+/// Offsets outside this are not a clock's, whatever the page said.
+const MAX_OFFSET: i32 = 14 * 60;
+
+/// Minutes east of UTC as the page writes them: `UTC`, `UTC+8`, `UTC-3:30`.
+pub fn offset_label(minutes: i32) -> String {
+    if minutes == 0 {
+        return "UTC".to_string();
+    }
+    let (sign, m) = if minutes < 0 { ('-', -minutes) } else { ('+', minutes) };
+    match (m / 60, m % 60) {
+        (h, 0) => format!("UTC{sign}{h}"),
+        (h, rest) => format!("UTC{sign}{h}:{rest:02}"),
+    }
+}
+
+/// A time in the reader's own hours, named so there is no guessing which.
+pub fn stamp(at: i64, offset: i32) -> String {
+    let offset = offset.clamp(-MAX_OFFSET, MAX_OFFSET);
+    format!("{} {}", iso_minute(at + i64::from(offset) * 60_000), offset_label(offset))
+}
+
+/// What an alert says when it fires, in the page's own wording and hours. The
+/// chart at the front says which way the price came to the level, since a chat
+/// message carries no colour of its own.
+pub fn alert_text(market: &str, condition: &str, level: f64, value: f64, start: Option<f64>, message: Option<&str>, at: i64, offset: i32) -> String {
     let digits = Some(price_precision([level, value]));
-    let mut text = format!("{} {} {}\nfired at {} — {} UTC", tv_name(market), condition_label(condition), format_price(level, digits), format_price(value, digits), iso_minute(at));
+    let way = match crate::alerts::rose(condition, level, start) {
+        Some(true) => "📈 ",
+        Some(false) => "📉 ",
+        None => "",
+    };
+    let mut text = format!("{way}{} {} {}\nfired at {} — {}", tv_name(market), condition_label(condition), format_price(level, digits), format_price(value, digits), stamp(at, offset));
     if let Some(note) = message.map(str::trim).filter(|m| !m.is_empty()) {
         text.push('\n');
         text.push_str(note);
@@ -308,8 +348,9 @@ fn condition_label(condition: &str) -> &str {
 /// Tell the reader an alert fired, if they linked a chat for it.
 pub async fn notify_fired(telegram: Option<&Arc<Telegram>>, owner: &str, alert: &tokio_postgres::Row, value: f64, at: i64) {
     let Some(telegram) = telegram else { return };
-    let text = alert_text(&alert.get::<_, String>(1), &alert.get::<_, String>(2), alert.get(3), value, alert.get::<_, Option<String>>(4).as_deref(), at);
-    telegram.send_to_owner(owner, &text).await;
+    let (market, condition): (String, String) = (alert.get(1), alert.get(2));
+    let (level, note, start): (f64, Option<String>, Option<f64>) = (alert.get(3), alert.get(4), alert.get(9));
+    telegram.send_to_owner(owner, |offset| alert_text(&market, &condition, level, value, start, note.as_deref(), at, offset)).await;
 }
 
 // ---------------------------------------------------------------- the API
@@ -324,7 +365,7 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
     Ok(Json(json!({
         "enabled": true,
         "bot": telegram.bot(),
-        "chats": chats.iter().map(|c| json!({ "chatId": c.chat_id, "name": c.name, "linkedAt": c.linked_at })).collect::<Vec<_>>(),
+        "chats": chats.iter().map(|c| json!({ "chatId": c.chat_id, "name": c.name, "linkedAt": c.linked_at, "offsetMinutes": c.utc_offset, "zone": c.zone })).collect::<Vec<_>>(),
     })))
 }
 
@@ -332,11 +373,29 @@ fn enabled(state: &AppState) -> ApiResult<&Arc<Telegram>> {
     state.telegram.as_ref().ok_or_else(|| ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, "this server has no Telegram bot set up".into()))
 }
 
-/// `POST /api/telegram/link`: a fresh code and the link that spends it.
-pub async fn link(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+/// The clock a request carries: `{offsetMinutes, zone}`, both optional.
+fn clock(body: &Value) -> (i32, Option<&str>) {
+    let offset = body["offsetMinutes"].as_i64().unwrap_or(0).clamp(i64::from(-MAX_OFFSET), i64::from(MAX_OFFSET)) as i32;
+    let zone = body["zone"].as_str().filter(|z| !z.is_empty() && z.len() <= 64);
+    (offset, zone)
+}
+
+/// `POST /api/telegram/link`: a fresh code and the link that spends it. The
+/// body carries the reader's clock, so the first message already reads right.
+pub async fn link(State(state): State<AppState>, headers: HeaderMap, body: Option<Json<Value>>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
-    let (code, url) = enabled(&state)?.link(&owner).await?;
+    let body = body.map_or(Value::Null, |Json(b)| b);
+    let (offset, zone) = clock(&body);
+    let (code, url) = enabled(&state)?.link(&owner, offset, zone).await?;
     Ok(Json(json!({ "code": code, "url": url, "goodForMs": CODE_GOOD_FOR })))
+}
+
+/// `PATCH /api/telegram`: the reader's zone changed, or summer time moved it.
+pub async fn set_clock(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
+    let (offset, zone) = clock(&body);
+    let changed = enabled(&state)?.set_clock(&owner, offset, zone).await?;
+    Ok(Json(json!({ "chats": changed })))
 }
 
 /// `POST /api/telegram/test`: one message, to see that it arrives.
@@ -347,7 +406,8 @@ pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     if chats.is_empty() {
         return Err(ApiError::bad_request("no chat is linked to this browser yet"));
     }
-    telegram.send_to_owner(&owner, &format!("tradoor test message — {} UTC. Alerts will arrive like this.", iso_minute(now_ms()))).await;
+    let now = now_ms();
+    telegram.send_to_owner(&owner, |offset| format!("tradoor test message — {}. Alerts will arrive like this.", stamp(now, offset))).await;
     Ok(Json(json!({ "sent": chats.len() })))
 }
 
@@ -365,10 +425,23 @@ mod tests {
     #[test]
     fn an_alert_reads_the_way_the_page_writes_it() {
         let at = tradoor_core::time::parse_iso("2026-09-24T22:05:00Z").unwrap();
-        let text = alert_text("binance-perp:BTCUSDT", "crossing", 83_520.5, 83_734.9, None, at);
-        assert_eq!(text, "BTCUSDT.P Crossing 83,520.50\nfired at 83,734.90 — 2026-09-24 22:05 UTC");
-        let noted = alert_text("bybit-spot:SOLUSDT", "greater", 114.8, 115.2, Some("  take the swing  "), at);
-        assert_eq!(noted, "SOLUSDT Greater Than 114.80\nfired at 115.20 — 2026-09-24 22:05 UTC\ntake the swing");
+        let text = alert_text("binance-perp:BTCUSDT", "crossing", 83_520.5, 83_734.9, None, None, at, 0);
+        assert_eq!(text, "BTCUSDT.P Crossing 83,520.50\nfired at 83,734.90 — 2026-09-24 22:05 UTC", "a bare crossing with nothing to compare says no way");
+        let noted = alert_text("bybit-spot:SOLUSDT", "greater", 114.8, 115.2, None, Some("  take the swing  "), at, 0);
+        assert_eq!(noted, "📈 SOLUSDT Greater Than 114.80\nfired at 115.20 — 2026-09-24 22:05 UTC\ntake the swing");
+        let fell = alert_text("binance-perp:BTCUSDT", "crossing", 80_000.0, 79_990.0, Some(83_000.0), None, at, 0);
+        assert!(fell.starts_with("📉 BTCUSDT.P Crossing"), "set below the price and reached: a fall");
+    }
+
+    #[test]
+    fn a_message_is_written_in_the_readers_own_hours() {
+        let at = tradoor_core::time::parse_iso("2026-09-24T22:05:00Z").unwrap();
+        assert_eq!(stamp(at, 8 * 60), "2026-09-25 06:05 UTC+8", "a day later where they are");
+        assert_eq!(stamp(at, -4 * 60), "2026-09-24 18:05 UTC-4");
+        assert_eq!(stamp(at, 5 * 60 + 30), "2026-09-25 03:35 UTC+5:30");
+        assert_eq!(stamp(at, 0), "2026-09-24 22:05 UTC");
+        assert_eq!(stamp(at, 99 * 60), stamp(at, MAX_OFFSET), "nothing beyond a real offset is one");
+        assert!(alert_text("binance-perp:BTCUSDT", "less", 1.0, 0.9, None, None, at, 7 * 60).ends_with("2026-09-25 05:05 UTC+7"));
     }
 
     #[test]
@@ -416,15 +489,16 @@ mod tests {
         client.execute("DELETE FROM telegram_chat WHERE owner = $1 OR chat_id = $2", &[&OWNER, &chat]).await.unwrap();
         client.execute("DELETE FROM telegram_link WHERE owner = $1", &[&OWNER]).await.unwrap();
 
-        let code = mint_code(&pool, OWNER).await.unwrap();
+        let code = mint_code(&pool, OWNER, 8 * 60, Some("Asia/Singapore")).await.unwrap();
         let update = Incoming { id: 1, chat_id: chat, name: Some("ricky".into()), text: format!("/start {code}") };
         assert!(claim(&pool, &code, &update).await.unwrap(), "the code links the chat");
         assert!(!claim(&pool, &code, &update).await.unwrap(), "and is spent");
         assert!(!claim(&pool, "neverminted", &update).await.unwrap());
 
-        let rows = client.query("SELECT chat_id, name FROM telegram_chat WHERE owner = $1", &[&OWNER]).await.unwrap();
+        let rows = client.query("SELECT chat_id, name, utc_offset, zone FROM telegram_chat WHERE owner = $1", &[&OWNER]).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!((rows[0].get::<_, i64>(0), rows[0].get::<_, Option<String>>(1)), (chat, Some("ricky".into())));
+        assert_eq!((rows[0].get::<_, i32>(2), rows[0].get::<_, Option<String>>(3)), (8 * 60, Some("Asia/Singapore".into())), "the clock the link carried");
 
         assert_eq!(forget(&pool, chat).await.unwrap(), 1, "/stop ends it");
         let left: i64 = client.query_one("SELECT count(*) FROM telegram_chat WHERE owner = $1", &[&OWNER]).await.unwrap().get(0);
