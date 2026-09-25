@@ -90,7 +90,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
-| `GET /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; a link code; a test message; unlink |
+| `GET PATCH /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; the reader's zone and how long messages stay; a link code; a test message; unlink |
 | `PATCH DELETE /api/alerts/{id}` | edit, restart or record a trigger (which stops it and logs it); delete |
 | `POST /api/alerts/restart` · `DELETE /api/alerts/log` | restart every stopped alert; clear the log |
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
@@ -106,6 +106,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
+| `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
@@ -139,7 +140,12 @@ chat (`telegram`, `TRADOOR_TELEGRAM_TOKEN`). A bot cannot open a conversation,
 so Settings opens `t.me/<bot>?start=<code>` with a one-use code that says which
 browser id the chat belongs to; `/stop` in the chat ends it. Updates are long
 polled, so the server needs nothing reachable from the internet, and messages
-go out one at a time to stay inside Telegram's per-chat rate. The watchlist streams each
+go out one at a time to stay inside Telegram's per-chat rate. Each carries the
+level, the price that met it and the time in the reader's own zone, with a
+chart up or down for the way it came — a chat message has no colour, where the
+page draws the same thing as a green or red arrow. Messages are taken back
+after two days by default (Settings can change it, or keep them): Telegram
+allows that for 48 hours after sending and not a minute longer. The watchlist streams each
 market's daily candle, so its change and volume run from 00:00 UTC as
 TradingView's do, not over the rolling 24 hours an exchange ticker reports. It
 is one ordered list in which `#Name` entries head sections; a section folds

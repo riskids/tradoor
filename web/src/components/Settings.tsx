@@ -45,6 +45,14 @@ function zoneChoices(): { value: string; label: string }[] {
   ];
 }
 
+/** How long a message stays in the chat. Telegram refuses to take back one older than 48 hours. */
+const CLEARING = [
+  { value: '47', label: '2 days, then cleared' },
+  { value: '24', label: '1 day, then cleared' },
+  { value: '6', label: '6 hours, then cleared' },
+  { value: 'keep', label: 'Keep every message' },
+];
+
 /**
  * Alerts on Telegram. A bot cannot open a conversation, so the reader does:
  * the link carries a one-use code that tells the server which browser the chat
@@ -122,6 +130,24 @@ function TelegramRow() {
                 </label>
               )}
             </For>
+            <Show when={s().chats.length > 0}>
+              <label class="swatch">
+                <span class="name">Messages stay</span>
+                <select
+                  class="box wide"
+                  data-tip="The bot takes its own messages back when their time is up, so the chat does not fill with old alerts. Telegram only allows this within 48 hours of sending."
+                  onChange={(e) => void act(() => api.telegramClearing(e.currentTarget.value === 'keep' ? null : Number(e.currentTarget.value)), 'Saved.')}
+                >
+                  <For each={CLEARING}>
+                    {(c) => (
+                      <option value={c.value} selected={String(s().chats[0]?.clearAfterHours ?? 'keep') === c.value}>
+                        {c.label}
+                      </option>
+                    )}
+                  </For>
+                </select>
+              </label>
+            </Show>
             <div style={{ display: 'flex', gap: '6px', 'align-items': 'center', 'margin-top': '6px' }}>
               <button class="btn" onClick={() => void connect()} disabled={!s().bot}>
                 {s().chats.length > 0 ? 'Connect another chat' : 'Connect Telegram'}

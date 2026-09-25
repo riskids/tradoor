@@ -37,6 +37,11 @@ const POLL_SECS: u64 = 25;
 /// Messages waiting to go out. Past this the oldest are dropped rather than
 /// holding up an alert: a notification late by minutes is worse than missing.
 const QUEUE: usize = 256;
+/// Telegram lets a bot take back its own message for 48 hours, so a window must
+/// leave room to sweep before that runs out.
+pub const MAX_CLEAR_HOURS: i32 = 47;
+/// How often messages whose time is up are taken back.
+const SWEEP: Duration = Duration::from_secs(60);
 const MAX_TEXT: usize = 3500;
 
 pub struct Chat {
@@ -46,6 +51,8 @@ pub struct Chat {
     /// Minutes east of UTC, as the reader's own settings write times.
     pub utc_offset: i32,
     pub zone: Option<String>,
+    /// Hours a message stays before the bot takes it back; none to keep them.
+    pub clear_after_hours: Option<i32>,
 }
 
 
@@ -55,7 +62,7 @@ pub struct Telegram {
     pool: deadpool_postgres::Pool,
     /// The bot's @name, for the link Settings opens. Read once it answers.
     bot: RwLock<Option<String>>,
-    out: mpsc::Sender<(i64, String)>,
+    out: mpsc::Sender<(i64, String, Option<i32>)>,
 }
 
 impl Telegram {
@@ -64,6 +71,7 @@ impl Telegram {
         let (out, rx) = mpsc::channel(QUEUE);
         let telegram = Arc::new(Self { http, token, pool, bot: RwLock::new(None), out });
         tokio::spawn(send_queued(telegram.clone(), rx));
+        tokio::spawn(sweep(telegram.clone()));
         tokio::spawn(poll(telegram.clone()));
         tracing::info!("telegram bot started");
         Ok(telegram)
@@ -98,10 +106,17 @@ impl Telegram {
         Ok(client.execute("UPDATE telegram_chat SET utc_offset = $2, zone = $3 WHERE owner = $1", &[&owner, &offset, &zone]).await?)
     }
 
+    /// How long a message stays in the chat before the bot takes it back.
+    pub async fn set_clearing(&self, owner: &str, hours: Option<i32>) -> ApiResult<u64> {
+        let hours = hours.map(|h| h.clamp(1, MAX_CLEAR_HOURS));
+        let client = self.pool.get().await?;
+        Ok(client.execute("UPDATE telegram_chat SET clear_after_hours = $2 WHERE owner = $1", &[&owner, &hours]).await?)
+    }
+
     pub async fn chats(&self, owner: &str) -> ApiResult<Vec<Chat>> {
         let client = self.pool.get().await?;
-        let rows = client.query("SELECT chat_id, name, linked_at, utc_offset, zone FROM telegram_chat WHERE owner = $1 ORDER BY linked_at", &[&owner]).await?;
-        Ok(rows.iter().map(|r| Chat { chat_id: r.get(0), name: r.get(1), linked_at: r.get(2), utc_offset: r.get(3), zone: r.get(4) }).collect())
+        let rows = client.query("SELECT chat_id, name, linked_at, utc_offset, zone, clear_after_hours FROM telegram_chat WHERE owner = $1 ORDER BY linked_at", &[&owner]).await?;
+        Ok(rows.iter().map(|r| Chat { chat_id: r.get(0), name: r.get(1), linked_at: r.get(2), utc_offset: r.get(3), zone: r.get(4), clear_after_hours: r.get(5) }).collect())
     }
 
     pub async fn unlink(&self, owner: &str, chat_id: i64) -> ApiResult<bool> {
@@ -121,7 +136,7 @@ impl Telegram {
             }
         };
         for chat in chats {
-            if self.out.try_send((chat.chat_id, text(chat.utc_offset))).is_err() {
+            if self.out.try_send((chat.chat_id, text(chat.utc_offset), chat.clear_after_hours)).is_err() {
                 tracing::warn!(chat = chat.chat_id, "telegram queue full, message dropped");
             }
         }
@@ -151,14 +166,63 @@ fn fresh_code() -> String {
 
 /// One message at a time, spaced out: Telegram counts messages per chat and
 /// answers a burst with `429`.
-async fn send_queued(telegram: Arc<Telegram>, mut rx: mpsc::Receiver<(i64, String)>) {
-    while let Some((chat_id, text)) = rx.recv().await {
+async fn send_queued(telegram: Arc<Telegram>, mut rx: mpsc::Receiver<(i64, String, Option<i32>)>) {
+    while let Some((chat_id, text, clear_after)) = rx.recv().await {
         let body = json!({ "chat_id": chat_id, "text": text, "disable_web_page_preview": true });
-        if let Err(e) = telegram.call("sendMessage", body).await {
-            tracing::warn!(chat = chat_id, error = %e, "sending a telegram message");
+        match telegram.call("sendMessage", body).await {
+            // Only a message the bot can still name can be taken back later.
+            Ok(sent) => {
+                if let (Some(hours), Some(message_id)) = (clear_after, sent["message_id"].as_i64()) {
+                    let clear_at = now_ms() + i64::from(hours.clamp(1, MAX_CLEAR_HOURS)) * 3_600_000;
+                    if let Err(e) = remember(&telegram.pool, chat_id, message_id, clear_at).await {
+                        tracing::warn!(chat = chat_id, error = %e, "keeping a message to clear");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(chat = chat_id, error = %e, "sending a telegram message"),
         }
         sleep(SEND_GAP).await;
     }
+}
+
+async fn remember(pool: &deadpool_postgres::Pool, chat_id: i64, message_id: i64, clear_at: i64) -> anyhow::Result<()> {
+    let client = pool.get().await?;
+    client
+        .execute(
+            "INSERT INTO telegram_message (chat_id, message_id, clear_at) VALUES ($1, $2, $3) ON CONFLICT (chat_id, message_id) DO NOTHING",
+            &[&chat_id, &message_id, &clear_at],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Messages whose time is up, taken back so a chat does not fill with old
+/// alerts. Telegram refuses one older than 48 hours, so the row goes either
+/// way — a message left behind is only a message, and retrying it forever
+/// would be noise in the log.
+async fn sweep(telegram: Arc<Telegram>) {
+    loop {
+        sleep(SWEEP).await;
+        let due = match take_due(&telegram.pool).await {
+            Ok(due) => due,
+            Err(e) => {
+                tracing::warn!(error = %e, "reading the messages to clear");
+                continue;
+            }
+        };
+        for (chat_id, message_id) in due {
+            if let Err(e) = telegram.call("deleteMessage", json!({ "chat_id": chat_id, "message_id": message_id })).await {
+                tracing::debug!(chat = chat_id, error = %e, "clearing a telegram message");
+            }
+            sleep(SEND_GAP).await;
+        }
+    }
+}
+
+async fn take_due(pool: &deadpool_postgres::Pool) -> anyhow::Result<Vec<(i64, i64)>> {
+    let client = pool.get().await?;
+    let rows = client.query("DELETE FROM telegram_message WHERE clear_at <= $1 RETURNING chat_id, message_id", &[&now_ms()]).await?;
+    Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
 }
 
 /// What one update carries, of the little this bot reads.
@@ -223,7 +287,7 @@ async fn poll(telegram: Arc<Telegram>) {
                 for update in read_updates(&result) {
                     offset = update.id + 1;
                     let reply = handle(&telegram, &update).await;
-                    let _ = telegram.out.try_send((update.chat_id, reply));
+                    let _ = telegram.out.try_send((update.chat_id, reply, None));
                 }
             }
             Err(e) => {
@@ -365,7 +429,8 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
     Ok(Json(json!({
         "enabled": true,
         "bot": telegram.bot(),
-        "chats": chats.iter().map(|c| json!({ "chatId": c.chat_id, "name": c.name, "linkedAt": c.linked_at, "offsetMinutes": c.utc_offset, "zone": c.zone })).collect::<Vec<_>>(),
+        "maxClearHours": MAX_CLEAR_HOURS,
+        "chats": chats.iter().map(|c| json!({ "chatId": c.chat_id, "name": c.name, "linkedAt": c.linked_at, "offsetMinutes": c.utc_offset, "zone": c.zone, "clearAfterHours": c.clear_after_hours })).collect::<Vec<_>>(),
     })))
 }
 
@@ -390,11 +455,23 @@ pub async fn link(State(state): State<AppState>, headers: HeaderMap, body: Optio
     Ok(Json(json!({ "code": code, "url": url, "goodForMs": CODE_GOOD_FOR })))
 }
 
-/// `PATCH /api/telegram`: the reader's zone changed, or summer time moved it.
+/// `PATCH /api/telegram`: the reader's zone changed, or summer time moved it,
+/// or they chose how long a message stays in the chat.
 pub async fn set_clock(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
-    let (offset, zone) = clock(&body);
-    let changed = enabled(&state)?.set_clock(&owner, offset, zone).await?;
+    let telegram = enabled(&state)?;
+    let mut changed = 0;
+    if body.get("offsetMinutes").is_some() || body.get("zone").is_some() {
+        let (offset, zone) = clock(&body);
+        changed = telegram.set_clock(&owner, offset, zone).await?;
+    }
+    if let Some(hours) = body.get("clearAfterHours") {
+        let hours = match hours {
+            Value::Null => None,
+            v => Some(v.as_i64().filter(|h| *h > 0).ok_or_else(|| ApiError::bad_request("clearAfterHours must be hours above zero, or null to keep messages"))? as i32),
+        };
+        changed = telegram.set_clearing(&owner, hours).await?;
+    }
     Ok(Json(json!({ "chats": changed })))
 }
 
@@ -499,6 +576,14 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!((rows[0].get::<_, i64>(0), rows[0].get::<_, Option<String>>(1)), (chat, Some("ricky".into())));
         assert_eq!((rows[0].get::<_, i32>(2), rows[0].get::<_, Option<String>>(3)), (8 * 60, Some("Asia/Singapore".into())), "the clock the link carried");
+
+        // A message kept for clearing goes when its time is up, and only then.
+        remember(&pool, chat, 501, now_ms() - 1_000).await.unwrap();
+        remember(&pool, chat, 502, now_ms() + 3_600_000).await.unwrap();
+        let due = take_due(&pool).await.unwrap();
+        assert_eq!(due, [(chat, 501)], "only the one whose time has passed");
+        assert_eq!(take_due(&pool).await.unwrap(), [], "and it is taken once");
+        client.execute("DELETE FROM telegram_message WHERE chat_id = $1", &[&chat]).await.unwrap();
 
         assert_eq!(forget(&pool, chat).await.unwrap(), 1, "/stop ends it");
         let left: i64 = client.query_one("SELECT count(*) FROM telegram_chat WHERE owner = $1", &[&OWNER]).await.unwrap().get(0);

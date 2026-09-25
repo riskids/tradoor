@@ -176,6 +176,8 @@ export interface TelegramChat {
   /** The clock messages to this chat are written in. */
   offsetMinutes: number;
   zone: string | null;
+  /** Hours a message stays before the bot takes it back; null keeps them. */
+  clearAfterHours: number | null;
 }
 
 /** The reader's clock, as the page reads it now. */
@@ -189,6 +191,8 @@ export interface TelegramStatus {
   enabled: boolean;
   /** The bot's @name, once it has answered. */
   bot: string | null;
+  /** The longest a message can be set to stay: Telegram's own limit. */
+  maxClearHours?: number;
   chats: TelegramChat[];
 }
 
@@ -214,6 +218,7 @@ export const api = {
   telegram: () => json<TelegramStatus>('/api/telegram'),
   telegramLink: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST', body: clock }),
   telegramClock: (clock: Clock) => json<{ chats: number }>('/api/telegram', { method: 'PATCH', body: clock }),
+  telegramClearing: (clearAfterHours: number | null) => json<{ chats: number }>('/api/telegram', { method: 'PATCH', body: { clearAfterHours } }),
   telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
