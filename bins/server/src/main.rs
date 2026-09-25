@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
             let drawings = client.execute("UPDATE drawing SET owner = $1 WHERE owner = ''", &[&owner]).await?;
             // The browser's own workspace, if it saved one, stays; the old shared one is dropped then.
             let workspaces = client.execute("UPDATE workspace w SET owner = $1 WHERE owner = '' AND NOT EXISTS (SELECT 1 FROM workspace o WHERE o.owner = $1 AND o.id = w.id)", &[&owner]).await?;
-            tracing::info!(drawings, workspaces, owner = %owner, "adopted");
+            tracing::info!(drawings, workspaces, owner = api::short_owner(&owner), "adopted");
             Ok(())
         }
         Command::Serve => {

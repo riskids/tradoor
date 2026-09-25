@@ -24,7 +24,7 @@ use tradoor_core::time::iso_minute;
 use tradoor_store::now_ms;
 use tradoor_venues::MarketRef;
 
-use crate::api::{owner, ApiError, ApiResult, AppState};
+use crate::api::{owner, short_owner, ApiError, ApiResult, AppState};
 use crate::dns::Doh;
 
 /// How long a link code is good for: long enough to walk to the phone.
@@ -138,7 +138,7 @@ impl Telegram {
         if chats.is_empty() {
             // Silence here is what makes a missing link hard to see: an alert
             // fires, nothing arrives, and no line says why.
-            tracing::info!(owner, "nothing told: this browser has no telegram chat linked");
+            tracing::info!(owner = short_owner(owner), "nothing told: this browser has no telegram chat linked");
             return;
         }
         for chat in chats {

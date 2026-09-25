@@ -89,6 +89,13 @@ pub fn valid_owner(id: &str) -> bool {
     (16..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
+/// Enough of a browser id to tell two apart in a log, and not enough to be one:
+/// the whole of it is the only key to that browser's drawings, alerts and
+/// Telegram chats, and a log is read by more eyes than a database is.
+pub fn short_owner(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
 pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/health", get(health))
@@ -187,4 +194,16 @@ async fn history(State(state): State<AppState>) -> ApiResult<Json<serde_json::Va
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(json!({ "markets": markets })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_log_carries_the_head_of_a_browser_id_and_no_more() {
+        assert!(valid_owner("e6a9ab8350808f3e8e1d6ae47f423b31") && !valid_owner("short") && !valid_owner("has spaces in it"));
+        assert_eq!(short_owner("e6a9ab8350808f3e8e1d6ae47f423b31"), "e6a9ab83", "eight characters name it without handing it over");
+        assert_eq!(short_owner("abc"), "abc", "and a malformed one is not cut mid-character");
+    }
 }
