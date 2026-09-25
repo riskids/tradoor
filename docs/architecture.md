@@ -135,8 +135,9 @@ Binance, Bybit, OKX, Bitget, Hyperliquid and Kraken, spot and perpetual — each
 in the exchange's own name for it, and each size in whatever that exchange
 counts in: an OKX swap trades in contracts of a hundredth of a coin, so a print
 of fifty is half a coin and not fifty of them. The chart's marks are the
-minutes themselves, so they show at any timeframe; hovering one names the
-money, the minute and the price. After a crossing a market stays quiet until
+Flow study, added from the indicator list like any other and hidden with its
+eye: the minutes themselves, so they show at any timeframe, and hovering one
+names the money, the minute and the price. After a crossing a market stays quiet until
 its flow falls back to half the threshold, so one push does not ring over.
 
 Price alerts are rows per browser id, like drawings (`/api/alerts`); the

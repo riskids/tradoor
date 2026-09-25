@@ -163,11 +163,15 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   };
 
   // ---------------------------------------------------------------- flow
-  // Minutes whose taker flow ran hard, marked on the candles. The server keeps
-  // two days of them; which ones count is the threshold set in the flow panel.
-  createEffect(() => onCleanup(watchFlowMarks(market())));
+  // Minutes whose taker flow ran hard, marked on the candles. They are the Flow
+  // study's: without it nothing is asked for and nothing is drawn. The server
+  // keeps two days; which minutes count is the size set in the flow panel.
+  const flowOn = () => splitList(props.panel.studies).some((s) => s.split(':')[0] === 'flow');
   createEffect(() => {
-    const list = flowMarks(market());
+    if (flowOn()) onCleanup(watchFlowMarks(market()));
+  });
+  createEffect(() => {
+    const list = flowOn() ? flowMarks(market()) : [];
     send({ t: 'flow', id: sid, marks: list.map((m) => ({ at: m.at, price: m.price, usd: m.deltaUsd })) });
   });
   const hoveredFlow = () => {

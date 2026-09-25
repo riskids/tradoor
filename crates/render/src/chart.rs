@@ -617,8 +617,17 @@ impl Chart {
         }
     }
 
+    /// Whether the reader asked for the marks: they are a study like any
+    /// other, added from the indicator list and hidden with its eye.
+    fn flow_shown(&self) -> bool {
+        self.studies.iter().any(|s| s.kind == StudyKind::Flow && !self.hidden.contains(&s.id))
+    }
+
     /// The flow mark under (x, y), and where it sits — for the page's label.
     pub fn flow_at(&self, x: f32, y: f32) -> Option<(usize, f32, f32)> {
+        if !self.flow_shown() {
+            return None;
+        }
         let pane = self.panes.first()?;
         if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
             return None;
@@ -1229,7 +1238,7 @@ impl Chart {
         }
 
         // ---- flow marks: a minute that ran hard one way, where it traded
-        if !self.flow.is_empty() {
+        if self.flow_shown() && !self.flow.is_empty() {
             let hovered = self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.flow_at(x, y)).map(|(i, _, _)| i);
             for (i, mark) in self.flow.iter().enumerate() {
                 let Some((x, y)) = self.flow_xy(mark, &price) else { continue };
@@ -2935,8 +2944,15 @@ mod tests {
         let (green, red) = (FlowMark { at: bar.open_time, price: bar.close, usd: 5_000_000.0 }, FlowMark { at: c.candles()[402].open_time, price: c.candles()[402].close, usd: -1_000_000.0 });
         c.set_flow(vec![green, red]);
         let t = c.theme.clone();
-        let frame = c.render(1_800_000_000_000).clone();
-        let painted = |color: Color| frame.colors.chunks(4).filter(|p| *p == [color.r, color.g, color.b, color.a]).count();
+        let painted_now = |c: &mut Chart| {
+            let frame = c.render(1_800_000_000_000).clone();
+            move |color: Color| frame.colors.chunks(4).filter(|p| *p == [color.r, color.g, color.b, color.a]).count()
+        };
+        assert_eq!(painted_now(&mut c)(t.bull.with_alpha(90)), 0, "nothing is marked until the study is added");
+        assert_eq!(c.flow_at(0.0, 0.0), None, "and nothing is found under the pointer either");
+
+        c.set_studies("flow");
+        let painted = painted_now(&mut c);
         assert!(painted(t.bull.with_alpha(90)) > 0, "the buyers' minute is green");
         assert!(painted(t.bear.with_alpha(90)) > 0, "the sellers' minute is red");
 

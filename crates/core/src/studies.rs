@@ -20,6 +20,7 @@ pub enum StudyKind {
     Avwap,
     SwingMap,
     OpenInterest,
+    Flow,
 }
 
 impl StudyKind {
@@ -36,6 +37,7 @@ impl StudyKind {
             Self::Avwap => "avwap",
             Self::SwingMap => "swingmap",
             Self::OpenInterest => "oi",
+            Self::Flow => "flow",
         }
     }
 }
@@ -82,7 +84,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 11] = [
+pub static STUDIES: [StudyDefinition; 12] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -92,6 +94,14 @@ pub static STUDIES: [StudyDefinition; 11] = [
     StudyDefinition { kind: StudyKind::KeyLevels, name: "Historical Key Levels", short: "Key Levels", group: Group::Price, params: &[], about: "Weekly, monthly and yearly opens plus Monday’s high and low — the prices the week is measured against." },
     StudyDefinition { kind: StudyKind::Avwap, name: "Anchored VWAP (S/W/M/Y)", short: "Multi-VWAP", group: Group::Price, params: &[], about: "Volume-weighted average price since the session, week, month and year opened. The session line is drawn on intraday charts only." },
     StudyDefinition { kind: StudyKind::SwingMap, name: "Range Swing Structure Map", short: "Swings", group: Group::Price, params: &[p("left", 5, 1, 100), p("right", 5, 1, 100)], about: "Zigzag of confirmed pivots tagged HH/HL/LH/LL, with each leg’s move and duration, and the averages across the window." },
+    StudyDefinition {
+        kind: StudyKind::Flow,
+        name: "Net Taker Flow Marks",
+        short: "Flow",
+        group: Group::Price,
+        params: &[],
+        about: "Minutes whose net taker flow ran hard one way, marked where they traded — green bought, red sold, the dot larger the harder it ran. What counts as hard is the size set per market in the Flow panel, and the server keeps two days of them.",
+    },
     StudyDefinition { kind: StudyKind::Atr, name: "Average True Range", short: "ATR", group: Group::Atr, params: &[p("length", 14, 2, 1000)], about: "Average range of a bar, in the instrument’s own price units. A stop distance, not a direction." },
     StudyDefinition {
         kind: StudyKind::OpenInterest,
@@ -308,6 +318,10 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
                 StudyLine::line("signal", "Signal", m.signal),
             ];
         }
+        // Its marks are minutes the server measured, not anything the candles
+        // hold: the chart draws them from what the page sent, and the study
+        // being here is what says to draw them at all.
+        StudyKind::Flow => {}
         StudyKind::Atr => study.lines.push(StudyLine::line("atr", label, indicators::atr(candles, param(0)))),
         StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles, inputs.days),
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
