@@ -143,7 +143,10 @@ One tab watches, the one holding the `tradoor-alerts` Web Lock; the rest follow
 over a BroadcastChannel and read the list again every half minute. The server
 watches as well (`alert_watch`): every market with an active alert is followed
 on its exchange's public trade stream, so an alert fires with no browser open
-at all. Both sides record a trigger through the same two statements and the
+at all — on Binance, Bybit, OKX and Hyperliquid, which between them carry the
+markets alerts are set on; elsewhere the page is still the only watcher. OKX
+and Hyperliquid name their markets their own way, so the catalogue's `native`
+translates both the asking and the answering (`trades`). Both sides record a trigger through the same two statements and the
 alert must still be active for them to take, so it fires once however many
 watchers see it. The chart draws each active one as a level to drag or delete.
 

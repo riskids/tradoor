@@ -7,6 +7,7 @@
 //! megabytes; the browser gets one compact, compressed response it can search
 //! locally without a request per keystroke.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -126,6 +127,26 @@ impl Catalog {
                 Ok(out)
             }
         }
+    }
+
+    /// The exchange's own names for these markets of one venue, as
+    /// `ours -> theirs`. OKX calls ours `BTC-USDT-SWAP` and Hyperliquid calls
+    /// it `BTC`; a stream has to be asked in the exchange's words and answers
+    /// in them too. A market the catalogue does not know keeps its own name.
+    pub async fn native_names(&self, venue: Venue, symbols: &[String]) -> HashMap<String, String> {
+        self.get().await;
+        let state = self.state.lock().await;
+        let listed = state.as_ref().and_then(|c| c.by_venue.iter().find(|(v, _)| *v == venue).map(|(_, p)| p));
+        symbols
+            .iter()
+            .map(|symbol| {
+                let native = listed
+                    .and_then(|products| products.iter().find(|p| p.symbol == *symbol))
+                    .and_then(|p| p.native.clone())
+                    .unwrap_or_else(|| symbol.clone());
+                (symbol.clone(), native)
+            })
+            .collect()
     }
 
     /// Whether any exchange lists a perpetual on `coin` — the coin as a chart

@@ -21,12 +21,22 @@ use tradoor_store::now_ms;
 use tradoor_venues::{MarketRef, Venue};
 
 use crate::alerts;
+use crate::catalog::Catalog;
 use crate::dns::Doh;
 use crate::telegram::{self, Telegram};
 use crate::trades::{self, stream_urls};
 
-/// The venues a chart can show, and so the ones an alert can name.
-const VENUES: [Venue; 4] = [Venue::BinanceSpot, Venue::BinancePerp, Venue::BybitSpot, Venue::BybitPerp];
+/// The venues whose trades this server follows, and so the ones whose alerts
+/// fire with no browser open. The rest are watched by the page alone.
+const VENUES: [Venue; 7] = [
+    Venue::BinanceSpot,
+    Venue::BinancePerp,
+    Venue::BybitSpot,
+    Venue::BybitPerp,
+    Venue::OkxSpot,
+    Venue::OkxPerp,
+    Venue::HyperliquidPerp,
+];
 /// How often the alerts to watch are read again.
 const REFRESH: Duration = Duration::from_secs(10);
 const RETRY_SECS: [u64; 5] = [1, 3, 5, 10, 30];
@@ -70,13 +80,13 @@ pub fn fires(condition: &str, level: f64, prev: Option<f64>, cur: f64) -> bool {
 }
 
 /// Follow every market with an active alert, for as long as the server runs.
-pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, telegram: Option<Arc<Telegram>>) {
+pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, catalog: Arc<Catalog>, telegram: Option<Arc<Telegram>>) {
     let (tx, rx) = watch::channel(Arc::new(Vec::<Watched>::new()));
     tokio::spawn(refresh(pool.clone(), tx));
     for venue in VENUES {
-        tokio::spawn(follow(venue, pool.clone(), doh.clone(), telegram.clone(), rx.clone()));
+        tokio::spawn(follow(venue, pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), rx.clone()));
     }
-    tracing::info!("watching alerts");
+    tracing::info!(venues = ?VENUES.map(Venue::id), "watching alerts");
 }
 
 /// The active alerts, read again every few seconds: one added on a phone is
@@ -127,7 +137,7 @@ fn symbols_of(venue: Venue, alerts: &[Watched]) -> Vec<String> {
 }
 
 /// Keeps one exchange connected while any alert names it.
-async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, telegram: Option<Arc<Telegram>>, mut alerts: watch::Receiver<Arc<Vec<Watched>>>) {
+async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, catalog: Arc<Catalog>, telegram: Option<Arc<Telegram>>, mut alerts: watch::Receiver<Arc<Vec<Watched>>>) {
     let urls = stream_urls(venue);
     if urls.is_empty() {
         return;
@@ -143,7 +153,7 @@ async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, tele
             }
             continue;
         }
-        match session(venue, url, &symbols, &pool, &doh, telegram.as_ref(), &mut alerts).await {
+        match session(venue, url, &symbols, &pool, &doh, &catalog, telegram.as_ref(), &mut alerts).await {
             Ok(()) => attempt = 0,
             Err(e) => {
                 tracing::warn!(venue = venue.id(), url, error = %e, "alert stream lost");
@@ -161,12 +171,21 @@ async fn session(
     symbols: &[String],
     pool: &deadpool_postgres::Pool,
     doh: &Doh,
+    catalog: &Catalog,
     telegram: Option<&Arc<Telegram>>,
     alerts: &mut watch::Receiver<Arc<Vec<Watched>>>,
 ) -> anyhow::Result<()> {
+    // OKX and Hyperliquid answer in their own names, so ask in them and keep
+    // the way back: a trade has to land on the market the alert names.
+    let native = if trades::renames(venue) { catalog.native_names(venue, symbols).await } else { HashMap::new() };
+    let ours: HashMap<String, String> = native.iter().map(|(ours, theirs)| (theirs.clone(), ours.clone())).collect();
+    let asked: Vec<String> = symbols.iter().map(|s| native.get(s).cloned().unwrap_or_else(|| s.clone())).collect();
+
     let connect = doh.connect_ws(url);
     let mut ws = tokio::time::timeout(Duration::from_secs(15), connect).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
-    ws.send(Message::text(trades::subscribe(venue, symbols))).await?;
+    for frame in trades::subscribe(venue, &asked) {
+        ws.send(Message::text(frame)).await?;
+    }
     tracing::info!(venue = venue.id(), markets = symbols.len(), "watching alert prices");
 
     let (mut heard, mut traded) = (Instant::now(), Instant::now());
@@ -186,7 +205,8 @@ async fn session(
                     Message::Close(_) => return Ok(()),
                     _ => continue,
                 };
-                for (symbol, price, _, _) in trades::prints(venue, &text) {
+                for (theirs, price, _, _) in trades::prints(venue, &text) {
+                    let symbol = ours.get(&theirs).cloned().unwrap_or(theirs);
                     traded = Instant::now();
                     let market = format!("{}:{}", venue.id(), symbol);
                     let prev = previous.insert(symbol, price);

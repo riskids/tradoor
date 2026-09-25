@@ -193,7 +193,9 @@ async fn follow(venue: Venue, flow: Arc<Flow>) {
 async fn session(venue: Venue, url: &str, flow: &Flow) -> anyhow::Result<()> {
     let connect = flow.doh.connect_ws(url);
     let mut ws = tokio::time::timeout(Duration::from_secs(15), connect).await.map_err(|_| anyhow::anyhow!("connecting timed out"))??;
-    ws.send(Message::text(trades::subscribe(venue, &[TICKER.to_string()]))).await?;
+    for frame in trades::subscribe(venue, &[TICKER.to_string()]) {
+        ws.send(Message::text(frame)).await?;
+    }
     tracing::info!(venue = venue.id(), "reading flow");
 
     let market = market_of(venue);

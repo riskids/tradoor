@@ -16,26 +16,47 @@ pub fn stream_urls(venue: Venue) -> &'static [&'static str] {
         Venue::BinancePerp => &["wss://fstream.binance.com/market/ws", "wss://fstream.binance.com/ws"],
         Venue::BybitSpot => &["wss://stream.bybit.com/v5/public/spot"],
         Venue::BybitPerp => &["wss://stream.bybit.com/v5/public/linear"],
+        Venue::OkxSpot | Venue::OkxPerp => &["wss://ws.okx.com:8443/ws/v5/public"],
+        Venue::HyperliquidPerp => &["wss://api.hyperliquid.xyz/ws"],
         _ => &[],
     }
 }
 
-pub fn subscribe(venue: Venue, symbols: &[String]) -> String {
+/// Whether a venue calls its markets something other than we do, so the names
+/// asked for and the names answered with have to be translated.
+pub fn renames(venue: Venue) -> bool {
+    matches!(venue, Venue::OkxSpot | Venue::OkxPerp | Venue::HyperliquidPerp)
+}
+
+/// What to send to ask for these markets' trades, in the exchange's own names.
+/// Most take one frame for the lot; Hyperliquid takes one subscription each.
+pub fn subscribe(venue: Venue, symbols: &[String]) -> Vec<String> {
     match venue {
         Venue::BybitSpot | Venue::BybitPerp => {
             let args: Vec<String> = symbols.iter().map(|s| format!("\"publicTrade.{s}\"")).collect();
-            format!("{{\"op\":\"subscribe\",\"args\":[{}]}}", args.join(","))
+            vec![format!("{{\"op\":\"subscribe\",\"args\":[{}]}}", args.join(","))]
         }
+        Venue::OkxSpot | Venue::OkxPerp => {
+            let args: Vec<String> = symbols.iter().map(|s| format!("{{\"channel\":\"trades\",\"instId\":\"{s}\"}}")).collect();
+            vec![format!("{{\"op\":\"subscribe\",\"args\":[{}]}}", args.join(","))]
+        }
+        Venue::HyperliquidPerp => symbols.iter().map(|s| format!("{{\"method\":\"subscribe\",\"subscription\":{{\"type\":\"trades\",\"coin\":\"{s}\"}}}}")).collect(),
         _ => {
             let params: Vec<String> = symbols.iter().map(|s| format!("\"{}@aggTrade\"", s.to_lowercase())).collect();
-            format!("{{\"method\":\"SUBSCRIBE\",\"params\":[{}],\"id\":1}}", params.join(","))
+            vec![format!("{{\"method\":\"SUBSCRIBE\",\"params\":[{}],\"id\":1}}", params.join(","))]
         }
     }
 }
 
-/// Bybit closes a socket that says nothing for 20 seconds; Binance does not ask.
+/// What keeps a socket open where the exchange asks for it. Binance does not.
 pub fn ping(venue: Venue) -> Option<&'static str> {
-    matches!(venue, Venue::BybitSpot | Venue::BybitPerp).then_some("{\"op\":\"ping\"}")
+    match venue {
+        Venue::BybitSpot | Venue::BybitPerp => Some("{\"op\":\"ping\"}"),
+        // OKX wants the bare word, and closes a socket that says nothing for 30 seconds.
+        Venue::OkxSpot | Venue::OkxPerp => Some("ping"),
+        Venue::HyperliquidPerp => Some("{\"method\":\"ping\"}"),
+        _ => None,
+    }
 }
 
 /// One trade as both readers need it: what it cost, how much, and whether the
@@ -70,6 +91,27 @@ fn num(v: &Value) -> Option<f64> {
 pub fn read_prints<'a>(venue: Venue, frame: &'a Value, into: &mut Vec<Print<'a>>) {
     into.clear();
     match venue {
+        Venue::OkxSpot | Venue::OkxPerp => {
+            if frame["arg"]["channel"] != "trades" {
+                return;
+            }
+            let Some(rows) = frame["data"].as_array() else { return };
+            for r in rows {
+                let (Some(symbol), Some(price), Some(qty)) = (r["instId"].as_str(), num(&r["px"]), num(&r["sz"])) else { continue };
+                into.push(Print { symbol, price, qty, buy: r["side"] == "buy", at: r["ts"].as_str().and_then(|t| t.parse().ok()).unwrap_or_default() });
+            }
+        }
+        Venue::HyperliquidPerp => {
+            if frame["channel"] != "trades" {
+                return;
+            }
+            let Some(rows) = frame["data"].as_array() else { return };
+            for r in rows {
+                let (Some(symbol), Some(price), Some(qty)) = (r["coin"].as_str(), num(&r["px"]), num(&r["sz"])) else { continue };
+                // `B` is the aggressor buying, `A` taking the ask away.
+                into.push(Print { symbol, price, qty, buy: r["side"] == "B", at: r["time"].as_i64().unwrap_or_default() });
+            }
+        }
         Venue::BybitSpot | Venue::BybitPerp => {
             if !frame["topic"].as_str().is_some_and(|t| t.starts_with("publicTrade.")) {
                 return;
@@ -128,12 +170,39 @@ mod tests {
     }
 
     #[test]
+    fn okx_and_hyperliquid_are_read_in_their_own_names() {
+        let okx = r#"{"arg":{"channel":"trades","instId":"BTC-USDT-SWAP"},"data":[{"instId":"BTC-USDT-SWAP","px":"84100.5","sz":"3","side":"buy","ts":"1790000000000"}]}"#;
+        assert_eq!(prints(Venue::OkxPerp, okx), [("BTC-USDT-SWAP".to_string(), 84_100.5, 3.0, true)]);
+        assert_eq!(prints(Venue::OkxPerp, &okx.replace("\"side\":\"buy\"", "\"side\":\"sell\""))[0].3, false);
+        assert!(prints(Venue::OkxPerp, r#"{"event":"subscribe","arg":{"channel":"trades","instId":"BTC-USDT-SWAP"}}"#).is_empty());
+        assert!(prints(Venue::OkxPerp, "pong").is_empty(), "the answer to a ping is not a trade");
+
+        let hl = r#"{"channel":"trades","data":[{"coin":"BTC","side":"B","px":"84120.0","sz":"0.5","time":1790000000000},{"coin":"BTC","side":"A","px":"84119.0","sz":"0.1","time":1790000000001}]}"#;
+        let read = prints(Venue::HyperliquidPerp, hl);
+        assert_eq!(read.len(), 2);
+        assert_eq!((read[0].0.as_str(), read[0].3), ("BTC", true), "B is the aggressor buying");
+        assert_eq!(read[1].3, false);
+        assert!(prints(Venue::HyperliquidPerp, r#"{"channel":"subscriptionResponse","data":{}}"#).is_empty());
+    }
+
+    #[test]
     fn each_exchange_is_asked_in_its_own_words() {
         let symbols = ["BTCUSDT".to_string(), "ETHUSDT".to_string()];
-        assert_eq!(subscribe(Venue::BinanceSpot, &symbols), r#"{"method":"SUBSCRIBE","params":["btcusdt@aggTrade","ethusdt@aggTrade"],"id":1}"#);
-        assert_eq!(subscribe(Venue::BybitPerp, &symbols), r#"{"op":"subscribe","args":["publicTrade.BTCUSDT","publicTrade.ETHUSDT"]}"#);
-        assert!(stream_urls(Venue::OkxPerp).is_empty(), "a venue with no chart has no trades to follow");
+        assert_eq!(subscribe(Venue::BinanceSpot, &symbols), [r#"{"method":"SUBSCRIBE","params":["btcusdt@aggTrade","ethusdt@aggTrade"],"id":1}"#]);
+        assert_eq!(subscribe(Venue::BybitPerp, &symbols), [r#"{"op":"subscribe","args":["publicTrade.BTCUSDT","publicTrade.ETHUSDT"]}"#]);
+        let okx = ["BTC-USDT-SWAP".to_string()];
+        assert_eq!(subscribe(Venue::OkxPerp, &okx), [r#"{"op":"subscribe","args":[{"channel":"trades","instId":"BTC-USDT-SWAP"}]}"#]);
+        let coins = ["BTC".to_string(), "kPEPE".to_string()];
+        assert_eq!(
+            subscribe(Venue::HyperliquidPerp, &coins),
+            [r#"{"method":"subscribe","subscription":{"type":"trades","coin":"BTC"}}"#, r#"{"method":"subscribe","subscription":{"type":"trades","coin":"kPEPE"}}"#],
+            "Hyperliquid takes one subscription at a time"
+        );
+
+        assert!(stream_urls(Venue::KrakenPerp).is_empty(), "a venue nothing follows has no trades to read");
         assert!(stream_urls(Venue::BinancePerp).len() > 1, "an address that goes quiet is retried on the next one");
         assert!(ping(Venue::BybitSpot).is_some() && ping(Venue::BinanceSpot).is_none());
+        assert_eq!(ping(Venue::OkxPerp), Some("ping"), "OKX wants the bare word");
+        assert!(renames(Venue::OkxPerp) && renames(Venue::HyperliquidPerp) && !renames(Venue::BinancePerp));
     }
 }

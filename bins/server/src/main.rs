@@ -124,7 +124,8 @@ async fn main() -> anyhow::Result<()> {
             let open_interest = if coins.is_empty() { None } else { Some(open_interest::Recorder::start(pool.clone(), coins, &doh).await?) };
             let token = cli.telegram_token.trim().to_string();
             let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
-            alert_watch::start(pool.clone(), doh.clone(), telegram.clone());
+            let catalog = Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?);
+            alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
             let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), telegram.clone()));
             let state = api::AppState {
                 open_interest,
@@ -133,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
                 liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),
                 pool,
                 data: DataDir::new(&cli.data_dir),
-                catalog: Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?),
+                catalog,
                 relay: relay::Relay::new(doh)?,
                 limits: Arc::new(limits::Limits::default()),
             };
