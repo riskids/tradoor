@@ -23,6 +23,7 @@ use tradoor_venues::{MarketRef, Venue};
 
 use crate::alerts;
 use crate::dns::Doh;
+use crate::telegram::{self, Telegram};
 
 /// The venues a chart can show, and so the ones an alert can name.
 const VENUES: [Venue; 4] = [Venue::BinanceSpot, Venue::BinancePerp, Venue::BybitSpot, Venue::BybitPerp];
@@ -124,11 +125,11 @@ pub fn parse_trades(venue: Venue, text: &str) -> Vec<(String, f64)> {
 }
 
 /// Follow every market with an active alert, for as long as the server runs.
-pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>) {
+pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, telegram: Option<Arc<Telegram>>) {
     let (tx, rx) = watch::channel(Arc::new(Vec::<Watched>::new()));
     tokio::spawn(refresh(pool.clone(), tx));
     for venue in VENUES {
-        tokio::spawn(follow(venue, pool.clone(), doh.clone(), rx.clone()));
+        tokio::spawn(follow(venue, pool.clone(), doh.clone(), telegram.clone(), rx.clone()));
     }
     tracing::info!("watching alerts");
 }
@@ -181,7 +182,7 @@ fn symbols_of(venue: Venue, alerts: &[Watched]) -> Vec<String> {
 }
 
 /// Keeps one exchange connected while any alert names it.
-async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, mut alerts: watch::Receiver<Arc<Vec<Watched>>>) {
+async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, telegram: Option<Arc<Telegram>>, mut alerts: watch::Receiver<Arc<Vec<Watched>>>) {
     let urls = stream_urls(venue);
     if urls.is_empty() {
         return;
@@ -197,7 +198,7 @@ async fn follow(venue: Venue, pool: deadpool_postgres::Pool, doh: Arc<Doh>, mut 
             }
             continue;
         }
-        match session(venue, url, &symbols, &pool, &doh, &mut alerts).await {
+        match session(venue, url, &symbols, &pool, &doh, telegram.as_ref(), &mut alerts).await {
             Ok(()) => attempt = 0,
             Err(e) => {
                 tracing::warn!(venue = venue.id(), url, error = %e, "alert stream lost");
@@ -215,6 +216,7 @@ async fn session(
     symbols: &[String],
     pool: &deadpool_postgres::Pool,
     doh: &Doh,
+    telegram: Option<&Arc<Telegram>>,
     alerts: &mut watch::Receiver<Arc<Vec<Watched>>>,
 ) -> anyhow::Result<()> {
     let connect = doh.connect_ws(url);
@@ -251,7 +253,7 @@ async fn session(
                         .collect();
                     for alert in due {
                         fired.insert(alert.id);
-                        if let Err(e) = trigger(pool, &alert, price).await {
+                        if let Err(e) = trigger(pool, telegram, &alert, price).await {
                             tracing::warn!(alert = alert.id, error = %e, "recording an alert trigger");
                         }
                     }
@@ -278,11 +280,12 @@ async fn session(
     }
 }
 
-async fn trigger(pool: &deadpool_postgres::Pool, alert: &Watched, value: f64) -> anyhow::Result<()> {
+async fn trigger(pool: &deadpool_postgres::Pool, telegram: Option<&Arc<Telegram>>, alert: &Watched, value: f64) -> anyhow::Result<()> {
     let client = pool.get().await?;
-    if alerts::record_trigger(&client, &alert.owner, alert.id, value, now_ms()).await?.is_some() {
-        tracing::info!(alert = alert.id, market = %alert.market, condition = %alert.condition, level = alert.price, value, "alert fired");
-    }
+    let now = now_ms();
+    let Some((fired, _)) = alerts::record_trigger(&client, &alert.owner, alert.id, value, now).await? else { return Ok(()) };
+    tracing::info!(alert = alert.id, market = %alert.market, condition = %alert.condition, level = alert.price, value, "alert fired");
+    telegram::notify_fired(telegram, &alert.owner, &fired, value, now).await;
     Ok(())
 }
 

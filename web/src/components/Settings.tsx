@@ -1,9 +1,11 @@
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, For, onCleanup, Show } from 'solid-js';
+import { api, errorText, type TelegramStatus } from '../lib/api';
 import { OWNER_KEY, OWNER_PATTERN, ownerId } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { writePref } from '../lib/prefs';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
+import { formatDateTime } from '../lib/timezone';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
 
 function Swatch(props: { name: string; label: string; fallback: string }) {
@@ -41,6 +43,95 @@ function zoneChoices(): { value: string; label: string }[] {
     { value: 'UTC', label: 'UTC' },
     ...named.map((z) => ({ value: z.zone, label: `${z.zone.replaceAll('_', ' ')} (${offsetLabel(z.offset)})` })),
   ];
+}
+
+/**
+ * Alerts on Telegram. A bot cannot open a conversation, so the reader does:
+ * the link carries a one-use code that tells the server which browser the chat
+ * belongs to. While it is open the status is read again, so the chat appears
+ * here the moment the bot has it.
+ */
+function TelegramRow() {
+  const [status, setStatus] = createSignal<TelegramStatus | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [note, setNote] = createSignal<string | null>(null);
+  const [waiting, setWaiting] = createSignal(false);
+
+  const load = async () => {
+    try {
+      setStatus(await api.telegram());
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+  void load();
+  // While a link is out, watch for the chat to arrive; otherwise keep it fresh.
+  const timer = setInterval(() => void load().then(() => setWaiting((w) => w && (status()?.chats.length ?? 0) === 0)), 3_000);
+  onCleanup(() => clearInterval(timer));
+
+  const connect = async () => {
+    setError(null);
+    try {
+      const { url } = await api.telegramLink();
+      setWaiting(true);
+      open(url, '_blank', 'noopener');
+      setNote('Press Start in Telegram; this list fills in when the bot has the chat.');
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const act = async (what: () => Promise<unknown>, done: string) => {
+    setError(null);
+    try {
+      await what();
+      setNote(done);
+      await load();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  return (
+    <>
+      <Show when={status()} fallback={<div class="dim">{error() ?? 'Reading…'}</div>}>
+        {(s) => (
+          <Show when={s().enabled} fallback={<div class="dim">This server has no Telegram bot set up. Give it one with TRADOOR_TELEGRAM_TOKEN.</div>}>
+            <For each={s().chats}>
+              {(chat) => (
+                <label class="swatch">
+                  <span class="name">{chat.name ?? `Chat ${chat.chatId}`}</span>
+                  <span class="num dim">linked {formatDateTime(chat.linkedAt)}</span>
+                  <button class="dim" onClick={() => void act(() => api.telegramUnlink(chat.chatId), 'Disconnected.')}>
+                    Disconnect
+                  </button>
+                </label>
+              )}
+            </For>
+            <div style={{ display: 'flex', gap: '6px', 'align-items': 'center', 'margin-top': '6px' }}>
+              <button class="btn" onClick={() => void connect()} disabled={!s().bot}>
+                {s().chats.length > 0 ? 'Connect another chat' : 'Connect Telegram'}
+              </button>
+              <Show when={s().chats.length > 0}>
+                <button class="btn" onClick={() => void act(() => api.telegramTest(), 'Test message sent.')}>
+                  Send a test
+                </button>
+              </Show>
+              <Show when={waiting()}>
+                <span class="dim">waiting for Telegram…</span>
+              </Show>
+            </div>
+            <div class="dim">
+              {s().chats.length > 0 ? 'Alerts that fire are sent to these chats, whether or not a tab is open.' : 'Alerts fire on the server, so they reach Telegram with no browser open.'}
+            </div>
+          </Show>
+        )}
+      </Show>
+      <Show when={error()}>{(e) => <div class="warn">▲ {e()}</div>}</Show>
+      <Show when={note() && !error()}>{(n) => <div class="dim">{n()}</div>}</Show>
+    </>
+  );
 }
 
 export function Settings(props: { onClose(): void }) {
@@ -99,6 +190,9 @@ export function Settings(props: { onClose(): void }) {
               </For>
             </select>
           </label>
+
+          <h3 class="caps">Telegram</h3>
+          <TelegramRow />
 
           <h3 class="caps">Chart colours</h3>
           <div class="swatches">

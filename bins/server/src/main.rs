@@ -18,6 +18,7 @@ mod limits;
 mod liquidations;
 mod open_interest;
 mod relay;
+mod telegram;
 mod workspaces;
 
 use std::net::SocketAddr;
@@ -53,6 +54,10 @@ struct Cli {
     /// another adds it. An empty list turns the recording off.
     #[arg(long, env = "TRADOOR_OPEN_INTEREST", default_value = "BTC,ETH,SOL", value_delimiter = ',')]
     open_interest: Vec<String>,
+    /// A Telegram bot's token (from @BotFather), for alerts sent to a chat.
+    /// Without it the Telegram section of Settings says it is not set up.
+    #[arg(long, env = "TRADOOR_TELEGRAM_TOKEN", default_value = "")]
+    telegram_token: String,
 }
 
 #[derive(Subcommand)]
@@ -115,9 +120,12 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("TRADOOR_OPEN_INTEREST: {bad:?} is not a coin — write them like BTC,ETH,1000PEPE");
             }
             let open_interest = if coins.is_empty() { None } else { Some(open_interest::Recorder::start(pool.clone(), coins, &doh).await?) };
-            alert_watch::start(pool.clone(), doh.clone());
+            let token = cli.telegram_token.trim().to_string();
+            let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
+            alert_watch::start(pool.clone(), doh.clone(), telegram.clone());
             let state = api::AppState {
                 open_interest,
+                telegram,
                 liquidations: (!tickers.is_empty()).then(|| liquidations::Collector::start(pool.clone(), tickers, doh.clone())),
                 pool,
                 data: DataDir::new(&cli.data_dir),

@@ -138,9 +138,11 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
 
     if let Some(t) = b.get("triggered") {
         let value = t.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| ApiError::bad_request("triggered.value must be the price that fired it"))?;
-        let Some((fired, log)) = record_trigger(&client, &owner, id, value, now_ms()).await? else {
+        let now = now_ms();
+        let Some((fired, log)) = record_trigger(&client, &owner, id, value, now).await? else {
             return Ok(Json(json!({ "alert": row_json(&row), "log": null })));
         };
+        crate::telegram::notify_fired(state.telegram.as_ref(), &owner, &fired, value, now).await;
         return Ok(Json(json!({ "alert": row_json(&fired), "log": log_json(&log) })));
     }
 

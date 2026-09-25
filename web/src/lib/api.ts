@@ -165,6 +165,21 @@ export interface AlertLog {
   value: number;
 }
 
+/** A Telegram chat an alert is sent to. */
+export interface TelegramChat {
+  chatId: number;
+  name: string | null;
+  linkedAt: number;
+}
+
+export interface TelegramStatus {
+  /** Whether the server was given a bot token at all. */
+  enabled: boolean;
+  /** The bot's @name, once it has answered. */
+  bot: string | null;
+  chats: TelegramChat[];
+}
+
 export const api = {
   async health(): Promise<{ ok: boolean; db: boolean }> {
     const { body } = await request<{ ok: boolean; db: boolean }>('/api/health');
@@ -184,6 +199,10 @@ export const api = {
   clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),
   restartAlerts: () => json<{ restarted: number }>('/api/alerts/restart', { method: 'POST' }),
   clearAlertLog: () => send('/api/alerts/log', { method: 'DELETE' }),
+  telegram: () => json<TelegramStatus>('/api/telegram'),
+  telegramLink: () => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST' }),
+  telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
+  telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
