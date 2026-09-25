@@ -488,6 +488,7 @@ table.venues tr.off td { color: var(--dim); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
 /* Flow: net taker flow per market, and the minutes that crossed. */
+.flow { position: relative; }
 .flow .flow-table { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--border); }
 .flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: 1fr 78px 78px; align-items: center; gap: 6px; padding: 4px 8px; font-size: 11px; }
 .flow .flow-head { position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); }
@@ -496,11 +497,19 @@ table.venues tr.off td { color: var(--dim); }
 .flow .sym { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .flow .sym .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow .r { text-align: right; }
-.flow .flow-row, .flow .flow-event { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.flow .flow-sub { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 8px; padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.flow .flow-event { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
 .flow .grow { flex: 1; }
-.flow .flow-row .box { width: 76px; text-align: right; }
-.flow .flow-row .tb { min-width: 54px; justify-content: center; }
 .flow .note { padding: 8px; line-height: 1.5; }
+.fl-menu { right: 4px; top: 24px; width: 268px; max-width: calc(100% - 8px); max-height: min(420px, 70%); overflow-y: auto; }
+.fl-menu .cap { padding: 5px 8px; color: var(--muted); font-size: 11px; }
+.fl-menu .cap.note { border-top: 1px solid var(--border); color: var(--dim); line-height: 1.5; }
+.fl-menu .row { display: grid; grid-template-columns: 1fr 62px 54px; align-items: center; gap: 6px; padding: 3px 8px; font-size: 11px; }
+.fl-menu .row .sym { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.fl-menu .row .sym .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-menu .row button.box, .fl-menu .row input.box { width: 100%; justify-content: flex-end; padding: 2px 5px; text-align: right; }
+.fl-menu .row .tb { width: 100%; justify-content: center; }
+.fl-menu .row .tb.on, .fl-menu .row .tb.on:hover { background: var(--primary); color: var(--bg); }
 .flow-label { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); font-size: 11px; white-space: nowrap; pointer-events: none; box-shadow: 0 3px 12px #0008; }
 .flow-label.bull { border-color: color-mix(in oklab, var(--bull) 60%, transparent); }
 .flow-label.bear { border-color: color-mix(in oklab, var(--bear) 60%, transparent); }

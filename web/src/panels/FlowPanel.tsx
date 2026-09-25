@@ -1,29 +1,33 @@
 /**
  * Net taker flow: what the buyers took less what the sellers took, on every
- * market the server follows. Spot and perpetual stand apart — the same number
- * means something different on each — so each keeps its own threshold, and the
- * crossings it made are listed newest first.
+ * market the server follows, with the minutes that ran hard enough to be worth
+ * a word beneath them.
+ *
+ * The list is the panel; what counts as hard — a size per market, and whether
+ * Telegram hears about it — sits under the gear, since it is set once and read
+ * every minute after.
  */
 import { createSignal, For, onCleanup, Show } from 'solid-js';
 import { api, errorText, type FlowEvent, type FlowMarket, type FlowState } from '../lib/api';
 import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
+import { useDismiss } from '../lib/dismiss';
 import { formatPrice, formatTurnover, priceDecimals } from '../lib/format';
+import { Icon } from '../lib/icons';
 import { parseMarket, symbolOf, venueLabel } from '../lib/markets';
 import { readUsd, shortUsd } from '../lib/flow';
 import { formatClock } from '../lib/timezone';
 import { toast } from '../lib/toasts';
 import type { FlowPanelState } from '../workspace/model';
-import { patchPanel } from '../workspace/store';
 
 /** How often the flow is asked for again: the server weighs it this often too. */
 const POLL_MS = 5_000;
 
 const money = (v: number): string => `${v < 0 ? '-' : '+'}$${formatTurnover(Math.abs(v))}`;
+const tone = (v: number): string => (v > 0 ? 'bull' : v < 0 ? 'bear' : 'dim');
 /** `BTC` — the coin the followed markets share, whatever each quotes it in. */
 const coinOf = (market: string): string => symbolOf(market).replace(/(USDT|USDC|USD)$/, '');
-const tone = (v: number): string => (v > 0 ? 'bull' : v < 0 ? 'bear' : 'dim');
 
-/** `Binance Perp` — which exchange and which kind, since all four are one coin. */
+/** `Binance Perp` — which exchange and which kind, since all of them are one coin. */
 function Venue(props: { market: string }) {
   const ref = () => parseMarket(props.market);
   return (
@@ -35,10 +39,11 @@ function Venue(props: { market: string }) {
 }
 
 export function FlowPanel(props: { panel: FlowPanelState }) {
-  const id = props.panel.id;
   const [state, setState] = createSignal<FlowState | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const [settings, setSettings] = createSignal(false);
   const [editing, setEditing] = createSignal<string | null>(null);
+  useDismiss(settings, () => setSettings(false));
 
   const load = async () => {
     try {
@@ -54,6 +59,8 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
 
   const markets = (): FlowMarket[] => state()?.markets ?? [];
   const events = (): FlowEvent[] => state()?.events ?? [];
+  /** The markets being weighed for this reader: the rest are only watched. */
+  const told = () => markets().filter((m) => m.notify).length;
 
   const save = async (market: FlowMarket, patch: { thresholdUsd?: number; notify?: boolean }) => {
     try {
@@ -68,39 +75,30 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
 
   return (
     <div class="panelcol flow">
-      <div class="al-tabs">
-        <button class={props.panel.tab === 'crossings' ? 'on' : ''} onClick={() => patchPanel(id, { tab: 'crossings' })}>
-          Crossings
-        </button>
-        <button class={props.panel.tab === 'markets' ? 'on' : ''} onClick={() => patchPanel(id, { tab: 'markets' })}>
-          Markets
+      <div class="toolbar">
+        <span class="caps" style={{ padding: '0 4px' }}>
+          Flow
+        </span>
+        <span class="dim">{coinOf(markets()[0]?.market ?? '')}</span>
+        <span class="spacer" />
+        <button
+          class="iconbtn"
+          classList={{ on: settings() }}
+          data-tip="What counts as a big minute, and where to be told"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setSettings((v) => !v)}
+        >
+          <Icon name="settings" size={13} />
         </button>
       </div>
 
-      <div class="flow-table">
-        <div class="flow-head">
-          <span>{coinOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
-          <span class="r">1m</span>
-          <span class="r">1h</span>
-        </div>
-        <For each={markets()}>
-          {(m) => (
-            <div class="flow-line">
-              <Venue market={m.market} />
-              <span class={`num r ${tone(m.minute)}`}>{money(m.minute)}</span>
-              <span class={`num r ${tone(m.h1)}`}>{money(m.h1)}</span>
-            </div>
-          )}
-        </For>
-      </div>
-
-      <div class="scroll">
-        <Show when={props.panel.tab === 'markets'}>
+      <Show when={settings()}>
+        <div class="menu fl-menu" onPointerDown={(e) => e.stopPropagation()}>
+          <div class="cap">Tell me when a minute’s flow passes</div>
           <For each={markets()} fallback={<div class="empty">{error() ?? 'This server follows no market’s flow.'}</div>}>
             {(m) => (
-              <div class="flow-row">
+              <div class="row">
                 <Venue market={m.market} />
-                <span class="grow" />
                 <Show
                   when={editing() === m.market}
                   fallback={
@@ -136,22 +134,46 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
               </div>
             )}
           </For>
-          <div class="dim note">A crossing is the flow of one minute. After one, a market stays quiet until its flow falls back to half the threshold.</div>
-        </Show>
+          <div class="cap note">A market stays quiet after a crossing until its flow falls back to half that size, so one push does not ring over.</div>
+        </div>
+      </Show>
 
-        <Show when={props.panel.tab === 'crossings'}>
-          <For each={events()} fallback={<div class="empty">{error() ?? 'Nothing has crossed yet. Set a threshold under Markets.'}</div>}>
-            {(e) => (
-              <div class="flow-event">
-                <span class="dim num">{formatClock(e.at)}</span>
-                <Venue market={e.market} />
-                <span class="grow" />
-                <span class={`num ${tone(e.deltaUsd)}`}>{money(e.deltaUsd)}</span>
-                <span class="num dim">{formatPrice(e.price, digits(e))}</span>
-              </div>
-            )}
-          </For>
-        </Show>
+      <div class="flow-table">
+        <div class="flow-head">
+          <span>{coinOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
+          <span class="r">1m</span>
+          <span class="r">1h</span>
+        </div>
+        <For each={markets()} fallback={<div class="empty">{error() ?? 'This server follows no market’s flow.'}</div>}>
+          {(m) => (
+            <div class="flow-line">
+              <Venue market={m.market} />
+              <span class={`num r ${tone(m.minute)}`}>{money(m.minute)}</span>
+              <span class={`num r ${tone(m.h1)}`}>{money(m.h1)}</span>
+            </div>
+          )}
+        </For>
+      </div>
+
+      <div class="flow-sub">
+        <span>Crossings</span>
+        <span class="dim">{told() ? `${told()} market${told() > 1 ? 's' : ''} watched · 48h` : 'none set'}</span>
+      </div>
+      <div class="scroll">
+        <For
+          each={events()}
+          fallback={<div class="empty">{error() ?? (told() ? 'Nothing has crossed yet.' : 'No size is set yet. Open the gear to say what counts as a big minute.')}</div>}
+        >
+          {(e) => (
+            <div class="flow-event">
+              <span class="dim num">{formatClock(e.at)}</span>
+              <Venue market={e.market} />
+              <span class="grow" />
+              <span class={`num ${tone(e.deltaUsd)}`}>{money(e.deltaUsd)}</span>
+              <span class="num dim">{formatPrice(e.price, digits(e))}</span>
+            </div>
+          )}
+        </For>
       </div>
     </div>
   );

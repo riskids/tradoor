@@ -79,8 +79,6 @@ export interface LiquidationsPanelState extends PanelBase {
 
 export interface FlowPanelState extends PanelBase {
   type: 'flow';
-  /** Crossings, or the markets and their settings. */
-  tab: 'crossings' | 'markets';
 }
 
 export type AlertSort = 'newest' | 'symbol' | 'state';
@@ -151,7 +149,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
     case 'liquidations':
       return { ...base, type, minUsd: 0 };
     case 'flow':
-      return { ...base, type, tab: 'crossings' };
+      return { ...base, type };
     case 'alerts':
       return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
@@ -233,12 +231,10 @@ function readPanel(id: string, raw: unknown): Panel | null {
   } else if (p.type === 'alerts') {
     if (raw.tab === 'log') p.tab = 'log';
     if (raw.sort === 'symbol' || raw.sort === 'state') p.sort = raw.sort;
-  } else if (p.type === 'flow') {
-    if (raw.tab === 'markets') p.tab = 'markets';
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;
-  } else if (raw.basis === 'tpo') {
+  } else if (p.type === 'values' && raw.basis === 'tpo') {
     p.basis = 'tpo';
   }
   return p;
