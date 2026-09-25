@@ -6,6 +6,7 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
     keys: [
       ['/  Ctrl K', 'Commands'],
       ['?', 'This help'],
+      ['Ctrl S', 'Save the workspace now — it saves itself anyway'],
       ['drag a tab', 'Dock it: centre or edge of a group'],
       ['link icon on a tab', 'Link group — panels share a market'],
       ['middle-click tab', 'Close the panel'],

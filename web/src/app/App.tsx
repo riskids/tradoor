@@ -25,6 +25,7 @@ import {
   marketOf,
   patchPanel,
   resetWorkspace,
+  saveNow,
   saveState,
   setPanelLink,
   setPanelMarket,
@@ -168,6 +169,14 @@ function onKeyDown(e: KeyboardEvent): void {
       if (k === 'y' || e.shiftKey) control.redo();
       else control.undo();
     }
+    return;
+  }
+  // Ctrl+S is the browser's "save this page", which is never what is meant
+  // here and drops a half-page of HTML in the downloads. The workspace saves
+  // itself; the key brings that forward, and the footer says it happened.
+  if (mod && !e.altKey && k === 's' && !isTypingTarget(e.target)) {
+    e.preventDefault();
+    saveNow();
     return;
   }
   // Dialogs own the keyboard while open; modifiers belong to the browser.
@@ -356,6 +365,18 @@ function Overlays() {
   );
 }
 
+/**
+ * The browser's own menu — Reload, Save as, Inspect — is never what is wanted
+ * over a chart or a list, and it buries the app's own menus. Panels that have
+ * one have already shown it by the time this runs. Text fields keep theirs,
+ * where Paste is the point, and so do links, for Copy link address.
+ */
+function onContextMenu(e: MouseEvent): void {
+  if (isTypingTarget(e.target)) return;
+  if (e.target instanceof HTMLElement && e.target.closest('a[href]')) return;
+  e.preventDefault();
+}
+
 /** Search engines and link previews, which render the page but do not trade from it. */
 const IS_CRAWLER = /bot\b|crawler|spider|slurp|facebookexternalhit|bingpreview|embedly|preview/i.test(navigator.userAgent);
 
@@ -377,9 +398,11 @@ export function App() {
     void syncWithServer();
     startAlerts();
     addEventListener('keydown', onKeyDown);
+    addEventListener('contextmenu', onContextMenu);
     const off = onEngineFailure(setEngineError);
     onCleanup(() => {
       removeEventListener('keydown', onKeyDown);
+      removeEventListener('contextmenu', onContextMenu);
       off();
     });
   });

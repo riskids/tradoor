@@ -67,6 +67,15 @@ function touched(): void {
   serverTimer = setTimeout(() => void saveServer(), 1500);
 }
 
+/** Write the workspace this instant. It saves itself a second or so after every
+ *  change; this only brings that forward, for a reader who reached for Ctrl+S. */
+export function saveNow(): void {
+  clearTimeout(localTimer);
+  saveLocal();
+  clearTimeout(serverTimer);
+  void saveServer();
+}
+
 /** Structural changes: clone, mutate, reconcile. */
 export function update(mutate: (draft: WorkspaceDoc) => void): void {
   const draft = structuredClone(unwrap(doc));
