@@ -410,11 +410,12 @@ fn condition_label(condition: &str) -> &str {
 }
 
 /// Tell the reader an alert fired, if they linked a chat for it.
-pub async fn notify_fired(telegram: Option<&Arc<Telegram>>, owner: &str, alert: &tokio_postgres::Row, value: f64, at: i64) {
+pub async fn notify_fired(telegram: Option<&Arc<Telegram>>, owner: &str, alert: &tokio_postgres::Row, value: f64, at: i64, approach: Option<f64>) {
     let Some(telegram) = telegram else { return };
     let (market, condition): (String, String) = (alert.get(1), alert.get(2));
     let (level, note, start): (f64, Option<String>, Option<f64>) = (alert.get(3), alert.get(4), alert.get(9));
-    telegram.send_to_owner(owner, |offset| alert_text(&market, &condition, level, value, start, note.as_deref(), at, offset)).await;
+    let from = start.or(approach);
+    telegram.send_to_owner(owner, |offset| alert_text(&market, &condition, level, value, from, note.as_deref(), at, offset)).await;
 }
 
 // ---------------------------------------------------------------- the API

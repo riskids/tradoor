@@ -201,9 +201,10 @@ function chime(): void {
   }
 }
 
-function announce(a: Alert, value: number): void {
+function announce(a: Alert, value: number, from: number | null): void {
   const title = titleOf(a);
-  const way = rose(a.condition, a.price, a.startPrice);
+  // Without the price it was set from, the price it came from says the way.
+  const way = rose(a.condition, a.price, a.startPrice ?? from);
   const body = `${a.message ? `${a.message} · ` : ''}price ${formatPrice(value, digitsFor(a.market, value))}`;
   toast({ tone: 'alert', title, body, way, action: () => openMarket(a.market) }, 30_000);
   chime();
@@ -232,8 +233,8 @@ function onPrice(market: string, cur: number): void {
     if (!a.active || a.market !== market || firing.has(a.id) || !fires(a.condition, a.price, prev, cur)) continue;
     firing.add(a.id);
     upsert({ ...a, active: false, triggeredAt: Date.now(), triggerPrice: cur });
-    announce(a, cur);
-    api.triggerAlert(a.id, cur).then(
+    announce(a, cur, prev);
+    api.triggerAlert(a.id, cur, prev).then(
       ({ alert, log }) => {
         upsert(alert);
         if (log) setState('log', (list) => [log, ...list]);

@@ -253,7 +253,7 @@ async fn session(
                         .collect();
                     for alert in due {
                         fired.insert(alert.id);
-                        if let Err(e) = trigger(pool, telegram, &alert, price).await {
+                        if let Err(e) = trigger(pool, telegram, &alert, price, prev).await {
                             tracing::warn!(alert = alert.id, error = %e, "recording an alert trigger");
                         }
                     }
@@ -280,12 +280,12 @@ async fn session(
     }
 }
 
-async fn trigger(pool: &deadpool_postgres::Pool, telegram: Option<&Arc<Telegram>>, alert: &Watched, value: f64) -> anyhow::Result<()> {
+async fn trigger(pool: &deadpool_postgres::Pool, telegram: Option<&Arc<Telegram>>, alert: &Watched, value: f64, approach: Option<f64>) -> anyhow::Result<()> {
     let client = pool.get().await?;
     let now = now_ms();
-    let Some((fired, _)) = alerts::record_trigger(&client, &alert.owner, alert.id, value, now).await? else { return Ok(()) };
+    let Some((fired, _)) = alerts::record_trigger(&client, &alert.owner, alert.id, value, now, approach).await? else { return Ok(()) };
     tracing::info!(alert = alert.id, market = %alert.market, condition = %alert.condition, level = alert.price, value, "alert fired");
-    telegram::notify_fired(telegram, &alert.owner, &fired, value, now).await;
+    telegram::notify_fired(telegram, &alert.owner, &fired, value, now, approach).await;
     Ok(())
 }
 
@@ -346,15 +346,16 @@ mod tests {
             .unwrap()
             .get(0);
 
-        let first = alerts::record_trigger(&client, OWNER, id, 101.0, now).await.unwrap();
+        let first = alerts::record_trigger(&client, OWNER, id, 101.0, now, Some(99.0)).await.unwrap();
         assert!(first.is_some(), "the price met the level");
-        let again = alerts::record_trigger(&client, OWNER, id, 102.0, now + 1).await.unwrap();
+        let again = alerts::record_trigger(&client, OWNER, id, 102.0, now + 1, None).await.unwrap();
         assert!(again.is_none(), "the page reporting the same cross writes nothing");
 
         let row = client.query_one("SELECT active, trigger_price FROM alert WHERE id = $1", &[&id]).await.unwrap();
         assert_eq!((row.get::<_, bool>(0), row.get::<_, f64>(1)), (false, 101.0));
-        let logs: i64 = client.query_one("SELECT count(*) FROM alert_log WHERE owner = $1", &[&OWNER]).await.unwrap().get(0);
-        assert_eq!(logs, 1, "one line, from the watcher that got there first");
+        let log = client.query_one("SELECT count(*), min(start_price) FROM alert_log WHERE owner = $1", &[&OWNER]).await.unwrap();
+        assert_eq!(log.get::<_, i64>(0), 1, "one line, from the watcher that got there first");
+        assert_eq!(log.get::<_, Option<f64>>(1), Some(99.0), "the price it came from, for an alert that kept none");
 
         client.execute("DELETE FROM alert_log WHERE owner = $1", &[&OWNER]).await.unwrap();
         client.execute("DELETE FROM alert WHERE owner = $1", &[&OWNER]).await.unwrap();

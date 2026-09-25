@@ -121,22 +121,28 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(body
 /// Stop an alert at the price that met it and write its log line, returning
 /// both rows. `None` when it had already stopped: only an active alert fires,
 /// so a second watcher reporting the same cross is not a second trigger.
+///
+/// `approach` is the price before the one that met the level — for an alert
+/// made before the price it was set from was kept, that is what says which way
+/// the price came, and the log keeps it so the line reads right ever after.
 pub async fn record_trigger(
     client: &tokio_postgres::Client,
     owner: &str,
     id: i64,
     value: f64,
     now: i64,
+    approach: Option<f64>,
 ) -> Result<Option<(tokio_postgres::Row, tokio_postgres::Row)>, tokio_postgres::Error> {
     let fired = client
         .query_opt(&format!("UPDATE alert SET active = FALSE, triggered_at = $3, trigger_price = $4 WHERE id = $1 AND owner = $2 AND active RETURNING {COLUMNS}"), &[&id, &owner, &now, &value])
         .await?;
     let Some(fired) = fired else { return Ok(None) };
+    let from = fired.get::<_, Option<f64>>(9).or(approach);
     let log = client
         .query_one(
             "INSERT INTO alert_log (owner, alert_id, market, condition, price, message, time, value, start_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING id, alert_id, market, condition, price, message, time, value, start_price",
-            &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value, &fired.get::<_, Option<f64>>(9)],
+            &[&owner, &id, &fired.get::<_, String>(1), &fired.get::<_, String>(2), &fired.get::<_, f64>(3), &fired.get::<_, Option<String>>(4), &now, &value, &from],
         )
         .await?;
     client
@@ -158,11 +164,13 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
 
     if let Some(t) = b.get("triggered") {
         let value = t.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| ApiError::bad_request("triggered.value must be the price that fired it"))?;
+        // The price before the one that met it, when the page knows it.
+        let approach = t.get("from").and_then(Value::as_f64).filter(|p| p.is_finite() && *p > 0.0);
         let now = now_ms();
-        let Some((fired, log)) = record_trigger(&client, &owner, id, value, now).await? else {
+        let Some((fired, log)) = record_trigger(&client, &owner, id, value, now, approach).await? else {
             return Ok(Json(json!({ "alert": row_json(&row), "log": null })));
         };
-        crate::telegram::notify_fired(state.telegram.as_ref(), &owner, &fired, value, now).await;
+        crate::telegram::notify_fired(state.telegram.as_ref(), &owner, &fired, value, now, approach).await;
         return Ok(Json(json!({ "alert": row_json(&fired), "log": log_json(&log) })));
     }
 

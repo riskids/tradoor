@@ -210,7 +210,7 @@ export const api = {
   alerts: () => json<{ alerts: Alert[]; log: AlertLog[] }>('/api/alerts'),
   createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null; atPrice?: number }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
   updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean; atPrice?: number }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
-  triggerAlert: (id: number, value: number) => json<{ alert: Alert; log: AlertLog | null }>(`/api/alerts/${id}`, { method: 'PATCH', body: { triggered: { value } } }),
+  triggerAlert: (id: number, value: number, from?: number | null) => json<{ alert: Alert; log: AlertLog | null }>(`/api/alerts/${id}`, { method: 'PATCH', body: { triggered: { value, from } } }),
   deleteAlert: (id: number) => send(`/api/alerts/${id}`, { method: 'DELETE' }),
   clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),
   restartAlerts: () => json<{ restarted: number }>('/api/alerts/restart', { method: 'POST' }),
