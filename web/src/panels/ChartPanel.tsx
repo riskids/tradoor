@@ -7,12 +7,13 @@ import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, S
 import { chartControllers, cycleMagnet, magnet, setOverlay, TOOL_KEYS } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
-import { api, catalog, errorText, type ChartKind, type Drawing, type FlowMinute, type Product } from '../lib/api';
+import { api, catalog, errorText, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
 import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
 import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
+import { flowMarks, watchFlowMarks } from '../lib/flow-marks';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, formatTurnover, MAX_PRICE_DECIMALS } from '../lib/format';
 import type { LastPrice } from '../lib/last-price';
@@ -32,9 +33,6 @@ import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../wo
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
 const OpenInterestSettings = lazy(() => import('../components/OpenInterestSettings').then((m) => ({ default: m.OpenInterestSettings })));
 const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
-
-/** How often the minutes to mark are asked for again. */
-const FLOW_POLL_MS = 15_000;
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: '', icon: 'pointer', title: 'Select and pan (Esc) — click a drawing to select it, then Delete to remove it' },
@@ -167,31 +165,14 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   // ---------------------------------------------------------------- flow
   // Minutes whose taker flow ran hard, marked on the candles. The server keeps
   // two days of them; which ones count is the threshold set in the flow panel.
-  const [flowMarks, setFlowMarks] = createSignal<FlowMinute[]>([]);
+  createEffect(() => onCleanup(watchFlowMarks(market())));
   createEffect(() => {
-    const where = market();
-    let live = true;
-    const read = async () => {
-      try {
-        const { minutes } = await api.flowMinutes(where);
-        if (live) {
-          setFlowMarks(minutes);
-          send({ t: 'flow', id: sid, marks: minutes.map((m) => ({ at: m.at, price: m.price, usd: m.deltaUsd })) });
-        }
-      } catch {
-        // A server that follows no flow simply has none to mark.
-      }
-    };
-    void read();
-    const timer = setInterval(() => void read(), FLOW_POLL_MS);
-    onCleanup(() => {
-      live = false;
-      clearInterval(timer);
-    });
+    const list = flowMarks(market());
+    send({ t: 'flow', id: sid, marks: list.map((m) => ({ at: m.at, price: m.price, usd: m.deltaUsd })) });
   });
   const hoveredFlow = () => {
     const at = legend()?.flow;
-    const mark = at && flowMarks()[at.index];
+    const mark = at && flowMarks(market())[at.index];
     return mark ? { mark, x: at.x, y: at.y } : null;
   };
 

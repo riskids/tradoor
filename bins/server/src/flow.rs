@@ -359,7 +359,7 @@ async fn report(flow: &Flow, watch: &Watch, delta: f64, price: f64) -> anyhow::R
 
 /// What a crossing says, in the page's own wording and the reader's hours.
 pub fn flow_text(market: &str, delta: f64, price: f64, at: i64, offset: i32) -> String {
-    let (way, side) = if delta > 0.0 { ("📈", "bought") } else { ("📉", "sold") };
+    let (way, side) = if delta > 0.0 { ("🟢", "bought") } else { ("🔴", "sold") };
     let name = MarketRef::parse(market).map_or_else(|| market.to_string(), |m| format!("{} {}", m.symbol, if m.venue.id().ends_with("perp") { "perp" } else { "spot" }));
     format!(
         "{way} {name} — {} net {side} in a minute\nprice {} — {}",
@@ -517,8 +517,8 @@ mod tests {
     fn a_crossing_reads_as_a_sentence() {
         let at = tradoor_core::time::parse_iso("2026-09-25T04:05:00Z").unwrap();
         let bought = flow_text("binance-perp:BTCUSDT", 5_400_000.0, 84_150.0, at, 8 * 60);
-        assert_eq!(bought, "📈 BTCUSDT perp — 5.4M net bought in a minute\nprice 84,150.00 — 2026-09-25 12:05 UTC+8");
+        assert_eq!(bought, "🟢 BTCUSDT perp — 5.4M net bought in a minute\nprice 84,150.00 — 2026-09-25 12:05 UTC+8");
         let sold = flow_text("binance-spot:BTCUSDT", -1_250_000.0, 84_000.0, at, 0);
-        assert!(sold.starts_with("📉 BTCUSDT spot — 1.2M net sold in a minute"), "{sold}");
+        assert!(sold.starts_with("🔴 BTCUSDT spot — 1.2M net sold in a minute"), "{sold}");
     }
 }

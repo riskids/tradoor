@@ -154,8 +154,8 @@ browser id the chat belongs to; `/stop` in the chat ends it. Updates are long
 polled, so the server needs nothing reachable from the internet, and messages
 go out one at a time to stay inside Telegram's per-chat rate. Each carries the
 level, the price that met it and the time in the reader's own zone, with a
-chart up or down for the way it came — a chat message has no colour, where the
-page draws the same thing as a green or red arrow. Messages are taken back
+green or red circle for the way it came — a chat message carries no colour of
+its own, where the page draws the same thing as a green or red arrow. Messages are taken back
 after two days by default (Settings can change it, or keep them): Telegram
 allows that for 48 hours after sending and not a minute longer. The watchlist streams each
 market's daily candle, so its change and volume run from 00:00 UTC as

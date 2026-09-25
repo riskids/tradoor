@@ -125,7 +125,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * Exchange hosts this browser could not reach. Some networks block the
  * exchanges' names — a phone on an Indonesian carrier — so their calls go
  * through the tradoor server instead, which can still reach them. Once a host
- * fails it goes that way for the rest of the session.
+ * fails it goes that way for the rest of the session: a worker has no storage
+ * to remember it past that, and the doomed attempt costs only the first call.
  */
 const unreachable = new Set<string>();
 // Kraken Futures answers with an empty Access-Control-Allow-Origin, which no browser accepts.
@@ -273,7 +274,9 @@ const OLDER_BARS = 5_000;
 const MAX_TAIL_PAGES = 12;
 const TAIL_THROTTLE_MS = 30_000;
 /** A series nobody reads is dropped after this long — a deep 1m history is large. */
-const EVICT_MS = 2 * MINUTE;
+/** How long a series with no chart on it is kept: long enough that going back
+ *  to a market, or to a tab left open, costs nothing. */
+const EVICT_MS = 15 * MINUTE;
 
 const registry = new Map<string, Series>();
 

@@ -10,7 +10,7 @@
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { setOverlay } from '../app/ui';
-import { watchDay, type Day } from '../lib/day-feed';
+import { dayOf, watchDay, type Day } from '../lib/day-feed';
 import { catalog, type Catalog } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { formatPct, formatPrice, formatVolume, priceDecimals } from '../lib/format';
@@ -79,7 +79,13 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
       }
     }
     for (const m of want) {
-      if (!subs.has(m)) subs.set(m, watchDay(m, (day) => setRows(m, { last: day.close, day })));
+      if (!subs.has(m)) {
+        // What the page already knows, so a panel mounted afresh shows numbers
+        // at once rather than dashes until the market trades again.
+        const known = dayOf(m);
+        if (known) setRows(m, { last: known.close, day: known });
+        subs.set(m, watchDay(m, (day) => setRows(m, { last: day.close, day })));
+      }
     }
   });
   onCleanup(() => {

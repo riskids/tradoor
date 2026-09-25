@@ -376,8 +376,8 @@ pub fn stamp(at: i64, offset: i32) -> String {
 pub fn alert_text(market: &str, condition: &str, level: f64, value: f64, start: Option<f64>, message: Option<&str>, at: i64, offset: i32) -> String {
     let digits = Some(price_precision([level, value]));
     let way = match crate::alerts::rose(condition, level, start) {
-        Some(true) => "📈 ",
-        Some(false) => "📉 ",
+        Some(true) => "🟢 ",
+        Some(false) => "🔴 ",
         None => "",
     };
     let mut text = format!("{way}{} {} {}\nfired at {} — {}", tv_name(market), condition_label(condition), format_price(level, digits), format_price(value, digits), stamp(at, offset));
@@ -506,9 +506,9 @@ mod tests {
         let text = alert_text("binance-perp:BTCUSDT", "crossing", 83_520.5, 83_734.9, None, None, at, 0);
         assert_eq!(text, "BTCUSDT.P Crossing 83,520.50\nfired at 83,734.90 — 2026-09-24 22:05 UTC", "a bare crossing with nothing to compare says no way");
         let noted = alert_text("bybit-spot:SOLUSDT", "greater", 114.8, 115.2, None, Some("  take the swing  "), at, 0);
-        assert_eq!(noted, "📈 SOLUSDT Greater Than 114.80\nfired at 115.20 — 2026-09-24 22:05 UTC\ntake the swing");
+        assert_eq!(noted, "🟢 SOLUSDT Greater Than 114.80\nfired at 115.20 — 2026-09-24 22:05 UTC\ntake the swing");
         let fell = alert_text("binance-perp:BTCUSDT", "crossing", 80_000.0, 79_990.0, Some(83_000.0), None, at, 0);
-        assert!(fell.starts_with("📉 BTCUSDT.P Crossing"), "set below the price and reached: a fall");
+        assert!(fell.starts_with("🔴 BTCUSDT.P Crossing"), "set below the price and reached: a fall");
     }
 
     #[test]

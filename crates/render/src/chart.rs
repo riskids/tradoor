@@ -1061,7 +1061,8 @@ impl Chart {
         let door = [(9.4, 3.0), (13.6, 1.2), (13.6, 14.8), (9.4, 13.0), (9.4, 3.0)];
         f.polyline(&door.iter().map(|(dx, dy)| at(*dx, *dy)).collect::<Vec<_>>(), line, accent.with_alpha(175));
         f.rect(x + 3.3 * u, y + 7.6 * u, 1.7 * u, 3.4 * u, accent.with_alpha(205));
-        f.rect(x + 6.2 * u, y + 5.6 * u, 1.7 * u, 5.2 * u, accent.with_alpha(205));
+        // The middle candle is the falling one, as the icon draws it.
+        f.rect(x + 6.2 * u, y + 5.6 * u, 1.7 * u, 5.2 * u, self.theme.bear.with_alpha(205));
     }
 
     fn request_history_if_near_start(&mut self) {
