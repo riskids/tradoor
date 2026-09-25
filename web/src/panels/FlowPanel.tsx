@@ -65,7 +65,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
   const digits = (m: { price: number }) => priceDecimals(m.price);
 
   return (
-    <div class="panel flow">
+    <div class="panelcol flow">
       <div class="al-tabs">
         <button class={props.panel.tab === 'crossings' ? 'on' : ''} onClick={() => patchPanel(id, { tab: 'crossings' })}>
           Crossings

@@ -74,6 +74,10 @@ function TelegramRow() {
   const load = async () => {
     try {
       const next = await api.telegram();
+      // A code is good for fifteen minutes and spent once, so keep a fresh one
+      // in hand: one when this opens, another after a chat takes the last.
+      const linked = status()?.chats.length ?? 0;
+      if (next.enabled && next.bot && (!invite() || next.chats.length !== linked)) void mint();
       setStatus(next);
       setError(null);
       // Their zone changed, or summer time moved it: the chats follow.
@@ -91,15 +95,16 @@ function TelegramRow() {
   const timer = setInterval(() => void load().then(() => setWaiting((w) => w && (status()?.chats.length ?? 0) === 0)), 3_000);
   onCleanup(() => clearInterval(timer));
 
-  const connect = async () => {
-    setError(null);
+  // The link is minted before it is needed, so the button is a plain link a
+  // browser will follow: one opened after waiting on the server is a popup,
+  // and a popup is blocked.
+  const [invite, setInvite] = createSignal<{ url: string; code: string } | null>(null);
+  const mint = async () => {
     try {
-      const { url } = await api.telegramLink(clock());
-      setWaiting(true);
-      open(url, '_blank', 'noopener');
-      setNote('Press Start in Telegram; this list fills in when the bot has the chat.');
-    } catch (e) {
-      setError(errorText(e));
+      const { url, code } = await api.telegramLink(clock());
+      setInvite({ url, code });
+    } catch {
+      setInvite(null); // The bot may not have answered yet; the status line says so.
     }
   };
 
@@ -148,10 +153,19 @@ function TelegramRow() {
                 </select>
               </label>
             </Show>
-            <div style={{ display: 'flex', gap: '6px', 'align-items': 'center', 'margin-top': '6px' }}>
-              <button class="btn" onClick={() => void connect()} disabled={!s().bot}>
-                {s().chats.length > 0 ? 'Connect another chat' : 'Connect Telegram'}
-              </button>
+            <div style={{ display: 'flex', gap: '6px', 'align-items': 'center', 'margin-top': '6px', 'flex-wrap': 'wrap' }}>
+              <Show when={invite()} fallback={<span class="dim">{s().bot ? 'Making a link…' : 'The bot has not answered yet.'}</span>}>
+                {(link) => (
+                  <>
+                    <a class="btn" href={link().url} target="_blank" rel="noopener" onClick={() => setWaiting(true)}>
+                      {s().chats.length > 0 ? 'Connect another chat' : 'Connect Telegram'}
+                    </a>
+                    <span class="dim num" data-tip="Or send the bot /start with this code">
+                      /start {link().code}
+                    </span>
+                  </>
+                )}
+              </Show>
               <Show when={s().chats.length > 0}>
                 <button class="btn" onClick={() => void act(() => api.telegramTest(), 'Test message sent.')}>
                   Send a test
