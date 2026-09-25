@@ -163,6 +163,8 @@ class Slot {
   private price = Number.NaN;
   private priceDirty = false;
   private priceTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Waiting on the first candles of a market just chosen. */
+  private fresh = false;
   private demo: ReturnType<typeof setInterval> | undefined;
   /** Its tab is not shown: nothing is drawn, everything else carries on. */
   hidden = false;
@@ -347,8 +349,11 @@ class Slot {
     this.price = Number.NaN;
     this.markPrice();
     this.engine.clear_live();
-    this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.engine.set_days(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
+    // What is drawn stays, dimmed, rather than blanking the chart for the
+    // third of a second the next market's candles take to arrive.
+    this.fresh = true;
+    this.engine.set_loading(true);
     this.metaDirty = true;
     let tf: TfInfo;
     try {
@@ -375,6 +380,9 @@ class Slot {
   }
 
   private fail(error: string): void {
+    this.fresh = false;
+    this.engine.set_loading(false);
+    this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.engine.set_message(`Could not load candles — ${error}`);
     this.setStatus({ loading: false, error });
   }
@@ -400,6 +408,13 @@ class Slot {
   private pushCandles(): void {
     const k = this.closed;
     this.engine.set_candles(k.time, k.open, k.high, k.low, k.close, k.volume);
+    if (this.fresh && k.time.length > 0) {
+      // A market of its own opens at its own last bars, not where the one
+      // before was scrolled to.
+      this.fresh = false;
+      this.engine.set_loading(false);
+      this.engine.reset_view();
+    }
     // A bar longer than a day opens before the week, month or year it sits in,
     // so key levels read the daily bars it was folded from where there are any.
     const days = this.series?.interval === '1d' && info(this.timeframe).barMs > intervalMs('1d') ? this.series.cols : null;
@@ -644,7 +659,31 @@ const calls: Handlers = {
   values: valuesCall,
   daily: dailyCall,
   capture: captureCall,
+  prefetch: prefetchCall,
 };
+
+/**
+ * A market the reader is about to ask for: the pointer resting on a watchlist
+ * row is enough. The series lands in the registry, where the chart finds it
+ * already loaded — on a market with no archive that is the third of a second
+ * the exchange takes. Failures are silent: nobody asked for anything yet.
+ */
+async function prefetchCall({ market, timeframe }: Calls['prefetch']['args']): Promise<null> {
+  try {
+    const tf = info(timeframe);
+    const series = await openSeries(market, tf.base, tf.interval);
+    // Held while it loads, so it is not evicted before the chart arrives.
+    const release = series.subscribe(() => {});
+    try {
+      await series.ensure(baseBars(series, tf, CHART_BARS));
+    } finally {
+      release();
+    }
+  } catch {
+    // The chart will say what went wrong when it is really asked for.
+  }
+  return null;
+}
 
 /** The most a picture is blown up: past this it is pixels, not detail. */
 const MAX_CAPTURE_SCALE = 6;

@@ -197,6 +197,11 @@ impl ChartEngine {
         ok
     }
 
+    /// Another market's candles are on the way: hold what is drawn, dimmed.
+    pub fn set_loading(&mut self, loading: bool) {
+        self.chart.set_loading(loading);
+    }
+
     pub fn set_message(&mut self, message: &str) {
         self.chart.set_message((!message.is_empty()).then(|| message.to_string()));
     }

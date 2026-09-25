@@ -282,6 +282,8 @@ pub struct Chart {
     alerts: Vec<AlertLine>,
     /// Minutes whose flow ran hard, oldest first, as the page sent them.
     flow: Vec<FlowMark>,
+    /// Another market's candles are on the way; these are the last one's.
+    loading: bool,
     drag: Drag,
     drawings: Vec<DrawingShape>,
     selected: Option<i64>,
@@ -340,6 +342,7 @@ impl Chart {
             crosshair: None,
             alerts: Vec::new(),
             flow: Vec::new(),
+            loading: false,
             drag: Drag::None,
             drawings: Vec::new(),
             tool_style: DrawingStyle::default(),
@@ -391,6 +394,16 @@ impl Chart {
         self.height = height.max(0.0);
         self.dpr = dpr.max(0.5);
         self.touch();
+    }
+
+    /// Waiting on another market's candles: what is drawn is the market just
+    /// left, dimmed, rather than an empty chart — the wait is the same, but the
+    /// eye keeps its place.
+    pub fn set_loading(&mut self, loading: bool) {
+        if self.loading != loading {
+            self.loading = loading;
+            self.touch();
+        }
     }
 
     /// Shown in place of the chart while there are no bars.
@@ -1004,6 +1017,12 @@ impl Chart {
                 self.refresh_tpo();
                 self.paint(&mut frame, now);
                 self.request_history_if_near_start();
+                // The market just left, held until the next one's candles land.
+                if self.loading {
+                    frame.clip(None);
+                    frame.rect(0.0, 0.0, self.width, self.height, self.theme.background.with_alpha(170));
+                    frame.text(self.width / 2.0, self.height / 2.0, "Loading…".to_string(), self.theme.text, Align::Center, Baseline::Middle, self.theme.font_px, None, None);
+                }
             }
         }
         self.frame = frame;
@@ -2931,6 +2950,21 @@ mod tests {
         assert_eq!(c.legend().flow.map(|(i, _, _)| i), Some(0), "the page is told which one is hovered");
         assert!(painted(t.bull.with_alpha(220)) == 0, "and it brightens only once drawn again");
         assert!(c.render(1_800_000_000_000).colors.chunks(4).any(|p| *p == [t.bull.r, t.bull.g, t.bull.b, 220]));
+    }
+
+    #[test]
+    fn the_market_just_left_is_held_dimmed_while_the_next_one_loads() {
+        let mut c = chart();
+        let bright = c.render(1_800_000_000_000).clone();
+        c.set_loading(true);
+        let dim = c.render(1_800_000_000_000).clone();
+        assert!(dim.positions.len() > bright.positions.len(), "the candles are still drawn, with a veil over them");
+        let scrim = c.theme.background.with_alpha(170);
+        assert!(dim.colors.chunks(4).any(|p| *p == [scrim.r, scrim.g, scrim.b, scrim.a]), "the veil is the background, half there");
+        assert!(dim.texts.iter().any(|t| t.text == "Loading…"));
+
+        c.set_loading(false);
+        assert_eq!(c.render(1_800_000_000_000).positions.len(), bright.positions.len(), "and lifts when the candles land");
     }
 
     #[test]

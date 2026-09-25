@@ -10,6 +10,7 @@
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { setOverlay } from '../app/ui';
+import { call } from '../engine/client';
 import { dayOf, watchDay, type Day } from '../lib/day-feed';
 import { catalog, type Catalog } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
@@ -19,7 +20,7 @@ import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
 import { isPerp, parseMarket, symbolOf, venueLabel } from '../lib/markets';
 import { blockOf, FLAG_COLORS, FLAGS, freshName, isSection, move, SECTION_NAME_MAX, sectionEnd, sectionName, sectionStops, visible } from '../lib/watchlist';
 import type { WatchlistPanelState } from '../workspace/model';
-import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart } from '../workspace/store';
+import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart, timeframeOf } from '../workspace/store';
 
 interface Row {
   last: number;
@@ -36,6 +37,9 @@ interface Drag {
   to: number | null;
   lineY: number;
 }
+
+/** How long the pointer rests on a row before its market is fetched. */
+const HOVER_MS = 120;
 
 /** How far a press travels before it is a drag rather than a click. */
 const DRAG_PX = 4;
@@ -92,6 +96,20 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     for (const off of subs.values()) off();
     subs.clear();
   });
+
+  /** A market under the pointer is fetched before it is clicked. */
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  const asked = new Set<string>();
+  const warm = (market: string) => {
+    clearTimeout(hoverTimer);
+    const chart = targetChart();
+    if (!chart || asked.has(market)) return;
+    hoverTimer = setTimeout(() => {
+      asked.add(market);
+      void call('prefetch', { market, timeframe: timeframeOf(chart) }).catch(() => asked.delete(market));
+    }, HOVER_MS);
+  };
+  onCleanup(() => clearTimeout(hoverTimer));
 
   const current = (): string | null => {
     if (props.panel.link) return doc.links[props.panel.link].market;
@@ -334,6 +352,8 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                 classList={{ active: item === current(), dragging: moving(item) }}
                 data-tip={`${symbolOf(item)} · ${venueLabel(item)}`}
                 onPointerDown={(e) => onDown(e, item)}
+                onPointerEnter={() => warm(item)}
+                onPointerLeave={() => clearTimeout(hoverTimer)}
                 onClick={() => !dragged && open(item)}
                 onContextMenu={(e) => openMenu(e, item)}
               >

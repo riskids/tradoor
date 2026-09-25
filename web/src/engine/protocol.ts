@@ -134,6 +134,8 @@ export interface Calls {
   daily: { args: { market: string; days: number }; result: DailyBars };
   /** A picture of one chart as it stands, `wide` pixels across at most. */
   capture: { args: { id: string; wide: number }; result: Blob };
+  /** Fetch a market's history before a chart asks for it. */
+  prefetch: { args: { market: string; timeframe: string }; result: null };
 }
 
 export type CallName = keyof Calls;
