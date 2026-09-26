@@ -7,6 +7,7 @@
  * Run with `deno task test`; tsc skips this file (see tsconfig exclude).
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
+import { FakeTime } from 'jsr:@std/testing@1/time';
 import { isRelayed, nextUrl, StreamHub, type StreamMsg, type StreamSpec } from './streams.ts';
 import type { Venue } from '../lib/markets.ts';
 
@@ -29,7 +30,9 @@ class FakeSocket {
   }
 
   close(): void {
+    if (this.readyState === 3) return;
     this.readyState = 3;
+    this.onclose?.();
   }
 }
 
@@ -184,4 +187,32 @@ Deno.test('a blocked address is stepped over, so the relay is reached at once', 
   assertEquals(nextUrl(urls, 1, dead), urls[2], 'and it stays there while they are');
   assertEquals(nextUrl(urls, 1, () => true), urls[1], 'everything dead: work through them all again rather than stop');
   assert(isRelayed(urls[2]!) && !isRelayed(urls[0]!), 'and the page can say which way it came');
+});
+
+test('a socket that has gone quiet is thrown away, whatever it claims', async () => {
+  const time = new FakeTime();
+  try {
+    FakeSocket.opened = [];
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeSocket;
+    const states: string[] = [];
+    const stop = new StreamHub().subscribe(
+      'binance-perp',
+      { kind: 'kline', symbol: 'BTCUSDT', interval: '1m' },
+      { message: () => {}, state: (state) => states.push(state) },
+    );
+    await time.tickAsync(1);
+    const first = FakeSocket.opened.at(-1)!;
+    first.onmessage?.({ data: JSON.stringify({ e: 'kline', s: 'BTCUSDT', k: { t: 0, o: '1', h: '1', l: '1', c: '1', v: '1', L: 1, x: false } }) });
+    assertEquals(states.at(-1), 'live', 'it carried a candle');
+
+    // Half a minute of silence: on iOS that is a socket handed back dead after a lock.
+    await time.tickAsync(36_000);
+    assertEquals(first.readyState, 3, 'the quiet socket was closed');
+    assertEquals(states.at(-1), 'retrying', 'and the chart says so rather than showing a frozen price as live');
+    await time.tickAsync(2_000);
+    assert(FakeSocket.opened.length > 1, 'and another was opened in its place');
+    stop();
+  } finally {
+    time.restore();
+  }
 });

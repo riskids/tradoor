@@ -253,6 +253,16 @@ export function nextUrl(urls: readonly string[], index: number, dead: (url: stri
 /** Whether a stream arrives through the tradoor server rather than the exchange. */
 export const isRelayed = (url: string): boolean => url.includes('/api/relay/ws');
 
+/**
+ * A socket that has said nothing this long is dead whatever it claims: iOS
+ * hands a page back after a lock with sockets that are open and carry nothing,
+ * and the price simply stops. Every exchange either pushes a candle every
+ * couple of seconds or answers the heartbeat every fifteen, so half a minute of
+ * silence is not a quiet market — it is a socket to throw away.
+ */
+const SILENT_MS = 30_000;
+const WATCH_MS = 5_000;
+
 const STALL_MS = 12_000;
 const RETRY_MS = [1_000, 3_000, 5_000, 10_000];
 const HEARTBEAT_MS = 15_000;
@@ -282,6 +292,9 @@ class Connection {
   private heard = false;
   private retryTimer: Timer | undefined;
   private stallTimer: Timer | undefined;
+  private watchTimer: ReturnType<typeof setInterval> | undefined;
+  /** When this socket last carried anything at all. */
+  private lastHeard = 0;
   private lingerTimer: Timer | undefined;
   private beatTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -373,6 +386,7 @@ class Connection {
     const ws = new WebSocket(this.url);
     this.ws = ws;
     this.heard = false;
+    this.lastHeard = Date.now();
 
     ws.onopen = () => {
       this.pending.subscribe.clear();
@@ -386,6 +400,13 @@ class Connection {
         this.setState('stalled');
         if (this.proto.urls.length > 1) ws.close();
       }, STALL_MS);
+      // Open and carrying nothing is not a state a socket reports, so it is
+      // watched for: gone quiet, it is closed, and closing is what reconnects.
+      this.watchTimer = setInterval(() => {
+        if (Date.now() - this.lastHeard < SILENT_MS) return;
+        this.setState('stalled');
+        ws.close();
+      }, WATCH_MS);
       if (this.proto.heartbeat !== undefined) {
         const beat = typeof this.proto.heartbeat === 'string' ? this.proto.heartbeat : JSON.stringify(this.proto.heartbeat);
         this.beatTimer = setInterval(() => {
@@ -395,6 +416,7 @@ class Connection {
     };
 
     ws.onmessage = (event) => {
+      this.lastHeard = Date.now();
       let msg: unknown;
       try {
         msg = JSON.parse(String(event.data));
@@ -435,8 +457,10 @@ class Connection {
   private clearTimers(): void {
     clearTimeout(this.stallTimer);
     clearInterval(this.beatTimer);
+    clearInterval(this.watchTimer);
     this.stallTimer = undefined;
     this.beatTimer = undefined;
+    this.watchTimer = undefined;
   }
 
   private shutdown(): void {
