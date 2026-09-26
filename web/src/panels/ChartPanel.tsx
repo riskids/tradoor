@@ -1117,17 +1117,17 @@ function LayerRow(props: {
         <Show when={props.onSettings}>
           {(open) => (
             <button data-tip="Settings" onClick={() => open()()}>
-              <Icon name="settings" size={12} />
+              <Icon name="settings" size={13} />
             </button>
           )}
         </Show>
         <button data-tip={props.off ? 'Show' : 'Hide'} onClick={() => props.onToggle()}>
-          <Icon name={props.off ? 'eyeOff' : 'eye'} size={12} />
+          <Icon name={props.off ? 'eyeOff' : 'eye'} size={13} />
         </button>
         <Show when={props.onRemove}>
           {(remove) => (
             <button data-tip="Remove" onClick={() => remove()()}>
-              <Icon name="close" size={12} />
+              <Icon name="close" size={13} />
             </button>
           )}
         </Show>

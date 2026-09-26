@@ -201,8 +201,14 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .layer { display: flex; align-items: center; gap: 6px; padding: 0 3px; pointer-events: auto; background: color-mix(in oklab, var(--surface) 72%, transparent); }
 .layer .name { color: var(--muted); }
 .layer.off .name { color: var(--dim); text-decoration: line-through; }
-.layer .btns { display: flex; gap: 2px; opacity: 0; }
-.layer:hover .btns { opacity: 1; }
+/* The eye, the settings and the remove: invisible until the pointer is on
+   their own row, they were not so much discreet as undiscoverable. Anywhere
+   on the legend brings them out faintly, the row under the pointer fully, and
+   a layer already hidden keeps its crossed eye so it can be brought back. */
+.layer .btns { display: flex; gap: 3px; opacity: 0; transition: opacity 0.1s; }
+.legend:hover .layer .btns { opacity: 0.5; }
+.layer:hover .btns, .layer.off .btns { opacity: 1; }
+.layer .btns button { padding: 0 1px; }
 /* A finger cannot hover, so on a touch screen the eye and the rest are always
    out: without them an indicator there could be neither hidden nor removed. */
 @media (hover: none) {
