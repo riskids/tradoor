@@ -2,8 +2,8 @@
  * The terminal layout: splits with draggable gutters, tab groups, and docking
  * by dragging a tab onto another group's centre or edge.
  */
-import { createSignal, For, lazy, Match, onCleanup, Show, Switch, untrack, type JSX } from 'solid-js';
-import { dragging, setDragging } from '../app/ui';
+import { createEffect, createSignal, For, lazy, Match, on, onCleanup, Show, Switch, type JSX } from 'solid-js';
+import { dragging, mobileMenu, setDragging, setMobile, setMobileMenu, setOverlay } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { unread } from '../lib/alerts';
 import { Icon } from '../lib/icons';
@@ -11,7 +11,7 @@ import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
-import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
+import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, tabsOf, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
 import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, timeframeOf, update } from './store';
 
 // Side panels, fetched when a layout shows one: the chart and watchlist come first.
@@ -31,7 +31,7 @@ export function panelTitle(p: Panel): string {
   return `${PANEL_TITLE[p.type]} · ${label}`;
 }
 
-/** Phones and narrow windows: one column the page scrolls, not splits. */
+/** Phones and narrow windows: one chart and a menu, not splits. */
 const MOBILE_QUERY = '(max-width: 760px)';
 
 function useMedia(query: string): () => boolean {
@@ -44,53 +44,142 @@ function useMedia(query: string): () => boolean {
 }
 
 export function Layout() {
-  const mobile = useMedia(MOBILE_QUERY);
+  const narrow = useMedia(MOBILE_QUERY);
+  createEffect(() => setMobile(narrow()));
+  onCleanup(() => setMobile(false));
   return (
-    <div class="workspace" classList={{ mobile: mobile() }}>
-      <Show when={mobile()} fallback={<NodeView node={doc.root} />}>
-        <MobileStack />
+    <div class="workspace" classList={{ mobile: narrow() }}>
+      <Show when={narrow()} fallback={<NodeView node={doc.root} />}>
+        <MobileShell />
       </Show>
     </div>
   );
 }
 
 /**
- * The same workspace laid out for a phone: the chart in use first, as tall as
- * the screen allows with the next panel's header peeking below it, then every
- * other panel in the order the layout holds them. Nothing about the saved
- * layout changes — turn the phone or widen the window and the splits are back.
+ * A phone shows one chart and nothing else. The panels a wide screen keeps
+ * beside it wait behind the menu button in the chart's toolbar, and open over
+ * the chart until they are closed — the shape every phone charting app has,
+ * for the reason all of them have it: splits and tab strips want a mouse and
+ * a wide screen, and on a phone they leave no chart to read.
+ *
+ * The saved layout is untouched: turn the phone or widen the window and the
+ * splits are back as they were. A panel the layout never had is added as a tab
+ * beside the chart the first time it is asked for, which is where it belongs
+ * when that window is wide again.
  */
-function MobileStack() {
-  // Fixed on the way in: touching a chart makes it the one in use, and a panel
-  // that jumped to the top under the finger would be unusable.
-  const lead = untrack(() => targetChart()?.id ?? null);
-  const order = () => {
-    const ids: string[] = [];
-    const walk = (node: LayoutNode): void => {
-      if (node.kind === 'split') node.children.forEach(walk);
-      else ids.push(...node.panels);
-    };
-    walk(doc.root);
-    return lead && ids.includes(lead) ? [lead, ...ids.filter((id) => id !== lead)] : ids;
+function MobileShell() {
+  const [sheet, setSheet] = createSignal<string | null>(null);
+  const charts = (): Panel[] => Object.values(doc.panels).filter((p) => p.type === 'chart');
+  const chart = (): Panel | null => targetChart() ?? charts()[0] ?? null;
+  const open = () => {
+    const id = sheet();
+    return id ? doc.panels[id] : undefined;
   };
+
+  // Choosing a market in the watchlist is what the sheet was opened for, so it
+  // closes itself rather than leaving the chart behind it unseen.
+  createEffect(on(() => { const c = chart(); return c && marketOf(c); }, () => setSheet(null), { defer: true }));
+
+  const show = (type: PanelType) => {
+    setMobileMenu(false);
+    const held = Object.values(doc.panels).find((p) => p.type === type);
+    if (held) {
+      setSheet(held.id);
+      return;
+    }
+    const from = chart();
+    const panel = newPanel(type, from ? { link: from.link, market: marketOf(from), timeframe: timeframeOf(from) } : undefined);
+    update((d) => addPanel(d, panel, from ? (tabsOf(d.root, from.id)?.id ?? null) : null, 'center'));
+    setSheet(panel.id);
+  };
+
+  // A workspace with no chart has nowhere to put the menu button, which the
+  // chart's toolbar carries: it gets a chart, and the phone its top row back.
+  const addChart = () => {
+    const panel = newPanel('chart');
+    update((d) => addPanel(d, panel, null, 'center'));
+    focusPanel(panel.id);
+  };
+
+  const overlay = (kind: 'palette' | 'settings' | 'help') => () => {
+    setMobileMenu(false);
+    setOverlay({ kind });
+  };
+
   return (
-    <For each={order()}>
-      {(id) => (
-        <Show when={doc.panels[id]}>
-          {(panel) => (
-            <section class={`mcell ${panel().type}`} classList={{ lead: id === lead }} onPointerDown={() => focusPanel(id)}>
-              <div class="mhead">
-                <LinkButton panel={panel()} />
-                <span>{panelTitle(panel())}</span>
-              </div>
-              <div class="panelbody">
-                <PanelView panel={panel()} />
-              </div>
-            </section>
-          )}
-        </Show>
-      )}
-    </For>
+    <>
+      <Show
+        when={chart()}
+        fallback={
+          <div class="mempty">
+            <p>This workspace has no chart.</p>
+            <button class="tb" onClick={addChart}>Open one</button>
+          </div>
+        }
+      >
+        {(panel) => (
+          <div class="panelbody" onPointerDown={() => focusPanel(panel().id)}>
+            <PanelView panel={panel()} />
+          </div>
+        )}
+      </Show>
+
+      <Show when={open()}>
+        {(panel) => (
+          <section class="msheet">
+            <header class="mhead">
+              <span class="grow">{panelTitle(panel())}</span>
+              <button class="iconbtn" aria-label="Close" onClick={() => setSheet(null)}>
+                <Icon name="close" size={15} />
+              </button>
+            </header>
+            <div class="panelbody">
+              <PanelView panel={panel()} />
+            </div>
+          </section>
+        )}
+      </Show>
+
+      <Show when={mobileMenu()}>
+        <div class="mscrim" onClick={() => setMobileMenu(false)} />
+        <nav class="mdrawer">
+          {/* Charts have their own section below: `tpo` is one of them, and
+              asking for it here would make a new one every time. */}
+          <For each={PANEL_TYPES.filter((t) => t !== 'chart' && t !== 'tpo')}>
+            {(type) => (
+              <button onClick={() => show(type)}>
+                <span class="grow">{PANEL_TITLE[type]}</span>
+                <Show when={type === 'alerts' && unread() > 0}>
+                  <span class="al-badge">{unread()}</span>
+                </Show>
+              </button>
+            )}
+          </For>
+          <Show when={charts().length > 1}>
+            <hr />
+            <div class="cap">Charts</div>
+            <For each={charts()}>
+              {(c) => (
+                <button
+                  classList={{ cur: c.id === chart()?.id }}
+                  onClick={() => {
+                    focusPanel(c.id);
+                    setMobileMenu(false);
+                  }}
+                >
+                  {panelTitle(c)}
+                </button>
+              )}
+            </For>
+          </Show>
+          <hr />
+          <button onClick={overlay('palette')}>Commands</button>
+          <button onClick={overlay('settings')}>Settings</button>
+          <button onClick={overlay('help')}>Shortcuts</button>
+        </nav>
+      </Show>
+    </>
   );
 }
 

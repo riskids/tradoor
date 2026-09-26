@@ -4,7 +4,7 @@
  * pointer input.
  */
 import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
-import { chartControllers, cycleMagnet, magnet, setOverlay, TOOL_KEYS } from '../app/ui';
+import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, TOOL_KEYS } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type ChartKind, type Drawing, type Product } from '../lib/api';
@@ -581,6 +581,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   return (
     <div class="panelcol" style={{ position: 'relative' }}>
       <div class="toolbar">
+        {/* On a phone this row is the whole top of the app, so it carries the
+            menu the rest of the workspace waits behind. */}
+        <Show when={mobile()}>
+          <button class="iconbtn burger" aria-label="Menu" onClick={() => setMobileMenu(true)}>
+            <Icon name="menu" size={17} />
+          </button>
+        </Show>
         <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
           {symbolOf(market())}
           <Icon name="chevron" size={10} />

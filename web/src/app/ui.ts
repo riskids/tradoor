@@ -47,6 +47,12 @@ export const TOOL_KEYS: Record<string, string> = {
   KeyB: 'brush',
   KeyP: 'path',
 };
+/** A phone, where the workspace is one chart and a menu (Layout's MobileShell).
+ *  Set by the layout, read by the chart, whose toolbar carries the button. */
+export const [mobile, setMobile] = createSignal(false);
+/** Whether that menu is open. */
+export const [mobileMenu, setMobileMenu] = createSignal(false);
+
 /** Alt + this key turns the magnet through off, weak and strong. */
 export const MAGNET_KEY = 'KeyG';
 /** Alt + this key copies a picture of the chart; with shift, saves the file. */

@@ -214,10 +214,14 @@ Shapes are drawn with WebGL2 in the worker where the browser allows it there
 where it does not: a frame is single-coloured triangles, so runs of one colour
 fill as one path. `?renderer=2d` forces that path in development.
 
-On a phone (under 760px wide) the workspace is shown as one scrolling column
-rather than splits: the chart in use first, as tall as the screen less a peek of
-the next panel, then every other panel in layout order. The saved layout is not
-changed, so a wider window shows the splits again.
+On a phone (under 760px wide) the workspace is one chart and nothing else,
+the shape every phone charting app has: the chart in use fills the screen, its
+own toolbar is the top of the app and carries the menu, and the panels a wide
+window keeps beside it open over the chart from that menu, one at a time. A
+panel the layout never had is added as a tab beside the chart the first time it
+is asked for. Choosing a market in the watchlist closes the sheet, since that is
+what it was opened for. The saved layout is not changed, so a wider window shows
+the splits again.
 
 A chart panel's canvases and engine slot live as long as the panel, not as long
 as its tab is shown: a browser allows a page about sixteen WebGL contexts and

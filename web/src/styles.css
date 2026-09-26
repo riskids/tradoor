@@ -297,26 +297,41 @@ table.venues tr.off td { color: var(--dim); }
 .note { padding: 5px 8px; font-size: 10px; line-height: 1.5; color: var(--dim); }
 
 /* ------------------------------------------------------------ phones
-   The workspace becomes one scrolling column (Layout's MobileStack): the chart
-   in use as tall as the screen less a peek of the next panel, the rest below.
-   The chart itself keeps touch-action: none, so the page scrolls by the panel
-   headers and toolbars and the chart pans by the chart. */
-.workspace.mobile { display: block; padding: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-.mcell { display: flex; flex-direction: column; height: 62vh; height: 62dvh; border-bottom: 1px solid var(--border); background: var(--surface); }
-.mcell.chart { height: 78vh; height: 78dvh; }
-.mcell.lead { height: calc(100vh - 28px - 22px - 34px); height: calc(100dvh - 28px - 22px - 34px); }
-.mcell.watchlist { height: auto; max-height: 60vh; max-height: 60dvh; }
-.mhead { display: flex; flex: 0 0 24px; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 11px; color: var(--muted); }
-.mcell > .panelbody { flex: 1; min-height: 0; }
+   One chart and nothing else (Layout's MobileShell): the panels a wide screen
+   keeps beside it open over it from the menu in the chart's toolbar, and the
+   page itself never scrolls — the chart owns every touch inside it. */
+.workspace.mobile { display: flex; padding: 0; overflow: hidden; }
+.workspace.mobile > .panelbody { flex: 1; min-width: 0; }
+.mempty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--dim); font-size: 12px; }
+.mempty .tb { padding: 8px 14px; border: 1px solid var(--border); color: var(--text); }
+.msheet { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); }
+.mhead { display: flex; align-items: center; gap: 8px; flex: 0 0 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 12px; color: var(--text); }
+.mhead .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mhead .iconbtn { min-width: 34px; height: 34px; color: var(--muted); }
+.mscrim { position: fixed; inset: 0; z-index: 40; background: #000a; }
+.mdrawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 41; display: flex; flex-direction: column; width: 264px; max-width: 82vw; padding: 6px 0; border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+.mdrawer button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px 16px; text-align: left; color: var(--text); font-size: 13px; }
+.mdrawer button:hover, .mdrawer button.cur { background: var(--surface-3); color: var(--primary); }
+.mdrawer button .grow { flex: 1; min-width: 0; }
+.mdrawer hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
+.mdrawer .cap { padding: 8px 16px 2px; color: var(--dim); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 
 @media (max-width: 760px) {
-  /* Room for the chart: the top bar keeps what a thumb needs. */
-  .topbar .item.dim, .topbar kbd, .statusbar .hint-key { display: none; }
-  .topbar .item { padding: 0 8px; }
+  /* The chart's own toolbar is the top of the app; the desktop bar above it
+     only took height, and everything on it is in the menu. Its row goes with
+     it, or the grid would hand the space to the row below. */
+  .shell { grid-template-rows: minmax(0, 1fr) 22px; }
+  .topbar { display: none; }
+  .statusbar .hint-key { display: none; }
   /* A toolbar wider than a phone scrolls sideways instead of cutting its end off. */
-  .toolbar { overflow-x: auto; scrollbar-width: none; }
+  .toolbar { flex: 0 0 34px; height: 34px; overflow-x: auto; scrollbar-width: none; }
   .toolbar::-webkit-scrollbar { display: none; }
   .toolbar > * { flex-shrink: 0; }
+  .toolbar .tb, .toolbar .symbol { min-height: 28px; }
+  .burger { min-width: 30px; color: var(--text); }
+  /* Drawing tools under a fingertip rather than a pointer. */
+  .rail { flex: 0 0 36px; }
+  .rail button { width: 30px; height: 30px; }
   .dialog { max-height: 88vh; max-height: 88dvh; }
   .backdrop { padding: 4vh 8px 8px; }
 }
