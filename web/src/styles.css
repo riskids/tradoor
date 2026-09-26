@@ -334,6 +334,25 @@ table.venues tr.off td { color: var(--dim); }
   .rail button { width: 30px; height: 30px; }
   .dialog { max-height: 88vh; max-height: 88dvh; }
   .backdrop { padding: 4vh 8px 8px; }
+  /* A phone has no room for a title, a field, seven exchanges and a close in
+     one row: the field was squeezed to nothing and a ticker could not be
+     typed. It takes the first row alone, the filters the next. */
+  .dialog > header { flex-wrap: wrap; gap: 4px; padding: 4px 6px; }
+  .dialog > header .title { display: none; }
+  /* 16px is the size below which iOS zooms the page when a field is tapped. */
+  .dialog input.q { flex: 1 0 100%; order: -1; padding: 8px 6px; font-size: 16px; }
+  .dialog > header .chips { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; padding-right: 0; }
+  .dialog > header .chips::-webkit-scrollbar { display: none; }
+  .dialog > header .x { margin-left: auto; padding: 4px 6px; }
+  /* And a result keeps what names it: the exchange's mark without its name,
+     the price and the change, but not the day's turnover. */
+  .list .row { gap: 6px; padding: 6px 8px; }
+  .list .row .sym { min-width: 88px; }
+  .list .row .venue { min-width: 0 !important; }
+  .list .row .venue-name, .list .row .col.s.dim { display: none; }
+  .list .row .col { min-width: 72px; }
+  .list .row .col.s { min-width: 52px; }
+  .dialog > footer { flex-wrap: wrap; gap: 2px 12px; }
 }
 
 /* ---- drawing settings: TradingView's dialog, in this app's skin */
