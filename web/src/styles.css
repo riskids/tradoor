@@ -215,6 +215,8 @@ input.box:focus { border-color: var(--primary); outline: 0; }
   .layer { padding: 2px 3px; }
   .layer .btns { gap: 6px; opacity: 1; }
   .layer .btns button { padding: 2px; }
+  /* The handle under the list, at the size of a fingertip. */
+  .legend .fold { padding: 5px 9px; }
 }
 .layer .btns button { display: flex; color: var(--dim); }
 .layer .btns button:hover { color: var(--primary); }
@@ -563,11 +565,13 @@ table.venues tr.off td { color: var(--dim); }
 .flow-label.bull b { color: var(--bull); }
 .flow-label.bear b { color: var(--bear); }
 
-.legend .fold { display: flex; align-items: center; padding: 0 2px; color: var(--muted); }
-.legend .fold:hover { color: var(--text); }
-.legend .fold .count { margin-left: 1px; font-size: 10px; }
+/* The handle under the list: an arrow alone while the list is out, an arrow
+   and the count of what is under it once folded away. */
+.legend .fold { display: flex; align-items: center; gap: 2px; margin-top: 1px; padding: 1px 4px; border: 1px solid var(--border); background: color-mix(in oklab, var(--surface) 82%, transparent); color: var(--muted); pointer-events: auto; }
+.legend .fold:hover { color: var(--text); border-color: var(--surface-3); }
+.legend .fold .count { font-size: 10px; }
 .legend .fold svg { transition: transform 0.12s; }
-.legend .fold.shut svg { transform: rotate(-90deg); }
+.legend .fold:not(.shut) svg { transform: rotate(180deg); }
 
 .al-notice { display: block; width: 100%; padding: 6px 8px; text-align: left; font-size: 11px; line-height: 1.5; color: var(--bear); background: color-mix(in oklab, var(--bear) 12%, transparent); border-bottom: 1px solid var(--border); }
 .al-notice:hover { background: color-mix(in oklab, var(--bear) 20%, transparent); }

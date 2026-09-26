@@ -925,19 +925,6 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
           <div class="legend">
             <div class="line">
-              <button
-                class="fold"
-                classList={{ shut: props.panel.legendShut }}
-                data-tip={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide them'}
-                aria-label={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide the layers'}
-                onClick={() => patchPanel(id, { legendShut: !props.panel.legendShut })}
-              >
-                <Icon name="chevron" size={11} stroke={2.2} />
-                {/* Folded, the count is all that says what is under there. */}
-                <Show when={props.panel.legendShut && folded() > 0}>
-                  <span class="count num">{folded()}</span>
-                </Show>
-              </button>
               <span class="title">{symbolOf(market())}</span>
               <span class="dim">
                 {tfLabel(timeframe())}
@@ -971,6 +958,23 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                 />
               )}
             </For>
+            {/* The list's own handle, under it: folded, the count is all that
+                says what is down there. */}
+            <Show when={folded() > 0}>
+              <button
+                class="fold"
+                classList={{ shut: props.panel.legendShut }}
+                data-tip={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide them'}
+                aria-label={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide the layers and indicators'}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => patchPanel(id, { legendShut: !props.panel.legendShut })}
+              >
+                <Icon name="chevron" size={11} stroke={2.2} />
+                <Show when={props.panel.legendShut}>
+                  <span class="count num">{folded()}</span>
+                </Show>
+              </button>
+            </Show>
           </div>
           <Show when={menu()}>
             {(m) => (
