@@ -591,6 +591,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     send({ t: 'range', id: sid, days: days === 'ytd' ? (Date.now() - Date.UTC(year, 0, 1)) / 86_400_000 : days });
   };
 
+  /** What the legend holds under its arrow: the layers drawn and the studies. */
+  const folded = () => LAYERS.filter((layer) => !(tpoShown() && layer.candles)).length + studies().length;
+
   /** A finger off the glass; true when the chart should hear nothing of it. */
   const lift = (e: PointerEvent) => {
     fingers.delete(e.pointerId);
@@ -925,11 +928,15 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               <button
                 class="fold"
                 classList={{ shut: props.panel.legendShut }}
-                data-tip={props.panel.legendShut ? 'Show the layers' : 'Hide the layers'}
-                aria-label={props.panel.legendShut ? 'Show the layers' : 'Hide the layers'}
+                data-tip={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide them'}
+                aria-label={props.panel.legendShut ? `Show the ${folded()} layers and indicators` : 'Hide the layers'}
                 onClick={() => patchPanel(id, { legendShut: !props.panel.legendShut })}
               >
                 <Icon name="chevron" size={11} stroke={2.2} />
+                {/* Folded, the count is all that says what is under there. */}
+                <Show when={props.panel.legendShut && folded() > 0}>
+                  <span class="count num">{folded()}</span>
+                </Show>
               </button>
               <span class="title">{symbolOf(market())}</span>
               <span class="dim">

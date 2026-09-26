@@ -203,6 +203,13 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .layer.off .name { color: var(--dim); text-decoration: line-through; }
 .layer .btns { display: flex; gap: 2px; opacity: 0; }
 .layer:hover .btns { opacity: 1; }
+/* A finger cannot hover, so on a touch screen the eye and the rest are always
+   out: without them an indicator there could be neither hidden nor removed. */
+@media (hover: none) {
+  .layer { padding: 2px 3px; }
+  .layer .btns { gap: 6px; opacity: 1; }
+  .layer .btns button { padding: 2px; }
+}
 .layer .btns button { display: flex; color: var(--dim); }
 .layer .btns button:hover { color: var(--primary); }
 .layer .val { font-variant-numeric: tabular-nums; }
@@ -552,6 +559,7 @@ table.venues tr.off td { color: var(--dim); }
 
 .legend .fold { display: flex; align-items: center; padding: 0 2px; color: var(--muted); }
 .legend .fold:hover { color: var(--text); }
+.legend .fold .count { margin-left: 1px; font-size: 10px; }
 .legend .fold svg { transition: transform 0.12s; }
 .legend .fold.shut svg { transform: rotate(-90deg); }
 
