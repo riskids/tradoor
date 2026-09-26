@@ -223,7 +223,9 @@ own toolbar is the top of the app and carries the menu, and the panels a wide
 window keeps beside it open over the chart from that menu, one at a time. A
 panel the layout never had is added as a tab beside the chart the first time it
 is asked for. Choosing a market in the watchlist closes the sheet, since that is
-what it was opened for. The saved layout is not changed, so a wider window shows
+what it was opened for. Two fingers on the chart zoom time about the point
+between them and carry the chart with it; the engine hears a pinch in the
+wheel's own language, since it knows nothing of fingers. The saved layout is not changed, so a wider window shows
 the splits again.
 
 A chart panel's canvases and engine slot live as long as the panel, not as long

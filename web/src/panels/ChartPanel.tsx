@@ -217,6 +217,21 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
   };
 
+  // ---- pinch: two fingers zoom time about the point between them, and carry
+  // the chart along with that point. The engine hears it in the wheel's own
+  // language — it knows nothing of fingers, and a pinch is a zoom with a
+  // middle. `exp(-dy * 0.002)` is the factor a wheel zooms by, so a spread
+  // that grew by `scale` is the `dy` that would have done the same.
+  const fingers = new Map<number, { x: number; y: number }>();
+  /** The spread and middle as last seen, while two fingers are down. */
+  let pinch: { spread: number; x: number } | null = null;
+  /** Fingers left over from a pinch: they lift before one of them pans again. */
+  let spent = false;
+  const between = () => {
+    const [a, b] = [...fingers.values()];
+    return a && b ? { spread: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
+  };
+
   onMount(() => {
     box.prepend(chart.gl, chart.text);
     const rect = box.getBoundingClientRect();
@@ -576,6 +591,15 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     send({ t: 'range', id: sid, days: days === 'ytd' ? (Date.now() - Date.UTC(year, 0, 1)) / 86_400_000 : days });
   };
 
+  /** A finger off the glass; true when the chart should hear nothing of it. */
+  const lift = (e: PointerEvent) => {
+    fingers.delete(e.pointerId);
+    if (fingers.size < 2) pinch = null;
+    if (!spent) return false;
+    if (fingers.size === 0) spent = false;
+    return true;
+  };
+
   let tfButton!: HTMLButtonElement;
 
   return (
@@ -779,12 +803,49 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           onPointerDown={(e) => {
             if (e.button === 2) return;
             box.setPointerCapture(e.pointerId);
+            if (e.pointerType === 'touch') {
+              fingers.set(e.pointerId, local(e));
+              if (fingers.size >= 2) {
+                // The first finger was panning or drawing: it is let go where
+                // it stands rather than finishing whatever it began.
+                if (!spent) pointer('leave', e);
+                spent = true;
+                const now = between();
+                pinch = now && { spread: now.spread, x: now.x };
+                return;
+              }
+              if (spent) return;
+            }
             pointer('down', e);
           }}
-          onPointerMove={(e) => pointer('move', e)}
+          onPointerMove={(e) => {
+            if (e.pointerType === 'touch') {
+              if (!fingers.has(e.pointerId)) return;
+              fingers.set(e.pointerId, local(e));
+              const now = between();
+              if (now && pinch) {
+                if (pinch.spread > 0 && now.spread > 0) {
+                  const dy = -Math.log(now.spread / pinch.spread) / 0.002;
+                  if (Math.abs(dy) > 0.5) send({ t: 'wheel', id: sid, x: now.x, y: now.y, dx: 0, dy });
+                }
+                // A wheel carries one or the other: the engine pans when dx
+                // leads and zooms when dy does, so the slide goes on its own.
+                const slide = now.x - pinch.x;
+                if (Math.abs(slide) >= 1) send({ t: 'wheel', id: sid, x: now.x, y: now.y, dx: -slide, dy: 0 });
+                pinch = { spread: now.spread, x: now.x };
+                return;
+              }
+              if (spent) return;
+            }
+            pointer('move', e);
+          }}
           onPointerUp={(e) => {
             if (box.hasPointerCapture(e.pointerId)) box.releasePointerCapture(e.pointerId);
+            if (e.pointerType === 'touch' && lift(e)) return;
             if (e.button !== 2) pointer('up', e);
+          }}
+          onPointerCancel={(e) => {
+            if (e.pointerType !== 'touch' || !lift(e)) pointer('leave', e);
           }}
           onPointerLeave={(e) => pointer('leave', e)}
           onDblClick={(e) => pointer('dblclick', e)}
