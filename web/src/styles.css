@@ -73,6 +73,11 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 .topbar button.item:hover { color: var(--primary); background: var(--surface-2); }
 .statusbar { display: flex; align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--border); background: var(--surface); font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; }
 .statusbar .hint-key { display: flex; align-items: center; gap: 4px; }
+/* Text in the bars of fixed height sits on its cap height, not on the font's
+   whole line box: digits and capitals carry no descender, so a line box leaves
+   the space under them empty and the text reads a pixel or two high — plain to
+   see beside a chip's border. A browser without `text-box` keeps today's look. */
+.brand span, .topbar .item span, .topbar .item kbd, .statusbar span, .tab span, .live .num, .live .state { text-box: trim-both cap alphabetic; }
 .banner { padding: 3px 8px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--bear) 12%, transparent); color: var(--bear); font-size: 11px; }
 .workspace { position: relative; flex: 1; min-height: 0; min-width: 0; padding: 3px; display: flex; }
 
@@ -175,7 +180,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .symbol { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px 0 2px; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .symbol:hover { color: var(--primary); }
 .live { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; font-size: 11px; }
-.live .state { font-size: 9px; letter-spacing: 0.12em; line-height: 14px; padding: 0 5px; border: 1px solid color-mix(in oklab, currentColor 45%, transparent); background: color-mix(in oklab, currentColor 10%, transparent); }
+.live .state { display: inline-flex; align-items: center; height: 14px; font-size: 9px; letter-spacing: 0.12em; line-height: 1; padding: 0 5px; border: 1px solid color-mix(in oklab, currentColor 45%, transparent); background: color-mix(in oklab, currentColor 10%, transparent); }
 /* Exchange marks and market tags. */
 .xlogo { display: block; flex: none; }
 .venue { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }

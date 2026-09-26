@@ -423,15 +423,17 @@ export function App() {
             <rect x="3.3" y="7.6" width="1.7" height="3.4" fill="currentColor" stroke="none" />
             <rect x="6.2" y="5.6" width="1.7" height="5.2" fill="currentColor" stroke="none" />
           </svg>
-          TRADOOR
+          <span>TRADOOR</span>
         </div>
         <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
-          <Icon name="command" size={12} /> Commands <kbd>/</kbd>
+          <Icon name="command" size={12} /> <span>Commands</span> <kbd>/</kbd>
         </button>
         <button class="item" data-tip="Open a chart beside the focused panel" onClick={() => addNear('chart', 'right')}>
-          <Icon name="plus" size={12} /> Chart
+          <Icon name="plus" size={12} /> <span>Chart</span>
         </button>
-        <span class="item dim">{doc.name}</span>
+        <span class="item dim">
+          <span>{doc.name}</span>
+        </span>
         <span class="spacer" />
         <Health />
         <button class="item alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
