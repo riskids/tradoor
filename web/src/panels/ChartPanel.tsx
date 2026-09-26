@@ -125,7 +125,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
 
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
-  const [status, setStatus] = createSignal<ChartStatus>({ loading: true, error: null, bars: 0, source: null, live: 'off', exhausted: false });
+  const [status, setStatus] = createSignal<ChartStatus>({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
   const [cursor, setCursor] = createSignal('crosshair');
   const [tool, setTool] = createSignal('');
   const [autoScale, setAutoScale] = createSignal(true);
@@ -677,7 +677,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </button>
         </Show>
         <span class="spacer" />
-        <LiveBadge market={market()} live={status().live} price={price()} />
+        <LiveBadge market={market()} live={status().live} relayed={status().relayed} price={price()} />
       </div>
 
       <Show when={tpoMenu()} keyed>
@@ -1145,7 +1145,7 @@ function LayerRow(props: {
  * keeps its width as prints land on round prices, and it holds the colour of
  * the last change through unchanged prints.
  */
-function LiveBadge(props: { market: string; live: LiveStatus; price: LastPrice | null }) {
+function LiveBadge(props: { market: string; live: LiveStatus; relayed: boolean; price: LastPrice | null }) {
   let digits = 0;
   createEffect(
     on(
@@ -1165,10 +1165,14 @@ function LiveBadge(props: { market: string; live: LiveStatus; price: LastPrice |
   };
   const state = () => LIVE[props.live];
   return (
-    <span class="live" data-tip={state().title}>
+    <span class="live" data-tip={props.relayed ? `${state().title} Through the tradoor server, because this network blocks the exchange.` : state().title}>
       <span class={`state ${state().tone}`} classList={{ pulse: props.live === 'connecting' || props.live === 'retrying' }}>
         {state().label}
       </span>
+      {/* Which way it came, where that is not the exchange itself. */}
+      <Show when={props.relayed}>
+        <span class="state dim">RELAY</span>
+      </Show>
       <span class="num" classList={{ bull: direction() > 0, bear: direction() < 0, muted: direction() === 0 }}>
         {text()}
       </span>

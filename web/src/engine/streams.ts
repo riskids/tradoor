@@ -57,7 +57,7 @@ export type StreamMsg = KlineMsg | TradeMsg | TickerMsg | LiquidationMsg;
 
 export interface StreamListener {
   message(msg: StreamMsg): void;
-  state(state: SocketState): void;
+  state(state: SocketState, relayed: boolean): void;
 }
 
 export type Json = Record<string, unknown>;
@@ -230,6 +230,29 @@ export function socketOf(venue: Venue, spec: StreamSpec): string {
   return venue;
 }
 
+/**
+ * Addresses that answered nothing lately, and for how long they are skipped.
+ *
+ * A network that blocks an exchange blocks it for every socket and every
+ * market: without this, each new chart works through the same dead addresses
+ * and their timeouts again before it reaches the relay, and a phone on a
+ * carrier that blocks them never seems to finish reconnecting. Kept for five
+ * minutes, so moving from that carrier to a wifi tries them afresh.
+ */
+const BLOCKED_MS = 5 * 60_000;
+const blocked = new Map<string, number>();
+export const isBlocked = (url: string, now = Date.now()): boolean => (blocked.get(url) ?? 0) > now - BLOCKED_MS;
+
+/** The address to try: the next one that is not known dead, or the next of all. */
+export function nextUrl(urls: readonly string[], index: number, dead: (url: string) => boolean = isBlocked): string {
+  const alive = urls.filter((url) => !dead(url));
+  const list = alive.length > 0 ? alive : urls;
+  return list[index % list.length]!;
+}
+
+/** Whether a stream arrives through the tradoor server rather than the exchange. */
+export const isRelayed = (url: string): boolean => url.includes('/api/relay/ws');
+
 const STALL_MS = 12_000;
 const RETRY_MS = [1_000, 3_000, 5_000, 10_000];
 const HEARTBEAT_MS = 15_000;
@@ -253,6 +276,8 @@ class Connection {
   private readonly pending = { subscribe: new Set<string>(), unsubscribe: new Set<string>() };
   private flushQueued = false;
   private urlIndex = 0;
+  /** The address this attempt is on, for what it says about the network. */
+  private url = '';
   private attempt = 0;
   private heard = false;
   private retryTimer: Timer | undefined;
@@ -276,7 +301,7 @@ class Connection {
       this.queue('subscribe', topic);
     }
     set.add(listener);
-    listener.state(this.current);
+    listener.state(this.current, isRelayed(this.url));
     if (!this.ws && this.retryTimer === undefined) this.connect();
     return () => this.remove(topic, listener);
   }
@@ -330,18 +355,22 @@ class Connection {
   private hear(): void {
     this.heard = true;
     this.attempt = 0;
-    this.setState('live');
+    // It answers after all, whatever it did before.
+    blocked.delete(this.url);
+    this.setState('live', true);
   }
 
-  private setState(state: SocketState): void {
-    if (state === this.current) return;
+  private setState(state: SocketState, always = false): void {
+    if (state === this.current && !always) return;
     this.current = state;
-    for (const set of this.topics.values()) for (const listener of set) listener.state(state);
+    const relayed = isRelayed(this.url);
+    for (const set of this.topics.values()) for (const listener of set) listener.state(state, relayed);
   }
 
   private connect(): void {
     this.retryTimer = undefined;
-    const ws = new WebSocket(this.proto.urls[this.urlIndex % this.proto.urls.length]!);
+    this.url = nextUrl(this.proto.urls, this.urlIndex);
+    const ws = new WebSocket(this.url);
     this.ws = ws;
     this.heard = false;
 
@@ -390,7 +419,12 @@ class Connection {
       this.clearTimers();
       if (this.ws === ws) this.ws = null;
       if (this.topics.size === 0) return;
-      if (!this.heard) this.urlIndex += 1;
+      if (!this.heard) {
+        // It opened nothing, or opened and said nothing: the next socket on
+        // this network starts past it rather than waiting it out again.
+        blocked.set(this.url, Date.now());
+        this.urlIndex += 1;
+      }
       this.attempt += 1;
       this.setState('retrying');
       this.retryTimer = setTimeout(() => this.connect(), RETRY_MS[Math.min(this.attempt, RETRY_MS.length) - 1]);
@@ -437,7 +471,7 @@ export class StreamHub {
       // Loaded once, then this subscription goes ahead — unless dropped meanwhile.
       let off: (() => void) | null = null;
       let dropped = false;
-      listener.state('connecting');
+      listener.state('connecting', false);
       void loadMore().then((m) => {
         this.extra ??= m;
         if (!dropped) off = this.subscribe(venue, spec, listener);
@@ -461,7 +495,7 @@ export class StreamHub {
     const topic = conn.topic(spec, venue);
     // This exchange does not stream it: say so rather than wait forever.
     if (topic === '') {
-      listener.state('stalled');
+      listener.state('stalled', false);
       return () => {};
     }
     return conn.add(topic, listener, spec.kind === 'liquidations');

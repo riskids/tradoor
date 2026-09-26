@@ -7,7 +7,7 @@
  * Run with `deno task test`; tsc skips this file (see tsconfig exclude).
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
-import { StreamHub, type StreamMsg, type StreamSpec } from './streams.ts';
+import { isRelayed, nextUrl, StreamHub, type StreamMsg, type StreamSpec } from './streams.ts';
 import type { Venue } from '../lib/markets.ts';
 
 class FakeSocket {
@@ -174,4 +174,14 @@ test('a candle socket still needs data before it counts as live', async () => {
   socket.onmessage?.({ data: JSON.stringify({ e: 'kline', s: 'BTCUSDT', k: { t: 1, i: '1m', o: '1', h: '1', l: '1', c: '1', v: '1', L: 1, x: false } }) });
   assertEquals(states.at(-1), 'live', 'the first candle does');
   stop();
+});
+
+Deno.test('a blocked address is stepped over, so the relay is reached at once', () => {
+  const urls = ['wss://exchange.example/ws', 'wss://exchange2.example/ws', 'wss://tradoor.example/api/relay/ws?venue=binance-perp'];
+  const dead = (url: string) => url.includes('exchange');
+  assertEquals(nextUrl(urls, 0, () => false), urls[0], 'nothing known dead: the exchange first, as always');
+  assertEquals(nextUrl(urls, 0, dead), urls[2], 'both exchange addresses dead on this network: straight to the relay');
+  assertEquals(nextUrl(urls, 1, dead), urls[2], 'and it stays there while they are');
+  assertEquals(nextUrl(urls, 1, () => true), urls[1], 'everything dead: work through them all again rather than stop');
+  assert(isRelayed(urls[2]!) && !isRelayed(urls[0]!), 'and the page can say which way it came');
 });

@@ -202,10 +202,10 @@ export class Poller {
           const res = await fetch(`https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=${id}&resolution=${resolution}&start_timestamp=${now - 3 * 86_400_000}&end_timestamp=${now}&count_back=2`);
           const body = (await res.json()) as { c?: { t: number; o: number; h: number; l: number; c: number; v: number }[] };
           const rows = (body.c ?? []).slice(-2);
-          for (const l of listeners) l.state('live');
+          for (const l of listeners) l.state('live', false);
           for (const k of rows) for (const l of listeners) l.message({ kind: 'kline', openTime: k.t, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, lastTradeId: 0, closed: false });
         } catch {
-          for (const l of listeners) l.state('retrying');
+          for (const l of listeners) l.state('retrying', false);
         }
       };
       entry = { listeners, timer: setInterval(() => void tick(), POLL_MS) };
@@ -213,7 +213,7 @@ export class Poller {
       void tick();
     }
     entry.listeners.add(listener);
-    listener.state('connecting');
+    listener.state('connecting', false);
     return () => {
       const e = this.topics.get(key);
       if (!e || !e.listeners.delete(listener) || e.listeners.size > 0) return;

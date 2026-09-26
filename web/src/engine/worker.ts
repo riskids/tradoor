@@ -155,7 +155,7 @@ class Slot {
   private feed: LiveFeedEngine | null = null;
   private gen = 0;
   private cleanup: (() => void)[] = [];
-  private status: ChartStatus = { loading: false, error: null, bars: 0, source: null, live: 'off', exhausted: false };
+  private status: ChartStatus = { loading: false, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false };
   private legendKey = '';
   private cursor = '';
   private studiesKey = '';
@@ -364,7 +364,7 @@ class Slot {
       return;
     }
     this.engine.set_message('Loading…');
-    this.setStatus({ loading: true, error: null, bars: 0, source: null, live: 'off', exhausted: false });
+    this.setStatus({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
     try {
       const series = await openSeries(market, tf.base, tf.interval);
       if (gen !== this.gen) return;
@@ -450,10 +450,10 @@ class Slot {
         }
         if (changed) this.onLive(feed.bar() as Bar | null);
       },
-      state: (state: SocketState) => {
+      state: (state: SocketState, relayed: boolean) => {
         if (gen !== this.gen) return;
         const was = this.status.live;
-        this.setStatus({ live: state });
+        this.setStatus({ live: state, relayed });
         // Back from an outage: bars that closed meanwhile come from REST.
         if (state === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail();
       },
@@ -776,7 +776,7 @@ function handle(msg: ToWorker): void {
       slots.set(msg.id, slot);
       schedule();
     } catch (e) {
-      post({ t: 'status', id: msg.id, value: { loading: false, error: message(e), bars: 0, source: null, live: 'off', exhausted: false } });
+      post({ t: 'status', id: msg.id, value: { loading: false, error: message(e), bars: 0, source: null, live: 'off', relayed: false, exhausted: false } });
     }
     return;
   }
