@@ -7,13 +7,28 @@
 import { batch, createSignal } from 'solid-js';
 import { createStore, reconcile, unwrap } from 'solid-js/store';
 import { api, ApiError } from '../lib/api';
-import { readJson, writePref } from '../lib/prefs';
+import { ownerId } from '../lib/owner';
+import { readJson, readPref, writePref } from '../lib/prefs';
 import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
 
 const LOCAL_KEY = 'workspace';
+/** Whose the local copy is, written beside it. */
+const LOCAL_OWNER_KEY = 'workspace-owner';
 const SERVER_ID = 'default';
 
-const [doc, setDoc] = createStore<WorkspaceDoc>(validate(readJson(LOCAL_KEY)) ?? defaultWorkspace());
+/**
+ * Whether the copy in this browser is this browser's own to open with. Taking
+ * another browser's id means asking for their layout, and theirs is on the
+ * server: this one is a stranger's now, and opening with it would not only
+ * show the wrong workspace but save it over the one that was asked for, since
+ * whichever copy changed last wins. A copy from before the stamp existed has
+ * no owner written beside it and is this browser's own.
+ */
+export const localIsOurs = (stamped: string | null, owner: string): boolean => stamped === null || stamped === owner;
+
+const [doc, setDoc] = createStore<WorkspaceDoc>(
+  (localIsOurs(readPref(LOCAL_OWNER_KEY), ownerId()) ? validate(readJson(LOCAL_KEY)) : null) ?? defaultWorkspace(),
+);
 export { doc };
 
 export type SaveState = 'saved' | 'pending' | 'saving' | 'local' | 'conflict';
@@ -56,6 +71,7 @@ let serverTimer: ReturnType<typeof setTimeout> | undefined;
 function saveLocal(): void {
   clearTimeout(localTimer);
   writePref(LOCAL_KEY, JSON.stringify(unwrap(doc)));
+  writePref(LOCAL_OWNER_KEY, ownerId());
 }
 
 function touched(): void {

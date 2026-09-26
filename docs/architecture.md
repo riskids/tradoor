@@ -120,7 +120,10 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 A tree of splits and tab groups, the panels in it, four link groups and theme
 overrides, stored as one JSON document: in localStorage so the page opens
 instantly and offline, and on the server so it follows the reader. Whichever
-copy changed last wins. Panels in a link group share one market and
+copy changed last wins. The local copy is stamped with the browser id that
+saved it: taking another browser's id (Settings) asks for their layout, so a
+copy stamped for someone else is not opened with — it would show the wrong
+workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
 Panels: chart, watchlist, values, liquidations, flow and alerts.
