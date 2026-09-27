@@ -154,6 +154,18 @@ level, then each level as the gap from the one before it and the two volumes,
 as varints of thousandths of a coin. A busy minute of BTC packs into some 130
 bytes where a row per level would be forty rows and ten times the bytes.
 
+The chart folds those minutes into its own bars and groups them onto ONE price
+grid for the screen, since a row that does not line up with its neighbour has
+nothing to compare against. A level reads as Split (the two sides apart),
+Delta, Total, Cluster (a bar as long as the level was busy) or Ladder (the
+delta added up from the foot of the bar); the candle stays underneath. A side
+that took two and a half times what the other side took one level away — the
+diagonal, since a buyer lifts the offer where a seller hits the bid beneath it
+— is ringed, and three in a row are marked as one run. Each bar outlines the
+rows holding seventy per cent of its volume and rings the one that traded most;
+its volume and delta are written under it, and every visible bar summed by
+price is drawn against the right edge.
+
 Price alerts are rows per browser id, like drawings (`/api/alerts`); the
 browser watches the prices, each alert market's daily candle stream, and fires
 them — Crossing, Crossing Up or Down, Greater or Less Than — with a sound, a
