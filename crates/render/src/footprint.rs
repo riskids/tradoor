@@ -75,15 +75,13 @@ fn short(v: f64) -> String {
 /// The bars in view, each at its logical index.
 pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
     let t = view.theme;
-    // Every cell is filled against the busiest level on screen, so one bar's
-    // scale is another's and the eye can compare them.
     let weight = |buy: f64, sell: f64| match mode {
         Mode::Split => buy.max(sell),
         Mode::Delta => (buy - sell).abs(),
         Mode::Total => buy + sell,
     };
-    let loudest = bars.iter().flat_map(|(_, bar)| bar.levels.iter()).map(|(_, buy, sell)| weight(*buy, *sell)).fold(0.0_f64, f64::max);
-    if loudest <= 0.0 {
+    let anything = bars.iter().flat_map(|(_, bar)| bar.levels.iter()).any(|(_, buy, sell)| weight(*buy, *sell) > 0.0);
+    if !anything {
         return;
     }
     let width = (view.bar_spacing * 0.86).max(2.0);
@@ -97,20 +95,37 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
         if x + half < view.plot.x || x - half > view.plot.right() {
             continue;
         }
+        // A cell is filled against the loudest level of ITS OWN bar. Against
+        // the loudest on screen, a busy minute an hour ago left every level of
+        // every quiet bar the same near-invisible wash.
+        let loudest = bar.levels.iter().map(|(_, buy, sell)| weight(*buy, *sell)).fold(0.0_f64, f64::max);
+        if loudest <= 0.0 {
+            continue;
+        }
+        // The level that traded most, which is what the eye looks for first.
+        let poc = bar
+            .levels
+            .iter()
+            .enumerate()
+            .max_by(|a, b| (a.1 .1 + a.1 .2).total_cmp(&(b.1 .1 + b.1 .2)))
+            .map(|(i, _)| i);
+
         // Each row spans its own level: from the price it starts at to the
         // next level up. Measured there and not from nothing — the scale may be
         // logarithmic, where the pixels under a dollar depend on which dollar.
         let step = level_step(bar);
         let row = row_height(view, bar.levels[bar.levels.len() / 2].0, step);
         let numbers = width >= NUMBER_WIDTH && row >= NUMBER_HEIGHT;
-        for (price, buy, sell) in &bar.levels {
+        for (row_index, (price, buy, sell)) in bar.levels.iter().enumerate() {
             let top = (view.y)(*price + step);
             let h = row_height(view, *price, step);
             if top + h < view.plot.y || top > view.plot.bottom() {
                 continue;
             }
             let drawn = (h - 0.5).max(MIN_ROW);
-            let alpha = |v: f64| (30.0 + 190.0 * (v / loudest).clamp(0.0, 1.0) as f32) as u8;
+            // The square root, so a level a tenth as busy still shows: volume
+            // at a price is not spread evenly, and a linear fill hides the rest.
+            let alpha = |v: f64| (55.0 + 200.0 * (v / loudest).clamp(0.0, 1.0).sqrt() as f32) as u8;
             let size = row.min(11.0) * 0.82;
             let pad = 3.0;
             match mode {
@@ -118,8 +133,9 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
                     f.rect(x - half, top, half, drawn, t.bear.with_alpha(alpha(*sell)));
                     f.rect(x, top, half, drawn, t.bull.with_alpha(alpha(*buy)));
                     if numbers {
-                        f.text(x - pad, top + drawn / 2.0, short(*sell), t.text, Align::Right, Baseline::Middle, size, None, Some(view.plot));
-                        f.text(x + pad, top + drawn / 2.0, short(*buy), t.text, Align::Left, Baseline::Middle, size, None, Some(view.plot));
+                        // Each number in the colour of the side it belongs to.
+                        f.text(x - pad, top + drawn / 2.0, short(*sell), t.bear, Align::Right, Baseline::Middle, size, None, Some(view.plot));
+                        f.text(x + pad, top + drawn / 2.0, short(*buy), t.bull, Align::Left, Baseline::Middle, size, None, Some(view.plot));
                     }
                 }
                 Mode::Delta | Mode::Total => {
@@ -135,6 +151,13 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
                     }
                 }
             }
+        }
+        // The level that traded most, ringed: a column's own point of control.
+        if let Some(index) = poc {
+            let (price, _, _) = bar.levels[index];
+            let top = (view.y)(price + step);
+            let h = row_height(view, price, step);
+            f.stroke_rect(x - half, top, half * 2.0, (h - 0.5).max(MIN_ROW), 1.0, t.text.with_alpha(150));
         }
         // The line between the two sides, so a column reads as one bar.
         let top = (view.y)(bar.levels.last().map_or(0.0, |l| l.0) + step);
@@ -210,6 +233,28 @@ mod tests {
         let ys: Vec<f32> = f.positions.chunks_exact(2).map(|p| p[1]).collect();
         let (top, bottom) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
         assert!(bottom - top < 20.0, "the column stands where its levels are, not over the whole chart: {top} to {bottom}");
+    }
+
+    #[test]
+    fn a_quiet_bar_is_as_legible_as_the_busy_one_beside_it() {
+        let theme = Theme::default();
+        let plot = Rect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 };
+        let mut f = Frame::default();
+        f.begin(400.0, 300.0, 1.0, theme.background);
+        let x = |l: f64| 100.0 + l as f32 * 100.0;
+        let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
+        let view = View { plot, bar_spacing: 60.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
+        // One bar trades in hundreds, the next in tenths.
+        let busy = Bar { time: 0, levels: vec![(100.0, 400.0, 100.0), (101.0, 50.0, 200.0)] };
+        let quiet = Bar { time: 60_000, levels: vec![(100.0, 0.4, 0.1), (101.0, 0.05, 0.2)] };
+        paint(&mut f, &view, &[(0.0, &busy), (1.0, &quiet)], Mode::Split);
+        // The strongest cell of each bar carries the same weight on screen.
+        let alphas: Vec<u8> = f.colors.chunks_exact(4).map(|c| c[3]).collect();
+        let strongest = *alphas.iter().max().unwrap();
+        let faintest = *alphas.iter().min().unwrap();
+        assert!(strongest > 240, "the loudest level of a bar is filled: {strongest}");
+        assert!(faintest >= 55, "and the quietest is still visible, not a wash: {faintest}");
+        assert_eq!(alphas.iter().filter(|a| **a > 240).count() % 6, 0, "each bar has its own loudest, filled the same");
     }
 
     #[test]

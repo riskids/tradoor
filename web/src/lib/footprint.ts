@@ -15,8 +15,10 @@ export interface Levels {
   levels: [number, number, number][];
 }
 
-/** Rows a bar is worth drawing at most; past this the levels are added up. */
-const MAX_ROWS = 60;
+/** Rows a bar is worth drawing at most; past this the levels are added up.
+ *  Thirty of them at a chart's height is a row of some ten pixels, which is
+ *  what it takes for the numbers in a cell to be read at all. */
+const MAX_ROWS = 30;
 
 /** What the reader chose: how many ticks a row covers, and in what unit. */
 export interface Settings {
