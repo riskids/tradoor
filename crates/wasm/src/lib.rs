@@ -476,6 +476,11 @@ impl ChartEngine {
         self.chart.set_footprint_shown(shown);
     }
 
+    /// `split`, `delta` or `total`.
+    pub fn set_footprint_mode(&mut self, raw: &str) {
+        self.chart.set_footprint_mode(raw);
+    }
+
     pub fn studies(&self) -> Array {
         self.chart
             .studies_meta()

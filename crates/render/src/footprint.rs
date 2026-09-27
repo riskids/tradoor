@@ -12,6 +12,29 @@ use crate::color::Color;
 use crate::paint::{Align, Baseline, Frame, Rect};
 use crate::theme::Theme;
 
+/// How a level is shown: the two sides apart, their difference, or their sum.
+/// Named as every footprint chart names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Sold on the left, bought on the right.
+    #[default]
+    Split,
+    /// One cell, green where more was bought than sold and red where less.
+    Delta,
+    /// One cell: everything that traded at the level, whichever way.
+    Total,
+}
+
+impl Mode {
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "delta" => Self::Delta,
+            "total" => Self::Total,
+            _ => Self::Split,
+        }
+    }
+}
+
 /// A bar's levels: price, coins bought, coins sold — lowest price first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bar {
@@ -36,27 +59,30 @@ pub struct View<'a> {
     pub y: &'a dyn Fn(f64) -> f32,
 }
 
-/// How a volume is written inside a cell: short, because the room is short.
+/// How a volume is written inside a cell: short, because the room is short —
+/// and keeping its sign, since a delta that lost its minus says the opposite.
 fn short(v: f64) -> String {
+    let sign = if v < 0.0 { "-" } else { "" };
     match v.abs() {
-        n if n >= 1_000.0 => format!("{:.0}K", n / 1_000.0),
-        n if n >= 100.0 => format!("{n:.0}"),
-        n if n >= 1.0 => format!("{n:.1}"),
-        n if n >= 0.01 => format!("{n:.2}"),
+        n if n >= 1_000.0 => format!("{sign}{:.0}K", n / 1_000.0),
+        n if n >= 100.0 => format!("{sign}{n:.0}"),
+        n if n >= 1.0 => format!("{sign}{n:.1}"),
+        n if n >= 0.01 => format!("{sign}{n:.2}"),
         _ => String::new(),
     }
 }
 
 /// The bars in view, each at its logical index.
-pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)]) {
+pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
     let t = view.theme;
     // Every cell is filled against the busiest level on screen, so one bar's
     // scale is another's and the eye can compare them.
-    let loudest = bars
-        .iter()
-        .flat_map(|(_, bar)| bar.levels.iter())
-        .map(|(_, buy, sell)| buy.max(*sell))
-        .fold(0.0_f64, f64::max);
+    let weight = |buy: f64, sell: f64| match mode {
+        Mode::Split => buy.max(sell),
+        Mode::Delta => (buy - sell).abs(),
+        Mode::Total => buy + sell,
+    };
+    let loudest = bars.iter().flat_map(|(_, bar)| bar.levels.iter()).map(|(_, buy, sell)| weight(*buy, *sell)).fold(0.0_f64, f64::max);
     if loudest <= 0.0 {
         return;
     }
@@ -71,23 +97,43 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)]) {
         if x + half < view.plot.x || x - half > view.plot.right() {
             continue;
         }
-        // A row is as tall as the gap to the next level, so the column is solid.
+        // Each row spans its own level: from the price it starts at to the
+        // next level up. Measured there and not from nothing — the scale may be
+        // logarithmic, where the pixels under a dollar depend on which dollar.
         let step = level_step(bar);
-        let row = ((view.y)(0.0) - (view.y)(step)).abs().max(MIN_ROW);
+        let row = row_height(view, bar.levels[bar.levels.len() / 2].0, step);
         let numbers = width >= NUMBER_WIDTH && row >= NUMBER_HEIGHT;
         for (price, buy, sell) in &bar.levels {
-            let y = (view.y)(*price + step / 2.0);
-            if y + row < view.plot.y || y > view.plot.bottom() {
+            let top = (view.y)(*price + step);
+            let h = row_height(view, *price, step);
+            if top + h < view.plot.y || top > view.plot.bottom() {
                 continue;
             }
-            let h = (row - 0.5).max(MIN_ROW);
-            let fill = |v: f64| (v / loudest).clamp(0.0, 1.0) as f32;
-            f.rect(x - half, y, half, h, t.bear.with_alpha((30.0 + 190.0 * fill(*sell)) as u8));
-            f.rect(x, y, half, h, t.bull.with_alpha((30.0 + 190.0 * fill(*buy)) as u8));
-            if numbers {
-                let pad = 3.0;
-                f.text(x - pad, y + h / 2.0, short(*sell), t.text, Align::Right, Baseline::Middle, row.min(11.0) * 0.82, None, Some(view.plot));
-                f.text(x + pad, y + h / 2.0, short(*buy), t.text, Align::Left, Baseline::Middle, row.min(11.0) * 0.82, None, Some(view.plot));
+            let drawn = (h - 0.5).max(MIN_ROW);
+            let alpha = |v: f64| (30.0 + 190.0 * (v / loudest).clamp(0.0, 1.0) as f32) as u8;
+            let size = row.min(11.0) * 0.82;
+            let pad = 3.0;
+            match mode {
+                Mode::Split => {
+                    f.rect(x - half, top, half, drawn, t.bear.with_alpha(alpha(*sell)));
+                    f.rect(x, top, half, drawn, t.bull.with_alpha(alpha(*buy)));
+                    if numbers {
+                        f.text(x - pad, top + drawn / 2.0, short(*sell), t.text, Align::Right, Baseline::Middle, size, None, Some(view.plot));
+                        f.text(x + pad, top + drawn / 2.0, short(*buy), t.text, Align::Left, Baseline::Middle, size, None, Some(view.plot));
+                    }
+                }
+                Mode::Delta | Mode::Total => {
+                    let (value, color) = if mode == Mode::Total {
+                        (buy + sell, if buy >= sell { t.bull } else { t.bear })
+                    } else {
+                        (buy - sell, if buy >= sell { t.bull } else { t.bear })
+                    };
+                    f.rect(x - half, top, half * 2.0, drawn, color.with_alpha(alpha(value.abs())));
+                    if numbers {
+                        let text = if mode == Mode::Delta && *buy >= *sell { format!("+{}", short(value)) } else { short(value) };
+                        f.text(x, top + drawn / 2.0, text, t.text, Align::Center, Baseline::Middle, size, None, Some(view.plot));
+                    }
+                }
             }
         }
         // The line between the two sides, so a column reads as one bar.
@@ -95,6 +141,11 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)]) {
         let bottom = (view.y)(bar.levels.first().map_or(0.0, |l| l.0));
         f.vline(f.snap(x), top, bottom, 1.0, t.border);
     }
+}
+
+/// How tall one level stands on screen, measured at the price it sits at.
+fn row_height(view: &View<'_>, price: f64, step: f64) -> f32 {
+    ((view.y)(price) - (view.y)(price + step)).abs().max(MIN_ROW)
 }
 
 /// The gap between levels, which is the market's own step wherever two levels
@@ -129,6 +180,7 @@ mod tests {
         assert_eq!(short(4.25), "4.2");
         assert_eq!(short(0.37), "0.37");
         assert_eq!(short(0.004), "", "below a hundredth of a coin, the cell says nothing");
+        assert_eq!(short(-3.0), "-3.0", "a delta that lost its minus would say the opposite");
     }
 
     #[test]
@@ -136,6 +188,47 @@ mod tests {
         assert!((level_step(&bar()) - 1.0).abs() < f64::EPSILON);
         assert!((level_step(&Bar { time: 0, levels: vec![(100.0, 1.0, 1.0), (100.5, 1.0, 1.0)] }) - 0.5).abs() < f64::EPSILON);
         assert!((level_step(&Bar { time: 0, levels: vec![(100.0, 1.0, 1.0)] }) - 1.0).abs() < f64::EPSILON, "one level alone has no gap to measure");
+    }
+
+    /// A cell is as tall as its own level is on screen — never as tall as the
+    /// chart. Measuring the step from price zero said otherwise on a scale
+    /// where zero is nowhere near, and painted a bar over the whole plot.
+    #[test]
+    fn a_cell_is_as_tall_as_its_level_even_where_zero_is_nowhere_near() {
+        let theme = Theme::default();
+        let plot = Rect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 };
+        let mut f = Frame::default();
+        f.begin(400.0, 300.0, 1.0, theme.background);
+        let x = |l: f64| 200.0 + l as f32;
+        // A logarithmic scale over prices around 84,000, as a chart of BTC has.
+        let y = |p: f64| 300.0 - ((p.ln() - 84_000f64.ln()) * 100_000.0) as f32;
+        let bar = Bar { time: 0, levels: vec![(84_000.0, 1.0, 2.0), (84_001.0, 3.0, 1.0), (84_002.0, 2.0, 2.0)] };
+        let view = View { plot, bar_spacing: 30.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
+        paint(&mut f, &view, &[(0.0, &bar)], Mode::Split);
+        // A dollar at 84,000 is about a pixel on this scale, so every vertex
+        // sits within a few pixels of the levels — not spread over the plot.
+        let ys: Vec<f32> = f.positions.chunks_exact(2).map(|p| p[1]).collect();
+        let (top, bottom) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+        assert!(bottom - top < 20.0, "the column stands where its levels are, not over the whole chart: {top} to {bottom}");
+    }
+
+    #[test]
+    fn each_mode_writes_what_it_is_about() {
+        let theme = Theme::default();
+        let plot = Rect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 };
+        let wrote = |mode: Mode| {
+            let mut f = Frame::default();
+            f.begin(400.0, 300.0, 1.0, theme.background);
+            let x = |l: f64| 200.0 + l as f32;
+            let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
+            let view = View { plot, bar_spacing: 80.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
+            paint(&mut f, &view, &[(0.0, &bar())], mode);
+            f.texts.iter().map(|t| t.text.clone()).collect::<Vec<_>>()
+        };
+        // The lowest level was 1 bought against 4 sold.
+        assert!(wrote(Mode::Split).contains(&"4.0".to_string()) && wrote(Mode::Split).contains(&"1.0".to_string()), "both sides of it");
+        assert!(wrote(Mode::Delta).contains(&"-3.0".to_string()), "the difference, and which way it went");
+        assert!(wrote(Mode::Total).contains(&"5.0".to_string()), "everything that traded there");
     }
 
     #[test]
@@ -149,7 +242,7 @@ mod tests {
             // A hundred pixels to the price, so the rows are tall.
             let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
             let view = View { plot, bar_spacing: spacing, char_width: 6.0, theme: &theme, x: &x, y: &y };
-            paint(&mut f, &view, &[(0.0, &bar())]);
+            paint(&mut f, &view, &[(0.0, &bar())], Mode::Split);
             f
         };
         let wide = paint_at(80.0);

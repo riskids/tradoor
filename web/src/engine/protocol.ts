@@ -178,6 +178,7 @@ export type ToWorker =
    *  level as price, coins bought, coins sold. */
   | { t: 'footprint'; id: string; flat: Float64Array }
   | { t: 'footprintShown'; id: string; value: boolean }
+  | { t: 'footprintMode'; id: string; value: string }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }

@@ -18,6 +18,14 @@ export interface Levels {
 /** Rows a bar is worth drawing at most; past this the levels are added up. */
 const MAX_ROWS = 60;
 
+/** What the reader chose: how many ticks a row covers, and in what unit. */
+export interface Settings {
+  /** Ticks a row covers, or 0 to fit the rows to the bar. */
+  ticks: number;
+  /** `coins` as the exchange counts them, or `usd` at the level's own price. */
+  unit: 'coins' | 'usd';
+}
+
 /** The markets this server records, asked for once. */
 let recorded: Promise<Map<string, number>> | null = null;
 export function recordedMarkets(): Promise<Map<string, number>> {
@@ -32,7 +40,7 @@ export function recordedMarkets(): Promise<Map<string, number>> {
  * The minutes between `from` and `to`, folded into bars of `barMs` and grouped
  * so no bar carries more than `MAX_ROWS` rows.
  */
-export async function fetchFootprint(market: string, barMs: number, from: number, to: number): Promise<Levels[]> {
+export async function fetchFootprint(market: string, barMs: number, from: number, to: number, settings: Settings = { ticks: 0, unit: 'coins' }): Promise<Levels[]> {
   const { tick, bars } = await api.footprint(market, from, to);
   const byBar = new Map<number, Map<number, [number, number]>>();
   for (const bar of bars) {
@@ -55,15 +63,16 @@ export async function fetchFootprint(market: string, barMs: number, from: number
   }
   return [...byBar.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([time, levels]) => ({ time, levels: group(levels, tick) }));
+    .map(([time, levels]) => ({ time, levels: group(levels, tick, settings) }));
 }
 
 /** Steps to prices, adding neighbouring levels together until the rows fit. */
-function group(levels: Map<number, [number, number]>, tick: number): [number, number, number][] {
+function group(levels: Map<number, [number, number]>, tick: number, settings: Settings): [number, number, number][] {
   const steps = [...levels.keys()];
   const span = Math.max(...steps) - Math.min(...steps) + 1;
-  // Grouped the way a price scale is read — 1, 2, 5, 10 — never by three.
-  let by = 1;
+  // Grouped the way a price scale is read — 1, 2, 5, 10 — never by three, and
+  // never finer than the reader asked for.
+  let by = Math.max(1, Math.round(settings.ticks) || 1);
   while (span / by > MAX_ROWS) by = coarser(by);
   const rounded = Math.round(by);
   const out = new Map<number, [number, number]>();
@@ -77,7 +86,14 @@ function group(levels: Map<number, [number, number]>, tick: number): [number, nu
       out.set(key, [buy, sell]);
     }
   }
-  return [...out.entries()].sort((a, b) => a[0] - b[0]).map(([step, [buy, sell]]) => [step * tick, buy, sell]);
+  return [...out.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([step, [buy, sell]]) => {
+      const price = step * tick;
+      // In dollars, a coin at this level is worth what it traded at here.
+      const worth = settings.unit === 'usd' ? price : 1;
+      return [price, buy * worth, sell * worth] as [number, number, number];
+    });
 }
 
 /** The next grouping up: 1, 2, 5, 10, 20, 50, and so on. */

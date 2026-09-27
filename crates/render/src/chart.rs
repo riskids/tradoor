@@ -271,6 +271,8 @@ pub struct Chart {
     footprint: Vec<footprint::Bar>,
     /// Whether those columns stand in for the candles.
     footprint_shown: bool,
+    /// The two sides apart, their difference, or their sum.
+    footprint_mode: footprint::Mode,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -334,6 +336,7 @@ impl Chart {
             tpo_profiles: None,
             footprint: Vec::new(),
             footprint_shown: false,
+            footprint_mode: footprint::Mode::default(),
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -632,6 +635,15 @@ impl Chart {
     pub fn set_footprint_shown(&mut self, shown: bool) {
         if self.footprint_shown != shown {
             self.footprint_shown = shown;
+            self.touch();
+        }
+    }
+
+    /// `split`, `delta` or `total`: how a level shows what traded at it.
+    pub fn set_footprint_mode(&mut self, raw: &str) {
+        let mode = footprint::Mode::parse(raw);
+        if self.footprint_mode != mode {
+            self.footprint_mode = mode;
             self.touch();
         }
     }
@@ -1225,7 +1237,7 @@ impl Chart {
             // server never recorded leaves a gap rather than shifting the rest.
             let placed: Vec<(f64, &footprint::Bar)> =
                 self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
-            footprint::paint(f, &view, &placed);
+            footprint::paint(f, &view, &placed, self.footprint_mode);
         }
         self.paint_watermark(f, price.plot);
         for i in (i0..=i1).filter(|_| !tpo && !foot) {

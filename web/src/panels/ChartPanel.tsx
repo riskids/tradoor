@@ -15,6 +15,7 @@ import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { flowMarks, watchFlowMarks } from '../lib/flow-marks';
 import { fetchFootprint, flatten, recordedMarkets, type Levels } from '../lib/footprint';
+import { FOOTPRINT_MODES } from '../workspace/model';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, formatTurnover, MAX_PRICE_DECIMALS } from '../lib/format';
 import type { LastPrice } from '../lib/last-price';
@@ -201,6 +202,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const footprintable = () => recorded().has(market());
   const footprintOn = () => props.panel.footprint === true && footprintable() && !tpoShown();
   createEffect(() => send({ t: 'footprintShown', id: sid, value: footprintOn() }));
+  createEffect(() => send({ t: 'footprintMode', id: sid, value: props.panel.footprintMode }));
   createEffect(() => {
     if (!footprintOn()) {
       setFootprintBars([]);
@@ -209,13 +211,14 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     }
     const market_ = market();
     const barMs = tfMs(timeframe());
+    const settings = { ticks: props.panel.footprintTicks, unit: props.panel.footprintUnit === 'usd' ? ('usd' as const) : ('coins' as const) };
     // A day of minutes is what one request may carry, which at a minute a bar
     // is a day of chart and at five minutes five days of it.
     const to = Date.now();
     const from = to - 1_440 * 60_000;
     let dropped = false;
     const load = () =>
-      fetchFootprint(market_, barMs, from, to).then(
+      fetchFootprint(market_, barMs, from, to, settings).then(
         (bars) => {
           if (dropped) return;
           setFootprintBars(bars);
@@ -724,6 +727,47 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             )}
           </For>
         </select>
+        <Show when={footprintOn()}>
+          <span class="sep" />
+          <select
+            class="tb"
+            value={props.panel.footprintMode}
+            data-tip="How a level reads: the two sides apart, their difference, or everything that traded there"
+            onChange={(e) => patchPanel(id, { footprintMode: e.currentTarget.value })}
+          >
+            <For each={FOOTPRINT_MODES}>
+              {(m) => (
+                <option value={m.value} selected={props.panel.footprintMode === m.value}>
+                  {m.label}
+                </option>
+              )}
+            </For>
+          </select>
+          <select
+            class="tb"
+            value={props.panel.footprintUnit}
+            data-tip="Counted in coins, or in dollars at the price each level traded at"
+            onChange={(e) => patchPanel(id, { footprintUnit: e.currentTarget.value })}
+          >
+            <option value="coins" selected={props.panel.footprintUnit !== 'usd'}>
+              Coins
+            </option>
+            <option value="usd" selected={props.panel.footprintUnit === 'usd'}>
+              USD
+            </option>
+          </select>
+          <input
+            class="box num"
+            style={{ width: '58px' }}
+            data-tip={`Ticks a row covers — 0 fits the rows to the bar. One tick is ${recorded().get(market()) ?? 1}`}
+            value={props.panel.footprintTicks || ''}
+            placeholder="auto"
+            onChange={(e) => {
+              const ticks = Number(e.currentTarget.value);
+              patchPanel(id, { footprintTicks: Number.isFinite(ticks) && ticks >= 0 ? Math.min(1_000, Math.round(ticks)) : 0 });
+            }}
+          />
+        </Show>
         <Show when={tpoShown()}>
           <button
             ref={tpoButton}

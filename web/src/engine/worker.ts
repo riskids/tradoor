@@ -840,6 +840,9 @@ function handle(msg: ToWorker): void {
     case 'footprintShown':
       slot.engine.set_footprint_shown(msg.value);
       break;
+    case 'footprintMode':
+      slot.engine.set_footprint_mode(msg.value);
+      break;
     case 'flow':
       slot.engine.set_flow(Float64Array.from(msg.marks.flatMap((m) => [m.at, m.price, m.usd])));
       break;
