@@ -20,6 +20,8 @@ export interface Legend {
   alert: { id: number; y: number } | null;
   /** The flow mark under the pointer: which one, and where it sits. */
   flow: { index: number; x: number; y: number } | null;
+  /** The footprint cell under the pointer: which bar, which level, and where. */
+  footprint: { bar: number; level: number; x: number; y: number } | null;
 }
 
 export interface StudyLine {

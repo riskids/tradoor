@@ -150,6 +150,9 @@ pub struct Legend {
     pub alert: Option<(i64, f32)>,
     /// The flow mark under the pointer: which one, and where it sits.
     pub flow: Option<(usize, f32, f32)>,
+    /// The footprint cell under the pointer: which bar, which level, and the
+    /// middle of the row, for the page to hang its reading on.
+    pub footprint: Option<(usize, usize, f32, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -639,6 +642,33 @@ impl Chart {
             self.flow = marks;
             self.touch();
         }
+    }
+
+    /// The footprint cell under (x, y): its bar, its level, and where the row
+    /// sits — so a reader can put the pointer on a cell and be told what made
+    /// it, which is the whole use of the numbers being too small to print.
+    pub fn footprint_at(&self, x: f32, y: f32) -> Option<(usize, usize, f32, f32)> {
+        if !self.footprint_shown || self.footprint.is_empty() {
+            return None;
+        }
+        let pane = self.panes.first()?;
+        if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
+            return None;
+        }
+        let half = (self.time.bar_spacing as f32 * 0.86).max(2.0) / 2.0;
+        let price = pane.scale.price(f64::from(y));
+        for (index, bar) in self.footprint.iter().enumerate() {
+            let Some(logical) = time_to_logical(&self.times, bar.time as f64) else { continue };
+            let bx = self.time.x(logical) as f32;
+            if (x - bx).abs() > half {
+                continue;
+            }
+            let step = footprint::level_step(bar);
+            let level = bar.levels.iter().position(|(p, _, _)| price >= *p && price < *p + step)?;
+            let row_y = pane.scale.y(bar.levels[level].0 + step / 2.0) as f32;
+            return Some((index, level, bx, row_y));
+        }
+        None
     }
 
     /// Whether the reader asked for the marks: they are a study like any
@@ -1638,6 +1668,7 @@ impl Chart {
             axis_x: pane.plot.w,
             alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_handle_at(x, y)),
             flow: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.flow_at(x, y)),
+            footprint: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.footprint_at(x, y)),
         }
     }
 
@@ -2970,6 +3001,27 @@ mod tests {
         }
         c.pointer_up(200.0, 120.0);
         assert!(matches!(&c.take_events()[0], Event::DrawingCreated { kind: DrawingKind::Brush, points } if points.len() > 10));
+    }
+
+    #[test]
+    fn the_footprint_cell_under_the_pointer_is_the_one_the_price_falls_in() {
+        let mut c = chart();
+        let bar = c.candles()[400];
+        let levels = vec![(bar.low, 1.0, 2.0), (bar.low + 0.5, 3.0, 0.5), (bar.low + 1.0, 0.25, 4.0)];
+        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels }]);
+        c.render(1_800_000_000_000);
+        assert_eq!(c.footprint_at(10.0, 10.0), None, "nothing is drawn until the style is chosen");
+
+        c.set_footprint_shown(true);
+        c.render(1_800_000_000_000);
+        let pane = c.panes[0];
+        let x = c.time.x(400.0) as f32;
+        // The middle of the lowest row, and the middle of the one above it.
+        let low = pane.scale.y(c.candles()[400].low + 0.25) as f32;
+        let up = pane.scale.y(c.candles()[400].low + 0.75) as f32;
+        assert_eq!(c.footprint_at(x, low).map(|(b, l, _, _)| (b, l)), Some((0, 0)));
+        assert_eq!(c.footprint_at(x, up).map(|(b, l, _, _)| (b, l)), Some((0, 1)));
+        assert_eq!(c.footprint_at(x + 400.0, low), None, "and a bar away from it is not it");
     }
 
     #[test]

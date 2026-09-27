@@ -99,7 +99,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)]) {
 
 /// The gap between levels, which is the market's own step wherever two levels
 /// are neighbours — a bar that traded at four prices in a row says so itself.
-fn level_step(bar: &Bar) -> f64 {
+pub(crate) fn level_step(bar: &Bar) -> f64 {
     let mut step = f64::MAX;
     for pair in bar.levels.windows(2) {
         let gap = pair[1].0 - pair[0].0;

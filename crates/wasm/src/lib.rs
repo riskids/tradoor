@@ -418,6 +418,17 @@ impl ChartEngine {
             }
             None => set(&o, "flow", JsValue::NULL),
         }
+        match l.footprint {
+            Some((bar, level, x, y)) => {
+                let c = obj();
+                set(&c, "bar", bar as f64);
+                set(&c, "level", level as f64);
+                set(&c, "x", f64::from(x));
+                set(&c, "y", f64::from(y));
+                set(&o, "footprint", c);
+            }
+            None => set(&o, "footprint", JsValue::NULL),
+        }
         o.into()
     }
 
