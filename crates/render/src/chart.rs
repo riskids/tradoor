@@ -1242,7 +1242,7 @@ impl Chart {
             }
         }
         self.paint_watermark(f, price.plot);
-        for i in (i0..=i1).filter(|_| !tpo) {
+        for i in (i0..=i1).filter(|_| !tpo && !foot) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);

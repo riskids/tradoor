@@ -1,12 +1,13 @@
 //! Footprint columns: what was bought and what was sold at every price inside
-//! a bar, over the bar itself.
+//! a bar, in place of the bar.
 //!
 //! Read as every footprint chart is read. A bar is a column of rows, one a
 //! price level, each row two cells — sold on the left, bought on the right.
 //! Every bar's rows sit on ONE price grid, so a level reads straight across
 //! the screen; a grid per bar would put neighbouring bars' rows at different
-//! prices and there would be nothing to compare. The candle stays underneath:
-//! the numbers say where the trade happened, the candle where the price went.
+//! prices and there would be nothing to compare. The candle is not drawn under
+//! them: a column already says where the bar opened, traded and closed, and a
+//! body behind the cells only fights them for the same pixels.
 //!
 //! A cell is filled against the loudest level of its own bar, so a quiet bar
 //! reads as well as the busy one beside it. A cell whose side took far more
@@ -168,15 +169,18 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
             }
             let (top, drawn) = (top_of(*price), drawn_at(*price));
             let alpha = |v: f64| (55.0 + 200.0 * (v / loudest).clamp(0.0, 1.0).sqrt() as f32) as u8;
+            // A number over a filled cell has to fight the fill: over a strong
+            // one the background colour reads, over a faint one the text
+            // colour does. Grey over both reads over neither.
+            let ink = |fill: u8| if fill >= 150 { t.background } else { t.text };
             let side = if buy >= sell { t.bull } else { t.bear };
             match mode {
                 Mode::Split => {
                     f.rect(x - half, top, half, drawn, t.bear.with_alpha(alpha(*sell)));
                     f.rect(x, top, half, drawn, t.bull.with_alpha(alpha(*buy)));
                     if numbers {
-                        // Each number in the colour of the side it belongs to.
-                        f.text(x - pad, top + drawn / 2.0, short(*sell), t.bear, Align::Right, Baseline::Middle, size, None, Some(view.plot));
-                        f.text(x + pad, top + drawn / 2.0, short(*buy), t.bull, Align::Left, Baseline::Middle, size, None, Some(view.plot));
+                        f.text(x - pad, top + drawn / 2.0, short(*sell), ink(alpha(*sell)), Align::Right, Baseline::Middle, size, None, Some(view.plot));
+                        f.text(x + pad, top + drawn / 2.0, short(*buy), ink(alpha(*buy)), Align::Left, Baseline::Middle, size, None, Some(view.plot));
                     }
                 }
                 Mode::Cluster => {
@@ -195,7 +199,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
                     f.rect(x - half, top, width, drawn, color.with_alpha(alpha(value.abs())));
                     if numbers {
                         let text = if mode != Mode::Total && value >= 0.0 { format!("+{}", short(value)) } else { short(value) };
-                        f.text(x, top + drawn / 2.0, text, t.text, Align::Center, Baseline::Middle, size, None, Some(view.plot));
+                        f.text(x, top + drawn / 2.0, text, ink(alpha(value.abs())), Align::Center, Baseline::Middle, size, None, Some(view.plot));
                     }
                 }
             }
@@ -422,6 +426,23 @@ mod tests {
         let ys: Vec<f32> = f.positions.chunks_exact(2).map(|p| p[1]).collect();
         let (top, bottom) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
         assert!(bottom - top < 20.0, "the column stands where its levels are, not over the whole chart: {top} to {bottom}");
+    }
+
+    #[test]
+    fn a_number_takes_the_colour_that_reads_over_its_own_cell() {
+        let theme = Theme::default();
+        let plot = Rect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 };
+        let mut f = Frame::default();
+        f.begin(400.0, 300.0, 1.0, theme.background);
+        let x = |l: f64| 200.0 + l as f32;
+        let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
+        let view = View { plot, bar_spacing: 80.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
+        // One level traded a hundred coins, the next a fiftieth of that.
+        let bar = Bar { time: 0, levels: vec![(100.0, 100.0, 0.02), (101.0, 0.02, 0.02)] };
+        paint(&mut f, &view, &[(0.0, &bar)], Options { mode: Mode::Split, value_area: false, stats: false, profile: false }, 1.0);
+        let colour_of = |text: &str| f.texts.iter().find(|t| t.text == text).map(|t| t.color);
+        assert_eq!(colour_of("100"), Some(theme.background), "over a filled cell, the background colour reads");
+        assert_eq!(colour_of("0.02"), Some(theme.text), "over a faint one, the text colour does");
     }
 
     #[test]
