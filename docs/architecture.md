@@ -143,6 +143,17 @@ eye: the minutes themselves, so they show at any timeframe, and hovering one
 names the money, the minute and the price. After a crossing a market stays quiet until
 its flow falls back to half the threshold, so one push does not ring over.
 
+Footprint is the same prints kept by price rather than summed: a trade lands
+in the level its price falls in, and a minute is a column of levels
+(`footprint_minute`, `/api/footprint?market&from&to`). Eight markets are
+recorded — BTC and ETH, spot and perpetual, on Binance and Bybit — at the
+finest level a reader would want, a dollar on BTC and a tenth on ETH, since
+coarser groupings are made by adding levels together and cannot be undone. A
+month is kept. The levels of a minute are packed into one blob: the lowest
+level, then each level as the gap from the one before it and the two volumes,
+as varints of thousandths of a coin. A busy minute of BTC packs into some 130
+bytes where a row per level would be forty rows and ten times the bytes.
+
 Price alerts are rows per browser id, like drawings (`/api/alerts`); the
 browser watches the prices, each alert market's daily candle stream, and fires
 them — Crossing, Crossing Up or Down, Greater or Less Than — with a sound, a

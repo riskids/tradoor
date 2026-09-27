@@ -13,7 +13,7 @@ pub mod decimal;
 pub mod manifest;
 pub mod partition;
 pub mod period;
-mod varint;
+pub mod varint;
 
 pub use partition::{summarize, CodecError, RawCandle, Summary, TickCandles};
 pub use period::{max_tier, Period, Tier};
