@@ -135,7 +135,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
     let half = width / 2.0;
 
     for (logical, bar) in bars {
-        if bar.levels.len() < 2 {
+        if bar.levels.is_empty() {
             continue;
         }
         let x = (view.x)(*logical);
@@ -279,7 +279,11 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
     // screen as a whole traded, which no single column can say.
     if options.profile {
         let mut rows: Vec<(f64, f64, f64)> = Vec::new();
-        for (_, bar) in bars {
+        let on_screen_bar = |logical: &f64| {
+            let x = (view.x)(*logical);
+            x + half >= view.plot.x && x - half <= view.plot.right()
+        };
+        for (_, bar) in bars.iter().filter(|(logical, _)| on_screen_bar(logical)) {
             for (price, buy, sell) in &bar.levels {
                 match rows.iter_mut().find(|(p, _, _)| (p - price).abs() < grid.max(f64::EPSILON) / 2.0) {
                     Some(row) => {
@@ -426,6 +430,22 @@ mod tests {
         let ys: Vec<f32> = f.positions.chunks_exact(2).map(|p| p[1]).collect();
         let (top, bottom) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
         assert!(bottom - top < 20.0, "the column stands where its levels are, not over the whole chart: {top} to {bottom}");
+    }
+
+    #[test]
+    fn a_minute_that_traded_at_one_price_is_still_drawn() {
+        let theme = Theme::default();
+        let plot = Rect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 };
+        let mut f = Frame::default();
+        f.begin(400.0, 300.0, 1.0, theme.background);
+        let x = |l: f64| 200.0 + l as f32;
+        let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
+        let view = View { plot, bar_spacing: 30.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
+        // One row, because the grid the screen shares is coarser than the
+        // minute's own range. It is still a minute that traded.
+        let bar = Bar { time: 0, levels: vec![(100.0, 2.0, 1.0)] };
+        paint(&mut f, &view, &[(0.0, &bar)], Options { mode: Mode::Split, value_area: false, stats: false, profile: false }, 1.0);
+        assert!(f.vertex_count() > 0, "a hole where there was trade is worse than a coarse row");
     }
 
     #[test]

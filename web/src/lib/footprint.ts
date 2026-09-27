@@ -86,14 +86,19 @@ export async function fetchFootprint(market: string, barMs: number, from: number
       }
     }
   }
-  // One grouping for the lot: the widest bar decides how coarse the rows are,
-  // and every bar is cut on the same lines.
-  const widest = [...byBar.values()].reduce((most, levels) => {
-    const steps = [...levels.keys()];
-    return Math.max(most, steps.length > 0 ? Math.max(...steps) - Math.min(...steps) + 1 : 0);
-  }, 0);
+  // One grouping for the lot, taken from a bar in the middle of the pack
+  // rather than the wildest one: a single violent minute in the day would
+  // otherwise set a grid so coarse that every quiet bar collapses into one row
+  // and says nothing at all.
+  const spans = [...byBar.values()]
+    .map((levels) => {
+      const steps = [...levels.keys()];
+      return steps.length > 0 ? Math.max(...steps) - Math.min(...steps) + 1 : 0;
+    })
+    .sort((a, b) => a - b);
+  const typical = spans.length > 0 ? spans[Math.floor(spans.length * 0.8)]! : 0;
   let by = Math.max(1, Math.round(settings.ticks) || 1);
-  while (widest / by > MAX_ROWS) by = coarser(by);
+  while (typical / by > MAX_ROWS) by = coarser(by);
   return {
     grid: by * tick,
     bars: [...byBar.entries()]
