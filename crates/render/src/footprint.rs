@@ -2,13 +2,13 @@
 //! a bar, in place of the bar's body.
 //!
 //! A bar is a column of rows, one a price level, each row two cells — sold on
-//! the left, bought on the right — filled in proportion to the busiest level in
-//! view, so a glance shows where the trade actually happened. The numbers are
+//! the left, bought on the right — filled against the busiest level of that
+//! same bar, so a quiet bar reads as well as the busy one beside it and a
+//! glance finds where the trade actually happened. The numbers are
 //! written only where a cell is big enough to hold them: sixty bars of forty
 //! levels is five thousand numbers, which no chart draws sixty times a second.
 //! Below that size the cells alone carry it, as a heat map does.
 
-use crate::color::Color;
 use crate::paint::{Align, Baseline, Frame, Rect};
 use crate::theme::Theme;
 
@@ -116,7 +116,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
         let step = level_step(bar);
         let row = row_height(view, bar.levels[bar.levels.len() / 2].0, step);
         let numbers = width >= NUMBER_WIDTH && row >= NUMBER_HEIGHT;
-        for (row_index, (price, buy, sell)) in bar.levels.iter().enumerate() {
+        for (price, buy, sell) in &bar.levels {
             let top = (view.y)(*price + step);
             let h = row_height(view, *price, step);
             if top + h < view.plot.y || top > view.plot.bottom() {
