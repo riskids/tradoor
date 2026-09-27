@@ -10,6 +10,7 @@
 pub mod chart;
 pub mod color;
 pub mod drawings;
+pub mod footprint;
 pub mod geometry;
 pub mod paint;
 pub mod scale;

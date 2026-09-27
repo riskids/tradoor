@@ -437,6 +437,34 @@ impl ChartEngine {
         self.chart.set_flow(marks);
     }
 
+    /// Volume by price, flat: for each bar, its time, how many levels follow,
+    /// then each level as price, coins bought, coins sold. One array rather
+    /// than a tree of objects, because a busy screen is fifty thousand numbers.
+    pub fn set_footprint(&mut self, flat: &[f64]) {
+        let mut bars = Vec::new();
+        let mut i = 0usize;
+        while i + 1 < flat.len() {
+            let time = flat[i] as i64;
+            let count = flat[i + 1].max(0.0) as usize;
+            i += 2;
+            let end = (i + count * 3).min(flat.len());
+            let levels = flat[i..end]
+                .chunks_exact(3)
+                .filter(|c| c[0].is_finite() && c[0] > 0.0 && c[1].is_finite() && c[2].is_finite())
+                .map(|c| (c[0], c[1], c[2]))
+                .collect::<Vec<_>>();
+            i = end;
+            if !levels.is_empty() {
+                bars.push(tradoor_render::footprint::Bar { time, levels });
+            }
+        }
+        self.chart.set_footprint(bars);
+    }
+
+    pub fn set_footprint_shown(&mut self, shown: bool) {
+        self.chart.set_footprint_shown(shown);
+    }
+
     pub fn studies(&self) -> Array {
         self.chart
             .studies_meta()

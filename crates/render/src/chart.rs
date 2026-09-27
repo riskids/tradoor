@@ -11,6 +11,7 @@ use tradoor_core::{Candle, ChartTimeframe, Interval};
 
 use crate::color::Color;
 use crate::drawings::{self, Anchor, DrawingKind, DrawingShape, DrawingStyle, Placed, MAX_POINTS};
+use crate::footprint;
 use crate::geometry::{logical_to_time, ribbon_runs, time_to_logical, visible_slice, RibbonRun};
 use crate::paint::{Align, Baseline, Frame, Rect};
 use crate::scale::{PriceScale, ScaleMode, TimeScale, MIN_BAR_SPACING};
@@ -263,6 +264,10 @@ pub struct Chart {
     tpo: Option<ChartTimeframe>,
     tpo_settings: tpo::Settings,
     tpo_profiles: Option<tpo::Profiles>,
+    /// Volume by price inside each bar, as the page fetched it, oldest first.
+    footprint: Vec<footprint::Bar>,
+    /// Whether those columns stand in for the candles.
+    footprint_shown: bool,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -324,6 +329,8 @@ impl Chart {
             tpo: None,
             tpo_settings: tpo::Settings::default(),
             tpo_profiles: None,
+            footprint: Vec::new(),
+            footprint_shown: false,
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -605,6 +612,23 @@ impl Chart {
         }
         if self.alerts != alerts {
             self.alerts = alerts;
+            self.touch();
+        }
+    }
+
+    /// Volume by price inside each bar: what the page fetched of what the
+    /// server recorded, its minutes folded into the bars on screen.
+    pub fn set_footprint(&mut self, bars: Vec<footprint::Bar>) {
+        if self.footprint != bars {
+            self.footprint = bars;
+            self.touch();
+        }
+    }
+
+    /// Whether those columns are drawn at all: a chart style, as TPO is.
+    pub fn set_footprint_shown(&mut self, shown: bool) {
+        if self.footprint_shown != shown {
+            self.footprint_shown = shown;
             self.touch();
         }
     }
@@ -1127,6 +1151,7 @@ impl Chart {
         // the mark over the volume — the bars sit where it does and would bury it
         f.clip(Some(price.plot));
         let tpo = self.tpo().is_some() && self.tpo_profiles.is_some();
+        let foot = !tpo && self.footprint_shown && !self.footprint.is_empty();
         if let (true, Some(profiles)) = (tpo, self.tpo_profiles.as_ref()) {
             let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None }).collect();
             let x = |l: f64| self.time.x(l) as f32;
@@ -1134,7 +1159,7 @@ impl Chart {
             let view = tpo::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, precision: self.precision(), x: &x, y: &y, bars: &bars };
             tpo::paint(f, &view, profiles, &self.tpo_settings);
         }
-        if !tpo && !self.hidden.contains("ribbon") {
+        if !tpo && !foot && !self.hidden.contains("ribbon") {
             for run in &self.ribbon {
                 let pts = visible_slice(&run.points, from - 1.0, to + 1.0);
                 if pts.len() < 2 {
@@ -1149,7 +1174,7 @@ impl Chart {
         let dpr = f.dpr;
         let (body_dev, wick) = candle_widths(self.time.bar_spacing, dpr);
         let body = body_dev / dpr;
-        if !tpo && !self.hidden.contains("volume") {
+        if !tpo && !foot && !self.hidden.contains("volume") {
             let max_vol = (i0..=i1).filter_map(|i| self.bar(i)).map(|b| b.volume).fold(0.0, f64::max);
             if max_vol > 0.0 {
                 let (top, h) = (price.plot.y + price.plot.h * 0.82, price.plot.h * 0.18);
@@ -1162,8 +1187,18 @@ impl Chart {
                 }
             }
         }
+        if foot {
+            let x = |l: f64| self.time.x(l) as f32;
+            let y = |p: f64| price.scale.y(p) as f32;
+            let view = footprint::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, x: &x, y: &y };
+            // Each column at the place its own time sits, so a minute the
+            // server never recorded leaves a gap rather than shifting the rest.
+            let placed: Vec<(f64, &footprint::Bar)> =
+                self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
+            footprint::paint(f, &view, &placed);
+        }
         self.paint_watermark(f, price.plot);
-        for i in (i0..=i1).filter(|_| !tpo) {
+        for i in (i0..=i1).filter(|_| !tpo && !foot) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);
@@ -1186,7 +1221,7 @@ impl Chart {
                 f.stroke_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), 1.0 / dpr, base);
             }
         }
-        if !tpo && !self.hidden.contains("ema200") {
+        if !tpo && !foot && !self.hidden.contains("ema200") {
             self.paint_series(f, &price.scale, &self.engine.ema200, i0, i1, t.ema200, 1.0, LineStyle::Solid);
         }
 

@@ -172,6 +172,10 @@ export type ToWorker =
   | { t: 'alerts'; id: string; list: { id: number; price: number }[] }
   /** Minutes whose taker flow ran hard, marked on the candles. */
   | { t: 'flow'; id: string; marks: { at: number; price: number; usd: number }[] }
+  /** Volume by price: per bar, its time, how many levels follow, then each
+   *  level as price, coins bought, coins sold. */
+  | { t: 'footprint'; id: string; flat: Float64Array }
+  | { t: 'footprintShown'; id: string; value: boolean }
   | { t: 'selected'; id: string; value: number | null }
   | { t: 'resetView'; id: string }
   | { t: 'autoScale'; id: string }

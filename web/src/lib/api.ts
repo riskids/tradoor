@@ -271,6 +271,21 @@ export const api = {
   flowMinutes: (market: string) => json<{ market: string; thresholdUsd: number; minutes: FlowMinute[] }>(`/api/flow/minutes?market=${encodeURIComponent(market)}`),
   flowWatch: (market: string, watch: { thresholdUsd: number; notify: boolean }) => json<FlowWatch>(`/api/flow/${encodeURIComponent(market)}`, { method: 'PUT', body: watch }),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
+  /** What this server records volume by price for, and at what level. */
+  async footprintMarkets(): Promise<{ markets: { market: string; tick: number }[]; keptDays: number }> {
+    const { body } = await request<{ markets: { market: string; tick: number }[]; keptDays: number }>('/api/footprint/markets');
+    return body ?? { markets: [], keptDays: 0 };
+  },
+
+  /** The minutes recorded between `from` and `to`, each as its price levels. */
+  async footprint(market: string, from: number, to: number): Promise<{ tick: number; bars: { at: number; trades: number; levels: [number, number, number][] }[] }> {
+    const { status, body } = await request<{ tick: number; bars: { at: number; trades: number; levels: [number, number, number][] }[] }>(
+      `/api/footprint?market=${encodeURIComponent(market)}&from=${Math.round(from)}&to=${Math.round(to)}`,
+    );
+    if (status >= 400 || !body) throw new ApiError(status, `no footprint for ${market}`);
+    return body;
+  },
+
   async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
     const res = await request<{ version: number; doc?: unknown; error?: string }>(`/api/workspaces/${id}`, { method: 'PUT', body });
     if (res.status === 409 && res.body) return { version: res.body.version, conflict: true, doc: res.body.doc };

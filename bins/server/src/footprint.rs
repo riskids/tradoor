@@ -274,6 +274,14 @@ async fn flush(it: &Footprint) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `GET /api/footprint/markets`: what this server records, and at what level.
+pub async fn recorded() -> Json<Value> {
+    Json(json!({
+        "markets": MARKETS.iter().map(|(market, tick)| json!({ "market": market, "tick": tick })).collect::<Vec<_>>(),
+        "keptDays": KEPT_MS / (24 * 3_600_000),
+    }))
+}
+
 #[derive(Deserialize)]
 pub struct Ask {
     market: String,

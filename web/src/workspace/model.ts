@@ -50,6 +50,8 @@ export interface ChartPanelState extends PanelBase {
   paneWeights: string;
   /** TPO split — `1d`, `1w` or `1M` — drawn in place of candles; empty, candles. */
   tpo: string;
+  /** Volume by price in place of the candles, where the server records it. */
+  footprint: boolean;
   /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
   tpoSettings: Record<string, string>;
   /** The layers under the symbol are folded away. */
@@ -138,12 +140,12 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', tpoSettings: {}, legendShut: false };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', footprint: false, tpoSettings: {}, legendShut: false };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
-      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', tpoSettings: {}, legendShut: false };
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, tpoSettings: {}, legendShut: false };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -215,6 +217,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
     // A TPO panel from before TPO was a chart style keeps its weekly split, as
     // does a chart saved while TPO was an on/off switch.
     if (raw.type === 'chart') p.tpo = TPO_SPLITS.some((t) => t.value === raw.tpo) ? (raw.tpo as string) : raw.tpo === true ? '1w' : '';
+    if (raw.type === 'chart') p.footprint = raw.footprint === true;
     else p.tpo = '1w';
     if (isObj(raw.tpoSettings)) {
       for (const [k, v] of Object.entries(raw.tpoSettings).slice(0, 80)) {

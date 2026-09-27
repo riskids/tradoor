@@ -14,6 +14,7 @@ import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step 
 import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { flowMarks, watchFlowMarks } from '../lib/flow-marks';
+import { fetchFootprint, flatten, recordedMarkets } from '../lib/footprint';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, formatTurnover, MAX_PRICE_DECIMALS } from '../lib/format';
 import type { LastPrice } from '../lib/last-price';
@@ -179,6 +180,42 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     const mark = at && flowMarks(market())[at.index];
     return mark ? { mark, x: at.x, y: at.y } : null;
   };
+
+  // ---------------------------------------------------------------- footprint
+  // Volume by price, in place of the candles. The server records eight markets
+  // at a minute apiece; a chart of longer bars adds those minutes together.
+  const [recorded, setRecorded] = createSignal<Map<string, number>>(new Map());
+  void recordedMarkets().then(setRecorded);
+  /** Whether this market's footprint can be asked for at all. */
+  const footprintable = () => recorded().has(market());
+  const footprintOn = () => props.panel.footprint === true && footprintable() && !tpoShown();
+  createEffect(() => send({ t: 'footprintShown', id: sid, value: footprintOn() }));
+  createEffect(() => {
+    if (!footprintOn()) {
+      send({ t: 'footprint', id: sid, flat: new Float64Array() });
+      return;
+    }
+    const market_ = market();
+    const barMs = tfMs(timeframe());
+    // A day of minutes is what one request may carry, which at a minute a bar
+    // is a day of chart and at five minutes five days of it.
+    const to = Date.now();
+    const from = to - 1_440 * 60_000;
+    let dropped = false;
+    const load = () =>
+      fetchFootprint(market_, barMs, from, to).then(
+        (bars) => {
+          if (!dropped) send({ t: 'footprint', id: sid, flat: flatten(bars) });
+        },
+        () => {},
+      );
+    void load();
+    const timer = setInterval(() => void load(), 20_000);
+    onCleanup(() => {
+      dropped = true;
+      clearInterval(timer);
+    });
+  });
 
   // ---------------------------------------------------------------- alerts
   // The market's active alerts, drawn by the engine as levels.
@@ -653,10 +690,18 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </Show>
         </button>
         <span class="sep" />
-        <select data-tip="Candles, or TPO profiles — the candles are the brackets, the split is how long a profile runs" onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value })}>
-          <option value="" selected={!split()}>
+        <select
+          data-tip="Candles, the footprint's own volume by price, or TPO profiles — the candles are the brackets, the split is how long a profile runs"
+          onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value === 'footprint' ? '' : e.currentTarget.value, footprint: e.currentTarget.value === 'footprint' })}
+        >
+          <option value="" selected={!split() && !footprintOn()}>
             Candles
           </option>
+          <Show when={footprintable()}>
+            <option value="footprint" selected={footprintOn()}>
+              Footprint
+            </option>
+          </Show>
           <For each={TPO_SPLITS.filter((s) => tfLonger(s.value, timeframe()))}>
             {(s) => (
               <option value={s.value} selected={split() === s.value}>

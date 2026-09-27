@@ -112,6 +112,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/flow/minutes", get(flow::minutes))
         .route("/flow/{market}", axum::routing::put(flow::watch))
         .route("/footprint", get(footprint::bars))
+        .route("/footprint/markets", get(footprint::recorded))
         .route("/telegram", get(telegram::status).patch(telegram::set_clock))
         .route("/telegram/link", axum::routing::post(telegram::link))
         .route("/telegram/test", axum::routing::post(telegram::test))
