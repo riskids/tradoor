@@ -25,6 +25,15 @@ export const FOOTPRINT_MODES: readonly { value: string; label: string }[] = [
   { value: 'split', label: 'Split' },
   { value: 'delta', label: 'Delta' },
   { value: 'total', label: 'Total' },
+  { value: 'cluster', label: 'Cluster' },
+  { value: 'ladder', label: 'Ladder' },
+];
+
+/** What a footprint column carries besides its cells. */
+export const FOOTPRINT_EXTRAS: readonly { key: 'footprintValueArea' | 'footprintStats' | 'footprintProfile'; label: string; tip: string }[] = [
+  { key: 'footprintValueArea', label: 'Value area', tip: 'Outline the rows holding 70% of a bar’s volume' },
+  { key: 'footprintStats', label: 'Stats', tip: 'The bar’s volume and delta, written under it' },
+  { key: 'footprintProfile', label: 'Profile', tip: 'Every visible bar summed by price, against the right edge' },
 ];
 
 export const TPO_SPLITS: readonly { value: string; label: string }[] = [
@@ -65,6 +74,12 @@ export interface ChartPanelState extends PanelBase {
   footprintUnit: string;
   /** Ticks a footprint row covers; 0 fits the rows to the bar. */
   footprintTicks: number;
+  /** The rows holding most of a bar's volume, outlined. */
+  footprintValueArea: boolean;
+  /** The bar's volume and delta, written under it. */
+  footprintStats: boolean;
+  /** Every visible bar summed by price, against the right edge. */
+  footprintProfile: boolean;
   /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
   tpoSettings: Record<string, string>;
   /** The layers under the symbol are folded away. */
@@ -153,12 +168,12 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, tpoSettings: {}, legendShut: false };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
-      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, tpoSettings: {}, legendShut: false };
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -236,6 +251,10 @@ function readPanel(id: string, raw: unknown): Panel | null {
       if (raw.footprintUnit === 'usd') p.footprintUnit = 'usd';
       const ticks = Number(raw.footprintTicks);
       if (Number.isFinite(ticks) && ticks >= 0 && ticks <= 1_000) p.footprintTicks = Math.round(ticks);
+      for (const extra of FOOTPRINT_EXTRAS) {
+        const on = raw[extra.key];
+        if (typeof on === 'boolean') p[extra.key] = on;
+      }
     }
     else p.tpo = '1w';
     if (isObj(raw.tpoSettings)) {

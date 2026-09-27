@@ -476,9 +476,9 @@ impl ChartEngine {
         self.chart.set_footprint_shown(shown);
     }
 
-    /// `split`, `delta` or `total`.
-    pub fn set_footprint_mode(&mut self, raw: &str) {
-        self.chart.set_footprint_mode(raw);
+    /// `mode;valueArea;stats;profile` — the mode by name, the rest 0 or 1.
+    pub fn set_footprint_options(&mut self, raw: &str) {
+        self.chart.set_footprint_options(raw);
     }
 
     pub fn studies(&self) -> Array {

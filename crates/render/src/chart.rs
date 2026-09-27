@@ -273,8 +273,8 @@ pub struct Chart {
     footprint_grid: f64,
     /// Whether those columns stand in for the candles.
     footprint_shown: bool,
-    /// The two sides apart, their difference, or their sum.
-    footprint_mode: footprint::Mode,
+    /// How a level reads, and what else a column carries.
+    footprint_options: footprint::Options,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -339,7 +339,7 @@ impl Chart {
             footprint: Vec::new(),
             footprint_grid: 0.0,
             footprint_shown: false,
-            footprint_mode: footprint::Mode::default(),
+            footprint_options: footprint::Options::default(),
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -643,11 +643,19 @@ impl Chart {
         }
     }
 
-    /// `split`, `delta` or `total`: how a level shows what traded at it.
-    pub fn set_footprint_mode(&mut self, raw: &str) {
-        let mode = footprint::Mode::parse(raw);
-        if self.footprint_mode != mode {
-            self.footprint_mode = mode;
+    /// How a level reads — `split`, `delta`, `total`, `cluster`, `ladder` —
+    /// and what else a column carries, as `mode;va;stats;profile`.
+    pub fn set_footprint_options(&mut self, raw: &str) {
+        let mut parts = raw.split(';');
+        let on = |part: Option<&str>| part != Some("0");
+        let options = footprint::Options {
+            mode: footprint::Mode::parse(parts.next().unwrap_or_default()),
+            value_area: on(parts.next()),
+            stats: on(parts.next()),
+            profile: on(parts.next()),
+        };
+        if self.footprint_options != options {
+            self.footprint_options = options;
             self.touch();
         }
     }
@@ -1265,7 +1273,7 @@ impl Chart {
             // server never recorded leaves a gap rather than shifting the rest.
             let placed: Vec<(f64, &footprint::Bar)> =
                 self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
-            footprint::paint(f, &view, &placed, self.footprint_mode, self.footprint_grid);
+            footprint::paint(f, &view, &placed, self.footprint_options, self.footprint_grid);
         }
         if !tpo && !foot && !self.hidden.contains("ema200") {
             self.paint_series(f, &price.scale, &self.engine.ema200, i0, i1, t.ema200, 1.0, LineStyle::Solid);

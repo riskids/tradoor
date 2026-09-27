@@ -15,7 +15,7 @@ import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
 import { flowMarks, watchFlowMarks } from '../lib/flow-marks';
 import { fetchFootprint, flatten, recordedMarkets, type Levels } from '../lib/footprint';
-import { FOOTPRINT_MODES } from '../workspace/model';
+import { FOOTPRINT_EXTRAS, FOOTPRINT_MODES } from '../workspace/model';
 import { useDismiss } from '../lib/dismiss';
 import { decimalsOf, formatPrice, formatTurnover, MAX_PRICE_DECIMALS } from '../lib/format';
 import type { LastPrice } from '../lib/last-price';
@@ -202,7 +202,16 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const footprintable = () => recorded().has(market());
   const footprintOn = () => props.panel.footprint === true && footprintable() && !tpoShown();
   createEffect(() => send({ t: 'footprintShown', id: sid, value: footprintOn() }));
-  createEffect(() => send({ t: 'footprintMode', id: sid, value: props.panel.footprintMode }));
+  // The mode and what else a column carries, as the engine reads them.
+  createEffect(() =>
+    send({
+      t: 'footprintOptions',
+      id: sid,
+      value: [props.panel.footprintMode, props.panel.footprintValueArea, props.panel.footprintStats, props.panel.footprintProfile]
+        .map((v) => (v === true ? '1' : v === false ? '0' : v))
+        .join(';'),
+    }),
+  );
   createEffect(() => {
     if (!footprintOn()) {
       setFootprintBars([]);
@@ -757,6 +766,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               USD
             </option>
           </select>
+          <For each={FOOTPRINT_EXTRAS}>
+            {(extra) => (
+              <button class="tb" classList={{ on: props.panel[extra.key] }} data-tip={extra.tip} onClick={() => patchPanel(id, { [extra.key]: !props.panel[extra.key] })}>
+                {extra.label}
+              </button>
+            )}
+          </For>
           <input
             class="box num"
             style={{ width: '58px' }}
