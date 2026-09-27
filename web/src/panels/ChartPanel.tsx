@@ -206,23 +206,24 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   createEffect(() => {
     if (!footprintOn()) {
       setFootprintBars([]);
-      send({ t: 'footprint', id: sid, flat: new Float64Array() });
+      send({ t: 'footprint', id: sid, flat: new Float64Array(), grid: 0 });
       return;
     }
     const market_ = market();
     const barMs = tfMs(timeframe());
     const settings = { ticks: props.panel.footprintTicks, unit: props.panel.footprintUnit === 'usd' ? ('usd' as const) : ('coins' as const) };
-    // A day of minutes is what one request may carry, which at a minute a bar
-    // is a day of chart and at five minutes five days of it.
+    // What the chart can show of it: a screenful of bars back from now, since
+    // a chart of fifteen-minute bars covers a day in one screen and a chart of
+    // minutes an afternoon.
     const to = Date.now();
-    const from = to - 1_440 * 60_000;
+    const from = to - Math.min(7, Math.max(1, Math.round((barMs * 400) / 86_400_000))) * 86_400_000;
     let dropped = false;
     const load = () =>
       fetchFootprint(market_, barMs, from, to, settings).then(
-        (bars) => {
+        ({ bars, grid }) => {
           if (dropped) return;
           setFootprintBars(bars);
-          send({ t: 'footprint', id: sid, flat: flatten(bars) });
+          send({ t: 'footprint', id: sid, flat: flatten(bars), grid });
         },
         () => {},
       );

@@ -1,13 +1,22 @@
 //! Footprint columns: what was bought and what was sold at every price inside
-//! a bar, in place of the bar's body.
+//! a bar, over the bar itself.
 //!
-//! A bar is a column of rows, one a price level, each row two cells — sold on
-//! the left, bought on the right — filled against the busiest level of that
-//! same bar, so a quiet bar reads as well as the busy one beside it and a
-//! glance finds where the trade actually happened. The numbers are
-//! written only where a cell is big enough to hold them: sixty bars of forty
-//! levels is five thousand numbers, which no chart draws sixty times a second.
-//! Below that size the cells alone carry it, as a heat map does.
+//! Read as every footprint chart is read. A bar is a column of rows, one a
+//! price level, each row two cells — sold on the left, bought on the right.
+//! Every bar's rows sit on ONE price grid, so a level reads straight across
+//! the screen; a grid per bar would put neighbouring bars' rows at different
+//! prices and there would be nothing to compare. The candle stays underneath:
+//! the numbers say where the trade happened, the candle where the price went.
+//!
+//! A cell is filled against the loudest level of its own bar, so a quiet bar
+//! reads as well as the busy one beside it. A cell whose side took far more
+//! than the other side took one level away — the diagonal every platform
+//! compares, at two and a half times here — is ringed as an imbalance, and the
+//! level that traded most as the bar's point of control.
+//!
+//! The numbers are written only where a cell is big enough to hold them: sixty
+//! bars of forty levels is five thousand numbers, which no chart draws sixty
+//! times a second. Below that the cells carry it alone, as a heat map does.
 
 use crate::paint::{Align, Baseline, Frame, Rect};
 use crate::theme::Theme;
@@ -47,6 +56,12 @@ const NUMBER_WIDTH: f32 = 46.0;
 const NUMBER_HEIGHT: f32 = 8.0;
 /// A cell is never drawn thinner than this, so a busy bar still reads.
 const MIN_ROW: f32 = 1.0;
+/// How many times the other side a side must take, one level down, to be an
+/// imbalance. Exocharts asks two and a half, ATAS one and a half; this is
+/// theirs, and the diagonal is everyone's.
+const IMBALANCE: f64 = 2.5;
+/// A level this quiet against the bar's loudest is noise, whatever its ratio.
+const IMBALANCE_FLOOR: f64 = 0.04;
 
 /// What the chart lends the painter: where things go, and what they look like.
 pub struct View<'a> {
@@ -72,8 +87,9 @@ fn short(v: f64) -> String {
     }
 }
 
-/// The bars in view, each at its logical index.
-pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
+/// The bars in view, each at its logical index. `grid` is the price one row
+/// covers, the same for every bar on screen.
+pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode, grid: f64) {
     let t = view.theme;
     let weight = |buy: f64, sell: f64| match mode {
         Mode::Split => buy.max(sell),
@@ -110,10 +126,8 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
             .max_by(|a, b| (a.1 .1 + a.1 .2).total_cmp(&(b.1 .1 + b.1 .2)))
             .map(|(i, _)| i);
 
-        // Each row spans its own level: from the price it starts at to the
-        // next level up. Measured there and not from nothing — the scale may be
-        // logarithmic, where the pixels under a dollar depend on which dollar.
-        let step = level_step(bar);
+        // One grid for the screen, so a level reads straight across it.
+        let step = if grid > 0.0 { grid } else { level_step(bar) };
         let row = row_height(view, bar.levels[bar.levels.len() / 2].0, step);
         let numbers = width >= NUMBER_WIDTH && row >= NUMBER_HEIGHT;
         for (price, buy, sell) in &bar.levels {
@@ -152,6 +166,26 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
                 }
             }
         }
+        // A side that took far more than the other side took one level away.
+        // The diagonal, because a buyer lifts the offer where a seller hits the
+        // bid a level beneath it.
+        if numbers || row >= 2.0 {
+            let at = |price: f64| bar.levels.iter().find(|(p, _, _)| (p - price).abs() < step / 2.0);
+            for (price, buy, sell) in &bar.levels {
+                let top = (view.y)(*price + step);
+                let drawn = (row_height(view, *price, step) - 0.5).max(MIN_ROW);
+                let below_sell = at(*price - step).map_or(0.0, |(_, _, s)| *s);
+                let above_buy = at(*price + step).map_or(0.0, |(_, b, _)| *b);
+                let (bought_into, sold_into) = imbalanced(*buy, *sell, below_sell, above_buy, loudest);
+                if bought_into {
+                    f.stroke_rect(x, top, half, drawn, 1.0, t.bull);
+                }
+                if sold_into {
+                    f.stroke_rect(x - half, top, half, drawn, 1.0, t.bear);
+                }
+            }
+        }
+
         // The level that traded most, ringed: a column's own point of control.
         if let Some(index) = poc {
             let (price, _, _) = bar.levels[index];
@@ -164,6 +198,16 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], mode: Mode) {
         let bottom = (view.y)(bar.levels.first().map_or(0.0, |l| l.0));
         f.vline(f.snap(x), top, bottom, 1.0, t.border);
     }
+}
+
+/// Whether a side of a level took far more than the other side took one level
+/// away — the diagonal, because a buyer lifts the offer where a seller hits the
+/// bid beneath it. A level too quiet against the bar's loudest says nothing,
+/// whatever its ratio: one coin against a tenth of one is not aggression.
+fn imbalanced(buy: f64, sell: f64, below_sell: f64, above_buy: f64, loudest: f64) -> (bool, bool) {
+    let loud = |v: f64| v >= loudest * IMBALANCE_FLOOR;
+    let over = |side: f64, diagonal: f64| side >= diagonal * IMBALANCE && side > 0.0;
+    (loud(buy) && over(buy, below_sell), loud(sell) && over(sell, above_buy))
 }
 
 /// How tall one level stands on screen, measured at the price it sits at.
@@ -227,12 +271,28 @@ mod tests {
         let y = |p: f64| 300.0 - ((p.ln() - 84_000f64.ln()) * 100_000.0) as f32;
         let bar = Bar { time: 0, levels: vec![(84_000.0, 1.0, 2.0), (84_001.0, 3.0, 1.0), (84_002.0, 2.0, 2.0)] };
         let view = View { plot, bar_spacing: 30.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
-        paint(&mut f, &view, &[(0.0, &bar)], Mode::Split);
+        paint(&mut f, &view, &[(0.0, &bar)], Mode::Split, 1.0);
         // A dollar at 84,000 is about a pixel on this scale, so every vertex
         // sits within a few pixels of the levels — not spread over the plot.
         let ys: Vec<f32> = f.positions.chunks_exact(2).map(|p| p[1]).collect();
         let (top, bottom) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
         assert!(bottom - top < 20.0, "the column stands where its levels are, not over the whole chart: {top} to {bottom}");
+    }
+
+    #[test]
+    fn a_side_that_took_far_more_than_the_diagonal_is_an_imbalance() {
+        // Ten bought against one sold a level beneath: the buyers were paying up.
+        assert_eq!(imbalanced(10.0, 1.0, 1.0, 1.0, 10.0), (true, false));
+        // The same on the other side of the book.
+        assert_eq!(imbalanced(1.0, 10.0, 1.0, 1.0, 10.0), (false, true));
+        // Evenly matched, whichever way it is read.
+        assert_eq!(imbalanced(1.0, 1.0, 1.0, 1.0, 10.0), (false, false));
+        // A tenth of a coin against a hundredth is ten times as much and still
+        // nothing at all, on a bar that traded ten.
+        assert_eq!(imbalanced(0.1, 0.0, 0.01, 0.0, 10.0), (false, false));
+        // Nothing on the diagonal at all, and a side worth noticing: an
+        // imbalance, since the other side was not there to take it.
+        assert_eq!(imbalanced(5.0, 0.0, 0.0, 0.0, 10.0), (true, false));
     }
 
     #[test]
@@ -247,7 +307,7 @@ mod tests {
         // One bar trades in hundreds, the next in tenths.
         let busy = Bar { time: 0, levels: vec![(100.0, 400.0, 100.0), (101.0, 50.0, 200.0)] };
         let quiet = Bar { time: 60_000, levels: vec![(100.0, 0.4, 0.1), (101.0, 0.05, 0.2)] };
-        paint(&mut f, &view, &[(0.0, &busy), (1.0, &quiet)], Mode::Split);
+        paint(&mut f, &view, &[(0.0, &busy), (1.0, &quiet)], Mode::Split, 1.0);
         // The strongest cell of each bar carries the same weight on screen.
         let alphas: Vec<u8> = f.colors.chunks_exact(4).map(|c| c[3]).collect();
         let strongest = *alphas.iter().max().unwrap();
@@ -267,7 +327,7 @@ mod tests {
             let x = |l: f64| 200.0 + l as f32;
             let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
             let view = View { plot, bar_spacing: 80.0, char_width: 6.0, theme: &theme, x: &x, y: &y };
-            paint(&mut f, &view, &[(0.0, &bar())], mode);
+            paint(&mut f, &view, &[(0.0, &bar())], mode, 1.0);
             f.texts.iter().map(|t| t.text.clone()).collect::<Vec<_>>()
         };
         // The lowest level was 1 bought against 4 sold.
@@ -287,7 +347,7 @@ mod tests {
             // A hundred pixels to the price, so the rows are tall.
             let y = |p: f64| 300.0 - (p as f32 - 99.0) * 100.0;
             let view = View { plot, bar_spacing: spacing, char_width: 6.0, theme: &theme, x: &x, y: &y };
-            paint(&mut f, &view, &[(0.0, &bar())], Mode::Split);
+            paint(&mut f, &view, &[(0.0, &bar())], Mode::Split, 1.0);
             f
         };
         let wide = paint_at(80.0);

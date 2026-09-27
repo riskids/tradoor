@@ -15,6 +15,13 @@ export interface Levels {
   levels: [number, number, number][];
 }
 
+/** The bars in a range, and the price one row of them covers. */
+export interface Footprint {
+  bars: Levels[];
+  /** The same for every bar: a row must read straight across the screen. */
+  grid: number;
+}
+
 /** Rows a bar is worth drawing at most; past this the levels are added up.
  *  Thirty of them at a chart's height is a row of some ten pixels, which is
  *  what it takes for the numbers in a cell to be read at all. */
@@ -38,12 +45,28 @@ export function recordedMarkets(): Promise<Map<string, number>> {
   return recorded;
 }
 
+/** Minutes one request may carry; a longer range is asked for in pages. */
+const PAGE_MINUTES = 1_440;
+/** Pages one fetch will ask for: a week of minutes, which is plenty of screen. */
+const MAX_PAGES = 7;
+
 /**
  * The minutes between `from` and `to`, folded into bars of `barMs` and grouped
- * so no bar carries more than `MAX_ROWS` rows.
+ * onto one price grid — the same for every bar, so a level reads straight
+ * across the screen rather than each bar keeping a grid of its own.
+ *
+ * The server hands out a day of minutes at a time, so a longer range is asked
+ * for in pages: a chart of fifteen-minute bars covers a day in a screenful.
  */
-export async function fetchFootprint(market: string, barMs: number, from: number, to: number, settings: Settings = { ticks: 0, unit: 'coins' }): Promise<Levels[]> {
-  const { tick, bars } = await api.footprint(market, from, to);
+export async function fetchFootprint(market: string, barMs: number, from: number, to: number, settings: Settings = { ticks: 0, unit: 'coins' }): Promise<Footprint> {
+  const pages: Promise<{ tick: number; bars: { at: number; levels: [number, number, number][] }[] }>[] = [];
+  const page = PAGE_MINUTES * 60_000;
+  for (let start = Math.max(from, to - MAX_PAGES * page); start < to; start += page) {
+    pages.push(api.footprint(market, start, Math.min(start + page - 1, to)));
+  }
+  const answers = await Promise.all(pages);
+  const tick = answers.find((a) => a.tick > 0)?.tick ?? 1;
+  const bars = answers.flatMap((a) => a.bars);
   const byBar = new Map<number, Map<number, [number, number]>>();
   for (const bar of bars) {
     const at = Math.floor(bar.at / barMs) * barMs;
@@ -63,19 +86,24 @@ export async function fetchFootprint(market: string, barMs: number, from: number
       }
     }
   }
-  return [...byBar.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([time, levels]) => ({ time, levels: group(levels, tick, settings) }));
+  // One grouping for the lot: the widest bar decides how coarse the rows are,
+  // and every bar is cut on the same lines.
+  const widest = [...byBar.values()].reduce((most, levels) => {
+    const steps = [...levels.keys()];
+    return Math.max(most, steps.length > 0 ? Math.max(...steps) - Math.min(...steps) + 1 : 0);
+  }, 0);
+  let by = Math.max(1, Math.round(settings.ticks) || 1);
+  while (widest / by > MAX_ROWS) by = coarser(by);
+  return {
+    grid: by * tick,
+    bars: [...byBar.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, levels]) => ({ time, levels: group(levels, tick, by, settings) })),
+  };
 }
 
-/** Steps to prices, adding neighbouring levels together until the rows fit. */
-function group(levels: Map<number, [number, number]>, tick: number, settings: Settings): [number, number, number][] {
-  const steps = [...levels.keys()];
-  const span = Math.max(...steps) - Math.min(...steps) + 1;
-  // Grouped the way a price scale is read — 1, 2, 5, 10 — never by three, and
-  // never finer than the reader asked for.
-  let by = Math.max(1, Math.round(settings.ticks) || 1);
-  while (span / by > MAX_ROWS) by = coarser(by);
+/** Steps to prices, adding neighbouring levels together onto the shared grid. */
+function group(levels: Map<number, [number, number]>, tick: number, by: number, settings: Settings): [number, number, number][] {
   const rounded = Math.round(by);
   const out = new Map<number, [number, number]>();
   for (const [step, [buy, sell]] of levels) {

@@ -451,7 +451,7 @@ impl ChartEngine {
     /// Volume by price, flat: for each bar, its time, how many levels follow,
     /// then each level as price, coins bought, coins sold. One array rather
     /// than a tree of objects, because a busy screen is fifty thousand numbers.
-    pub fn set_footprint(&mut self, flat: &[f64]) {
+    pub fn set_footprint(&mut self, flat: &[f64], grid: f64) {
         let mut bars = Vec::new();
         let mut i = 0usize;
         while i + 1 < flat.len() {
@@ -469,7 +469,7 @@ impl ChartEngine {
                 bars.push(tradoor_render::footprint::Bar { time, levels });
             }
         }
-        self.chart.set_footprint(bars);
+        self.chart.set_footprint(bars, grid);
     }
 
     pub fn set_footprint_shown(&mut self, shown: bool) {

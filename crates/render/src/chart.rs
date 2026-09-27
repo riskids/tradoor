@@ -269,6 +269,8 @@ pub struct Chart {
     tpo_profiles: Option<tpo::Profiles>,
     /// Volume by price inside each bar, as the page fetched it, oldest first.
     footprint: Vec<footprint::Bar>,
+    /// The price one footprint row covers, the same for every bar on screen.
+    footprint_grid: f64,
     /// Whether those columns stand in for the candles.
     footprint_shown: bool,
     /// The two sides apart, their difference, or their sum.
@@ -335,6 +337,7 @@ impl Chart {
             tpo_settings: tpo::Settings::default(),
             tpo_profiles: None,
             footprint: Vec::new(),
+            footprint_grid: 0.0,
             footprint_shown: false,
             footprint_mode: footprint::Mode::default(),
             precision: 2,
@@ -624,9 +627,10 @@ impl Chart {
 
     /// Volume by price inside each bar: what the page fetched of what the
     /// server recorded, its minutes folded into the bars on screen.
-    pub fn set_footprint(&mut self, bars: Vec<footprint::Bar>) {
-        if self.footprint != bars {
+    pub fn set_footprint(&mut self, bars: Vec<footprint::Bar>, grid: f64) {
+        if self.footprint != bars || self.footprint_grid != grid {
             self.footprint = bars;
+            self.footprint_grid = grid;
             self.touch();
         }
     }
@@ -1229,18 +1233,8 @@ impl Chart {
                 }
             }
         }
-        if foot {
-            let x = |l: f64| self.time.x(l) as f32;
-            let y = |p: f64| price.scale.y(p) as f32;
-            let view = footprint::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, x: &x, y: &y };
-            // Each column at the place its own time sits, so a minute the
-            // server never recorded leaves a gap rather than shifting the rest.
-            let placed: Vec<(f64, &footprint::Bar)> =
-                self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
-            footprint::paint(f, &view, &placed, self.footprint_mode);
-        }
         self.paint_watermark(f, price.plot);
-        for i in (i0..=i1).filter(|_| !tpo && !foot) {
+        for i in (i0..=i1).filter(|_| !tpo) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);
@@ -1262,6 +1256,16 @@ impl Chart {
             if b.live {
                 f.stroke_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), 1.0 / dpr, base);
             }
+        }
+        if foot {
+            let x = |l: f64| self.time.x(l) as f32;
+            let y = |p: f64| price.scale.y(p) as f32;
+            let view = footprint::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, x: &x, y: &y };
+            // Each column at the place its own time sits, so a minute the
+            // server never recorded leaves a gap rather than shifting the rest.
+            let placed: Vec<(f64, &footprint::Bar)> =
+                self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
+            footprint::paint(f, &view, &placed, self.footprint_mode, self.footprint_grid);
         }
         if !tpo && !foot && !self.hidden.contains("ema200") {
             self.paint_series(f, &price.scale, &self.engine.ema200, i0, i1, t.ema200, 1.0, LineStyle::Solid);
@@ -3020,7 +3024,7 @@ mod tests {
         let mut c = chart();
         let bar = c.candles()[400];
         let levels = vec![(bar.low, 1.0, 2.0), (bar.low + 0.5, 3.0, 0.5), (bar.low + 1.0, 0.25, 4.0)];
-        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels }]);
+        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels }], 0.5);
         c.render(1_800_000_000_000);
         assert_eq!(c.footprint_at(10.0, 10.0), None, "nothing is drawn until the style is chosen");
 

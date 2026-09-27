@@ -835,7 +835,7 @@ function handle(msg: ToWorker): void {
       slot.engine.set_alerts(Float64Array.from(msg.list.flatMap((a) => [a.id, a.price])));
       break;
     case 'footprint':
-      slot.engine.set_footprint(msg.flat);
+      slot.engine.set_footprint(msg.flat, msg.grid);
       break;
     case 'footprintShown':
       slot.engine.set_footprint_shown(msg.value);

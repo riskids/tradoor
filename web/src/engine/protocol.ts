@@ -176,7 +176,7 @@ export type ToWorker =
   | { t: 'flow'; id: string; marks: { at: number; price: number; usd: number }[] }
   /** Volume by price: per bar, its time, how many levels follow, then each
    *  level as price, coins bought, coins sold. */
-  | { t: 'footprint'; id: string; flat: Float64Array }
+  | { t: 'footprint'; id: string; flat: Float64Array; grid: number }
   | { t: 'footprintShown'; id: string; value: boolean }
   | { t: 'footprintMode'; id: string; value: string }
   | { t: 'selected'; id: string; value: number | null }
