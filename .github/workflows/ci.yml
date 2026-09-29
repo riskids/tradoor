@@ -104,9 +104,11 @@ jobs:
             ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # The repository variable SITE_URL (https://your-domain), for SEO tags and the sitemap.
+          # The repository variable SITE_URL (https://your-domain), for SEO tags and the
+          # sitemap, and GA_ID (G-XXXXXXXXXX), for Google Analytics; unset is none.
           build-args: |
             SITE_URL=${{ vars.SITE_URL }}
+            GA_ID=${{ vars.GA_ID }}
 
       - name: SSH key
         env:

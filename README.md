@@ -139,6 +139,15 @@ build, which then writes the canonical URL, absolute Open Graph image, and
 its title, description, preview tags and structured data, but no canonical URL
 or sitemap.
 
+## Analytics
+
+Set the repository variable `GA_ID` to a Google Analytics 4 measurement id
+(`gh variable set GA_ID --body G-XXXXXXXXXX`) and the next build adds Google's
+tag, counting page views, with the Content Security Policy widened to Google's
+tag host (`web/site.ts`). Google sets its own cookie; the browser id tradoor
+keeps drawings and layouts under is not given to it. Without `GA_ID` the page
+loads nothing from Google.
+
 ## Security
 
 There are no accounts: a browser's random id is what makes its drawings and
