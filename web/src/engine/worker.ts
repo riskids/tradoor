@@ -151,6 +151,8 @@ class Slot {
   private closed: Cols = emptyCols();
   /** Bars the stream closed that stored history and REST do not cover yet. */
   private extra: Bar[] = [];
+  /** The newest bar stored history or REST vouches for; `extra` is the rest. */
+  private foldedLast = Number.NEGATIVE_INFINITY;
   private live: Bar | null = null;
   private feed: LiveFeedEngine | null = null;
   private gen = 0;
@@ -398,6 +400,7 @@ class Slot {
     const c = series.cols;
     const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
     const last = folded.time.length > 0 ? folded.time[folded.time.length - 1]! : Number.NEGATIVE_INFINITY;
+    this.foldedLast = last;
     this.extra = this.extra.filter((b) => b.time > last);
     this.closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
     this.pushCandles();
@@ -482,10 +485,35 @@ class Slot {
         this.closed = concatCols([this.closed, barCols([done])]);
         this.pushCandles();
       }
-      void this.series?.refreshTail();
+      this.confirm(prev.time);
     }
     this.pushLive();
     this.setPrice(bar.close);
+  }
+
+  /**
+   * A bar the stream has just finished is only what the stream saw of it. A
+   * socket that went quiet before the close leaves it short — its body stops
+   * where the feed did, while the price went on — and nothing else would put it
+   * right until the NEXT bar closed: an hour, on an hourly chart. REST has the
+   * bar the exchange actually closed, so it is asked until it answers with it:
+   * at once, and twice more while the exchange catches up, each time past the
+   * throttle that keeps ordinary polling polite.
+   *
+   * Once was not enough. The bar rolls when the exchange's first trade of the
+   * next one arrives, stamped by the exchange's clock; a computer whose clock
+   * runs a second behind still thinks the old bar is open, asks for nothing,
+   * and the throttle then turned away every other ask for half a minute.
+   */
+  private confirm(time: number): void {
+    const gen = this.gen;
+    for (const wait of [0, 4_000, 15_000]) {
+      const timer = setTimeout(() => {
+        if (gen !== this.gen || this.foldedLast >= time) return;
+        void this.series?.refreshTail(true);
+      }, wait);
+      this.cleanup.push(() => clearTimeout(timer));
+    }
   }
 
   private pushLive(): void {

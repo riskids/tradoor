@@ -371,8 +371,10 @@ export class Series {
   }
 
   /** Append bars that closed since the newest held. */
-  refreshTail(): Promise<void> {
-    if (Date.now() - this.tailAt < TAIL_THROTTLE_MS) return Promise.resolve();
+  /** Bars newer than the last one held. `force` skips the throttle, for a
+   *  chart confirming a bar it has just watched close. */
+  refreshTail(force = false): Promise<void> {
+    if (!force && Date.now() - this.tailAt < TAIL_THROTTLE_MS) return Promise.resolve();
     this.tailAt = Date.now();
     return this.run(async () => {
       const before = this.cols.time.length;
