@@ -160,6 +160,17 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
     setMenu(false);
     f().catch(failed(what));
   };
+  const triggered = (n: number) => `${n} triggered alert${n === 1 ? '' : 's'}`;
+  const entries = (n: number) => `${n} log ${n === 1 ? 'entry' : 'entries'}`;
+  const restartTriggered = run(restartAllAlerts, 'Alerts not restarted');
+  const deleteTriggered = () => {
+    if (confirm(`Delete ${triggered(stopped())}?`)) run(() => clearAlerts('stopped'), 'Alerts not deleted')();
+    else setMenu(false);
+  };
+  const clearLog = () => {
+    if (confirm(`Clear ${entries(alertState.log.length)}?`)) run(clearAlertLog, 'Log not cleared')();
+    else setMenu(false);
+  };
 
   return (
     <div class="panelcol al">
@@ -206,35 +217,51 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
           </button>
           <Show when={menu()}>
             <div class="menu" style={{ right: '0', top: '24px' }} onPointerDown={(e) => e.stopPropagation()}>
-              <Show
-                when={tab() === 'alerts'}
-                fallback={
-                  <button disabled={!alertState.log.length} onClick={run(clearAlertLog, 'Log not cleared')}>
-                    Clear log
-                  </button>
-                }
+              <button disabled={!stopped()} onClick={restartTriggered}>
+                Restart all triggered
+              </button>
+              <button disabled={!stopped()} onClick={deleteTriggered}>
+                Delete all triggered
+              </button>
+              <button disabled={!alertState.log.length} onClick={clearLog}>
+                Clear log
+              </button>
+              <hr />
+              <button
+                disabled={!alertState.alerts.length}
+                onClick={() => {
+                  if (!confirm(`Delete all ${alertState.alerts.length} alerts?`)) return;
+                  run(() => clearAlerts('all'), 'Alerts not deleted')();
+                }}
               >
-                <button disabled={!stopped()} onClick={run(restartAllAlerts, 'Alerts not restarted')}>
-                  Restart all stopped
-                </button>
-                <button disabled={!stopped()} onClick={run(() => clearAlerts('stopped'), 'Alerts not deleted')}>
-                  Delete all stopped
-                </button>
-                <hr />
-                <button
-                  disabled={!alertState.alerts.length}
-                  onClick={() => {
-                    if (!confirm(`Delete all ${alertState.alerts.length} alerts?`)) return;
-                    run(() => clearAlerts('all'), 'Alerts not deleted')();
-                  }}
-                >
-                  Delete all alerts
-                </button>
-              </Show>
+                Delete all alerts
+              </button>
             </div>
           </Show>
         </span>
       </div>
+
+      {/* What is left behind by triggering, with the way to be rid of it in
+          sight rather than under the menu. */}
+      <Show when={tab() === 'alerts' && stopped() > 0}>
+        <div class="al-bulk">
+          <span>{stopped()} triggered</span>
+          <button onClick={restartTriggered}>
+            <Icon name="reset" size={12} /> Restart all
+          </button>
+          <button class="del" onClick={deleteTriggered}>
+            <Icon name="trash" size={12} /> Delete all
+          </button>
+        </div>
+      </Show>
+      <Show when={tab() === 'log' && alertState.log.length > 0}>
+        <div class="al-bulk">
+          <span>{alertState.log.length === 1 ? '1 entry' : `${alertState.log.length} entries`}</span>
+          <button class="del" onClick={clearLog}>
+            <Icon name="trash" size={12} /> Clear log
+          </button>
+        </div>
+      </Show>
 
       <Show when={form()}>
         {(f) => (

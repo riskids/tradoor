@@ -26,6 +26,8 @@ const MIN_CELL = 90;
 export function panelTitle(p: Panel): string {
   if (p.type === 'watchlist') return 'Watchlist';
   if (p.type === 'alerts') return 'Alerts';
+  // Flow lists the markets the server follows, whatever chart it is linked to.
+  if (p.type === 'flow') return 'Flow';
   const label = `${symbolOf(marketOf(p))} ${tfLabel(timeframeOf(p))}`;
   if (p.type === 'chart') return p.tpo ? `TPO · ${label}` : label;
   return `${PANEL_TITLE[p.type]} · ${label}`;
