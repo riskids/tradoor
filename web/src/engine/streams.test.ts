@@ -8,7 +8,8 @@
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { FakeTime } from 'jsr:@std/testing@1/time';
-import { isRelayed, nextUrl, StreamHub, type StreamMsg, type StreamSpec } from './streams.ts';
+import { isBlocked, isRelayed, nextUrl, StreamHub, type StreamMsg, type StreamSpec } from './streams.ts';
+import { reached, wake } from './reach.ts';
 import type { Venue } from '../lib/markets.ts';
 
 class FakeSocket {
@@ -211,6 +212,86 @@ test('a socket that has gone quiet is thrown away, whatever it claims', async ()
     assertEquals(states.at(-1), 'retrying', 'and the chart says so rather than showing a frozen price as live');
     await time.tickAsync(2_000);
     assert(FakeSocket.opened.length > 1, 'and another was opened in its place');
+    stop();
+  } finally {
+    time.restore();
+  }
+});
+
+/** A socket the network swallows: never open, never refused. */
+class HangingSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static opened: HangingSocket[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(readonly url: string) {
+    HangingSocket.opened.push(this);
+  }
+
+  send(): void {}
+
+  close(): void {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+test('an address that never opens is given up in seconds, and its host with it', async () => {
+  const time = new FakeTime();
+  const host = 'stream.bybit.com';
+  try {
+    HangingSocket.opened = [];
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = HangingSocket;
+    const stop = new StreamHub().subscribe('bybit-perp', { kind: 'kline', symbol: 'BTCUSDT', interval: '1m' }, { message: () => {}, state: () => {} });
+    await time.tickAsync(1);
+    const first = HangingSocket.opened[0]!;
+
+    await time.tickAsync(4_000);
+    assertEquals(first.readyState, 0, 'a slow line is given its chance');
+    await time.tickAsync(1_500);
+    assertEquals(first.readyState, 3, 'but not the minute a phone would wait');
+    assert(isBlocked(`wss://${host}/v5/public/spot`), 'and every socket on that host goes past it, not only this one');
+    stop();
+  } finally {
+    // What this test taught the list is not for the next one, or the next run.
+    reached(host);
+    reached(`wss://${host}/v5/public/linear`);
+    time.restore();
+  }
+});
+
+/** The fake socket, with the state constants the hub reads off a real one. */
+class WakeSocket extends FakeSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+}
+
+test('back from a lock, a silent socket is replaced in seconds and a live one kept', async () => {
+  const time = new FakeTime();
+  try {
+    FakeSocket.opened = [];
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = WakeSocket;
+    const stop = new StreamHub().subscribe('binance-perp', { kind: 'kline', symbol: 'ETHUSDT', interval: '1m' }, { message: () => {}, state: () => {} });
+    await time.tickAsync(1);
+    const socket = FakeSocket.opened.at(-1)!;
+    const candle = { data: JSON.stringify({ e: 'kline', s: 'ETHUSDT', k: { t: 0, i: '1m', o: '1', h: '1', l: '1', c: '1', v: '1', L: 1, x: false } }) };
+    socket.onmessage?.(candle);
+
+    wake();
+    await time.tickAsync(2_000);
+    socket.onmessage?.(candle);
+    await time.tickAsync(5_000);
+    assertEquals(socket.readyState, 1, 'it spoke after the wake: kept');
+
+    wake();
+    await time.tickAsync(6_500);
+    assertEquals(socket.readyState, 3, 'silent after the wake: replaced, not left to the half-minute watch');
     stop();
   } finally {
     time.restore();

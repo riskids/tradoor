@@ -5,6 +5,7 @@
  * nothing here touches the DOM.
  */
 import type { Venue } from '../lib/markets';
+import { block, isBlocked as known, onWake, reached } from './reach';
 
 export type SocketState = 'connecting' | 'live' | 'stalled' | 'retrying';
 
@@ -231,17 +232,23 @@ export function socketOf(venue: Venue, spec: StreamSpec): string {
 }
 
 /**
- * Addresses that answered nothing lately, and for how long they are skipped.
+ * Addresses that answered nothing lately are skipped (see reach): a host that
+ * never connected, or a URL that connected and said nothing.
  *
  * A network that blocks an exchange blocks it for every socket and every
  * market: without this, each new chart works through the same dead addresses
  * and their timeouts again before it reaches the relay, and a phone on a
- * carrier that blocks them never seems to finish reconnecting. Kept for five
- * minutes, so moving from that carrier to a wifi tries them afresh.
+ * carrier that blocks them never seems to finish reconnecting.
  */
-const BLOCKED_MS = 5 * 60_000;
-const blocked = new Map<string, number>();
-export const isBlocked = (url: string, now = Date.now()): boolean => (blocked.get(url) ?? 0) > now - BLOCKED_MS;
+export const isBlocked = (url: string, now = Date.now()): boolean => known(url, now) || known(hostOf(url), now);
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 /** The address to try: the next one that is not known dead, or the next of all. */
 export function nextUrl(urls: readonly string[], index: number, dead: (url: string) => boolean = isBlocked): string {
@@ -263,8 +270,17 @@ export const isRelayed = (url: string): boolean => url.includes('/api/relay/ws')
 const SILENT_MS = 30_000;
 const WATCH_MS = 5_000;
 
+/**
+ * A socket not yet open by now never will be: a network that swallows an
+ * address leaves it connecting until the phone gives up, a minute or more.
+ */
+const OPEN_MS = 5_000;
+/** Back from a lock, a socket that says nothing this long is replaced. */
+const WAKE_MS = 6_000;
 const STALL_MS = 12_000;
 const RETRY_MS = [1_000, 3_000, 5_000, 10_000];
+/** Onto another address after one failed: nothing to back off from yet. */
+const MOVE_MS = 250;
 const HEARTBEAT_MS = 15_000;
 /** An unused socket stays open this long, so switching timeframe does not reconnect. */
 const LINGER_MS = 10_000;
@@ -297,8 +313,12 @@ class Connection {
   private lastHeard = 0;
   private lingerTimer: Timer | undefined;
   private beatTimer: ReturnType<typeof setInterval> | undefined;
+  private openTimer: Timer | undefined;
+  private wakeTimer: Timer | undefined;
 
-  constructor(private readonly proto: Protocol) {}
+  constructor(private readonly proto: Protocol) {
+    onWake(() => this.wake());
+  }
 
   topic(spec: StreamSpec, venue: Venue): string {
     return this.proto.topic(spec, venue);
@@ -369,8 +389,41 @@ class Connection {
     this.heard = true;
     this.attempt = 0;
     // It answers after all, whatever it did before.
-    blocked.delete(this.url);
+    reached(this.url);
+    reached(hostOf(this.url));
     this.setState('live', true);
+  }
+
+  /**
+   * The page is back in view or on another network. A retry waiting out its
+   * back-off goes now; an open socket is asked to prove itself, and one that
+   * stays silent is replaced rather than left to the half-minute watch.
+   */
+  private wake(): void {
+    if (this.topics.size === 0) return;
+    const ws = this.ws;
+    if (!ws) {
+      if (this.retryTimer !== undefined) {
+        clearTimeout(this.retryTimer);
+        this.connect();
+      }
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const since = Date.now();
+    this.beat(ws);
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = setTimeout(() => {
+      if (this.ws !== ws || this.lastHeard >= since) return;
+      this.setState('stalled');
+      ws.close();
+    }, WAKE_MS);
+  }
+
+  private beat(ws: WebSocket): void {
+    const beat = this.proto.heartbeat;
+    if (beat === undefined || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(typeof beat === 'string' ? beat : JSON.stringify(beat));
   }
 
   private setState(state: SocketState, always = false): void {
@@ -387,8 +440,16 @@ class Connection {
     this.ws = ws;
     this.heard = false;
     this.lastHeard = Date.now();
+    this.openTimer = setTimeout(() => {
+      if (ws.readyState !== WebSocket.CONNECTING) return;
+      // Neither open nor refused: the network is swallowing this host, so
+      // every path on it is stepped over, not only this one.
+      block(hostOf(this.url));
+      ws.close();
+    }, OPEN_MS);
 
     ws.onopen = () => {
+      clearTimeout(this.openTimer);
       this.pending.subscribe.clear();
       this.pending.unsubscribe.clear();
       for (const frame of this.proto.open ?? []) ws.send(JSON.stringify(frame));
@@ -407,12 +468,7 @@ class Connection {
         this.setState('stalled');
         ws.close();
       }, WATCH_MS);
-      if (this.proto.heartbeat !== undefined) {
-        const beat = typeof this.proto.heartbeat === 'string' ? this.proto.heartbeat : JSON.stringify(this.proto.heartbeat);
-        this.beatTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(beat);
-        }, HEARTBEAT_MS);
-      }
+      if (this.proto.heartbeat !== undefined) this.beatTimer = setInterval(() => this.beat(ws), HEARTBEAT_MS);
     };
 
     ws.onmessage = (event) => {
@@ -441,24 +497,32 @@ class Connection {
       this.clearTimers();
       if (this.ws === ws) this.ws = null;
       if (this.topics.size === 0) return;
+      let moving = false;
       if (!this.heard) {
         // It opened nothing, or opened and said nothing: the next socket on
         // this network starts past it rather than waiting it out again.
-        blocked.set(this.url, Date.now());
+        block(this.url);
         this.urlIndex += 1;
+        // Another address still untried is gone to at once; with every one
+        // failed (the phone offline, say), the back-off paces the rounds.
+        moving = this.proto.urls.some((url) => !isBlocked(url));
       }
       this.attempt += 1;
       this.setState('retrying');
-      this.retryTimer = setTimeout(() => this.connect(), RETRY_MS[Math.min(this.attempt, RETRY_MS.length) - 1]);
+      this.retryTimer = setTimeout(() => this.connect(), moving ? MOVE_MS : RETRY_MS[Math.min(this.attempt, RETRY_MS.length) - 1]);
     };
     ws.onerror = () => ws.close();
   }
 
   private clearTimers(): void {
     clearTimeout(this.stallTimer);
+    clearTimeout(this.openTimer);
+    clearTimeout(this.wakeTimer);
     clearInterval(this.beatTimer);
     clearInterval(this.watchTimer);
     this.stallTimer = undefined;
+    this.openTimer = undefined;
+    this.wakeTimer = undefined;
     this.beatTimer = undefined;
     this.watchTimer = undefined;
   }

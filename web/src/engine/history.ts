@@ -11,6 +11,7 @@ import { decode_partition } from '../wasm/pkg/tradoor_wasm.js';
 import { parseMarket, type MarketRef, type Venue } from '../lib/markets';
 import { nativeOf } from '../lib/native';
 import { restInterval } from './intervals';
+import { block, isBlocked, reached } from './reach';
 
 export interface Cols {
   time: Float64Array;
@@ -122,25 +123,38 @@ const pageLimit = (ref: MarketRef): number => PAGE_LIMIT[ref.venue];
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * Exchange hosts this browser could not reach. Some networks block the
- * exchanges' names — a phone on an Indonesian carrier — so their calls go
- * through the tradoor server instead, which can still reach them. Once a host
- * fails it goes that way for the rest of the session: a worker has no storage
- * to remember it past that, and the doomed attempt costs only the first call.
+ * Exchange hosts this browser could not reach go through the tradoor server
+ * instead, which can still reach them. Some networks block the exchanges'
+ * names — a phone on an Indonesian carrier — and what one call learns, the
+ * rest of the page and its next load are told (see reach).
  */
-const unreachable = new Set<string>();
 // Kraken Futures answers with an empty Access-Control-Allow-Origin, which no browser accepts.
-unreachable.add('futures.kraken.com');
+const RELAYED = new Set(['futures.kraken.com']);
+
+/**
+ * A request that has not begun to answer by now is taken as refused: a
+ * network that swallows an exchange's requests rather than turn them away
+ * would otherwise keep a chart empty for a minute or two. Only the answer's
+ * start is timed, so a long page on a slow line still arrives.
+ */
+const ANSWER_MS = 7_000;
 
 async function fetchExchange(url: string): Promise<Response> {
   const host = new URL(url).host;
-  if (!unreachable.has(host)) {
+  if (!RELAYED.has(host) && !isBlocked(host)) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), ANSWER_MS);
     try {
-      return await fetch(url);
+      const res = await fetch(url, { signal: abort.signal });
+      reached(host);
+      return res;
     } catch (e) {
-      // A TypeError is the network refusing, not the exchange answering.
-      if (!(e instanceof TypeError)) throw e;
-      unreachable.add(host);
+      // A TypeError is the network refusing, an abort the network saying
+      // nothing; neither is the exchange answering.
+      if (!(e instanceof TypeError) && !(e instanceof DOMException && e.name === 'AbortError')) throw e;
+      block(host);
+    } finally {
+      clearTimeout(timer);
     }
   }
   return fetch(`/api/relay/rest?url=${encodeURIComponent(url)}`);

@@ -231,7 +231,13 @@ REST calls nor their streams. It falls back to the tradoor server: a REST call
 that fails at the network level is retried through `/api/relay/rest` (klines and
 pings on allow-listed hosts and paths only), and each stream's address list ends
 with `/api/relay/ws?venue=…`, which the hub moves to when the exchange's own
-sockets fail before a word. The server looks exchange names up over HTTPS at
+sockets fail before a word. A carrier may swallow a call rather than refuse it,
+so a socket not open in five seconds, or a request not answering in seven, counts
+as failed. What failed is remembered for five minutes by `engine/reach.ts`,
+shared between the page and the worker over a BroadcastChannel and kept by the
+page past a reload, so on such a network only the first call waits. When the page
+comes back into view or online, each socket is asked to prove itself and one that
+stays silent six seconds is replaced. The server looks exchange names up over HTTPS at
 1.1.1.1 and 8.8.8.8, by address, so its own resolver cannot be lied to either;
 the liquidation collector and the market catalogue use the same lookups.
 
