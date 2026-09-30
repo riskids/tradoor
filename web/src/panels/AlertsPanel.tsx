@@ -241,19 +241,7 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
         </span>
       </div>
 
-      {/* What is left behind by triggering, with the way to be rid of it in
-          sight rather than under the menu. */}
-      <Show when={tab() === 'alerts' && stopped() > 0}>
-        <div class="al-bulk">
-          <span>{stopped()} triggered</span>
-          <button onClick={restartTriggered}>
-            <Icon name="reset" size={12} /> Restart all
-          </button>
-          <button class="del" onClick={deleteTriggered}>
-            <Icon name="trash" size={12} /> Delete all
-          </button>
-        </div>
-      </Show>
+      {/* The log's clean-up in sight rather than only under the menu. */}
       <Show when={tab() === 'log' && alertState.log.length > 0}>
         <div class="al-bulk">
           <span>{alertState.log.length === 1 ? '1 entry' : `${alertState.log.length} entries`}</span>

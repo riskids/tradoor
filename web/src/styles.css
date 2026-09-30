@@ -96,7 +96,9 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 .tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px; border-right: 1px solid var(--border); font-size: 11px; color: var(--dim); white-space: nowrap; min-width: 0; max-width: 220px; cursor: default; user-select: none; }
 .tab:hover { color: var(--muted); }
 .tab.active { color: var(--text); background: var(--surface); box-shadow: inset 0 -1px 0 var(--primary); }
-.tab .label { overflow: hidden; text-overflow: ellipsis; }
+/* Trimmed to its capitals (above), a label would clip the tops of l, h and t:
+   the padding carries its clipping edge back out past them. */
+.tab .label { overflow: hidden; text-overflow: ellipsis; padding-block: 3px; margin-block: -3px; }
 .tab .close { display: flex; opacity: 0; color: var(--dim); }
 .tab:hover .close, .tab.active .close { opacity: 1; }
 .tab .close:hover { color: var(--bear); }
@@ -556,7 +558,7 @@ table.venues tr.off td { color: var(--dim); }
 /* Flow: net taker flow per market, and the minutes that crossed. */
 .flow { position: relative; }
 .flow .flow-table { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--border); }
-.flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: 1fr 78px 78px; align-items: center; gap: 6px; padding: 4px 8px; font-size: 11px; }
+.flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 56px); align-items: center; gap: 4px; padding: 4px 8px; font-size: 11px; }
 .flow .flow-head { position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); }
 .flow .flow-line { border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); }
 .flow .flow-line:last-child { border-bottom: 0; }

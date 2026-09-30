@@ -143,6 +143,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
           <span>{coinOf(markets()[0]?.market ?? '') || 'Market'} · net taker flow</span>
           <span class="r">1m</span>
           <span class="r">1h</span>
+          <span class="r">4h</span>
         </div>
         <For each={markets()} fallback={<div class="empty">{error() ?? 'This server follows no market’s flow.'}</div>}>
           {(m) => (
@@ -150,6 +151,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
               <Venue market={m.market} />
               <span class={`num r ${tone(m.minute)}`}>{money(m.minute)}</span>
               <span class={`num r ${tone(m.h1)}`}>{money(m.h1)}</span>
+              <span class={`num r ${tone(m.h4)}`}>{money(m.h4)}</span>
             </div>
           )}
         </For>

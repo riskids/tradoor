@@ -177,6 +177,7 @@ export interface FlowMarket {
   m5: number;
   m15: number;
   h1: number;
+  h4: number;
   day: number;
   thresholdUsd: number;
   notify: boolean;

@@ -444,9 +444,10 @@ pub async fn state(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
                     sum(buy_usd - sell_usd) FILTER (WHERE minute >= $1) AS m5,
                     sum(buy_usd - sell_usd) FILTER (WHERE minute >= $2) AS m15,
                     sum(buy_usd - sell_usd) FILTER (WHERE minute >= $3) AS h1,
+                    sum(buy_usd - sell_usd) FILTER (WHERE minute >= $4) AS h4,
                     sum(buy_usd - sell_usd) AS day
-             FROM flow_minute WHERE minute >= $4 GROUP BY market",
-            &[&(now - 5 * 60_000), &(now - 15 * 60_000), &(now - 3_600_000), &(now - 24 * 3_600_000)],
+             FROM flow_minute WHERE minute >= $5 GROUP BY market",
+            &[&(now - 5 * 60_000), &(now - 15 * 60_000), &(now - 3_600_000), &(now - 4 * 3_600_000), &(now - 24 * 3_600_000)],
         )
         .await?;
     let sum = |market: &str, at: usize| sums.iter().find(|r| r.get::<_, String>(0) == market).and_then(|r| r.get::<_, Option<f64>>(at)).unwrap_or(0.0);
@@ -464,7 +465,8 @@ pub async fn state(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
                 "m5": sum(market, 1),
                 "m15": sum(market, 2),
                 "h1": sum(market, 3),
-                "day": sum(market, 4),
+                "h4": sum(market, 4),
+                "day": sum(market, 5),
                 "thresholdUsd": watch.map_or_else(|| default_threshold(market), |r| r.get::<_, f64>(1)),
                 "notify": watch.is_some_and(|r| r.get::<_, bool>(2)),
             })
