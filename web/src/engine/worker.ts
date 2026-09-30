@@ -17,6 +17,7 @@ import { followLiquidations } from '../lib/liquidation-feed';
 import { serverTicker } from '../lib/liquidation-venues';
 import { coinOf, oiVenues, OpenInterestFeed } from './open-interest';
 import { StreamHub, type KlineMsg, type SocketState, type StreamListener, type StreamMsg } from './streams';
+import { onWake } from './reach';
 
 /** Closed bars a chart opens with: enough for EMA 200 to settle, with room to scroll. */
 const CHART_BARS = 1_500;
@@ -24,6 +25,9 @@ const CHART_BARS = 1_500;
 const MAX_BASE_BARS = 60_000;
 /** Timeframes the exchange does not stream (2D, 3M…) pick up new bars this often. */
 const POLL_MS = 5 * 60_000;
+/** A closed bar REST has not vouched for yet is asked for again after these,
+ *  the last repeating until it answers. */
+const ASK_MS = [4_000, 15_000, 30_000, 60_000];
 /** How late a price may go out when no frame is drawn to carry it. */
 const PRICE_UNDRAWN_MS = 250;
 
@@ -153,6 +157,10 @@ class Slot {
   private extra: Bar[] = [];
   /** The newest bar stored history or REST vouches for; `extra` is the rest. */
   private foldedLast = Number.NEGATIVE_INFINITY;
+  /** The newest closed bar REST is still to vouch for, and the timer that keeps asking. */
+  private owed = Number.NEGATIVE_INFINITY;
+  private owedTimer: ReturnType<typeof setTimeout> | undefined;
+  private asks = 0;
   private live: Bar | null = null;
   private feed: LiveFeedEngine | null = null;
   private gen = 0;
@@ -333,6 +341,9 @@ class Slot {
   private detach(): void {
     this.gen += 1;
     for (const fn of this.cleanup.splice(0)) fn();
+    clearTimeout(this.owedTimer);
+    this.owedTimer = undefined;
+    this.owed = Number.NEGATIVE_INFINITY;
     this.feed?.free();
     this.feed = null;
     this.series = null;
@@ -458,9 +469,12 @@ class Slot {
         const was = this.status.live;
         this.setStatus({ live: state, relayed });
         // Back from an outage: bars that closed meanwhile come from REST.
-        if (state === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail();
+        if (state === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail().catch(() => undefined);
       },
     };
+    // Back from a lock: the bars that closed while the phone slept are asked
+    // for at once, before the stream has even found its feet again.
+    this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
     let off = false;
     this.cleanup.push(() => {
       off = true;
@@ -497,23 +511,36 @@ class Slot {
    * where the feed did, while the price went on — and nothing else would put it
    * right until the NEXT bar closed: an hour, on an hourly chart. REST has the
    * bar the exchange actually closed, so it is asked until it answers with it:
-   * at once, and twice more while the exchange catches up, each time past the
-   * throttle that keeps ordinary polling polite.
+   * at once, then again and again, further apart, each time past the throttle
+   * that keeps ordinary polling polite.
    *
    * Once was not enough. The bar rolls when the exchange's first trade of the
    * next one arrives, stamped by the exchange's clock; a computer whose clock
    * runs a second behind still thinks the old bar is open, asks for nothing,
    * and the throttle then turned away every other ask for half a minute.
+   *
+   * Three times was not enough either. A phone back from a lock rolls from the
+   * bar it fell asleep in to the one forming now, and the bars between come
+   * only from REST; its network may take longer than a quarter of a minute to
+   * answer, and the chart then jumped from the one bar to the other, the ones
+   * between missing, until the next bar closed.
    */
   private confirm(time: number): void {
-    const gen = this.gen;
-    for (const wait of [0, 4_000, 15_000]) {
-      const timer = setTimeout(() => {
-        if (gen !== this.gen || this.foldedLast >= time) return;
-        void this.series?.refreshTail(true);
-      }, wait);
-      this.cleanup.push(() => clearTimeout(timer));
+    if (time > this.owed) {
+      this.owed = time;
+      this.asks = 0;
     }
+    this.ask();
+  }
+
+  private ask(): void {
+    clearTimeout(this.owedTimer);
+    this.owedTimer = undefined;
+    const series = this.series;
+    if (!series || this.foldedLast >= this.owed) return;
+    void series.refreshTail(true).catch(() => undefined);
+    this.owedTimer = setTimeout(() => this.ask(), ASK_MS[Math.min(this.asks, ASK_MS.length - 1)]);
+    this.asks += 1;
   }
 
   private pushLive(): void {

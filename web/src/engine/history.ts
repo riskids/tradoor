@@ -134,30 +134,40 @@ const RELAYED = new Set(['futures.kraken.com']);
 /**
  * A request that has not begun to answer by now is taken as refused: a
  * network that swallows an exchange's requests rather than turn them away
- * would otherwise keep a chart empty for a minute or two. Only the answer's
- * start is timed, so a long page on a slow line still arrives.
+ * would otherwise keep a chart empty for a minute or two.
  */
 const ANSWER_MS = 7_000;
+/**
+ * And a whole answer, body and all, not in by now is given up, to be asked
+ * for again: a series fetches one thing at a time, so one request left
+ * hanging — begun before a phone slept, say — held up every refresh behind it.
+ */
+const WHOLE_MS = 30_000;
 
 async function fetchExchange(url: string): Promise<Response> {
   const host = new URL(url).host;
   if (!RELAYED.has(host) && !isBlocked(host)) {
     const abort = new AbortController();
+    const started = Date.now();
     const timer = setTimeout(() => abort.abort(), ANSWER_MS);
     try {
       const res = await fetch(url, { signal: abort.signal });
+      clearTimeout(timer);
+      // Begun: the body has what is left of the whole answer's time.
+      setTimeout(() => abort.abort(), WHOLE_MS - (Date.now() - started));
       reached(host);
       return res;
     } catch (e) {
+      clearTimeout(timer);
       // A TypeError is the network refusing, an abort the network saying
       // nothing; neither is the exchange answering.
       if (!(e instanceof TypeError) && !(e instanceof DOMException && e.name === 'AbortError')) throw e;
       block(host);
-    } finally {
-      clearTimeout(timer);
     }
   }
-  return fetch(`/api/relay/rest?url=${encodeURIComponent(url)}`);
+  const abort = new AbortController();
+  setTimeout(() => abort.abort(), WHOLE_MS);
+  return fetch(`/api/relay/rest?url=${encodeURIComponent(url)}`, { signal: abort.signal });
 }
 
 async function getJson(url: string): Promise<unknown> {

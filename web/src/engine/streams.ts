@@ -275,6 +275,12 @@ const WATCH_MS = 5_000;
  * address leaves it connecting until the phone gives up, a minute or more.
  */
 const OPEN_MS = 5_000;
+/**
+ * Except the relay, which is where a blocked exchange leads and so has nothing
+ * after it to hurry on to; its handshake crosses Cloudflare and the server,
+ * and on a slow line takes a few seconds on its own.
+ */
+const RELAY_OPEN_MS = 20_000;
 /** Back from a lock, a socket that says nothing this long is replaced. */
 const WAKE_MS = 6_000;
 const STALL_MS = 12_000;
@@ -440,13 +446,15 @@ class Connection {
     this.ws = ws;
     this.heard = false;
     this.lastHeard = Date.now();
+    const relayed = isRelayed(this.url);
     this.openTimer = setTimeout(() => {
       if (ws.readyState !== WebSocket.CONNECTING) return;
       // Neither open nor refused: the network is swallowing this host, so
-      // every path on it is stepped over, not only this one.
-      block(hostOf(this.url));
+      // every path on it is stepped over, not only this one. Not this site's
+      // own, though: the page came from it.
+      if (!relayed) block(hostOf(this.url));
       ws.close();
-    }, OPEN_MS);
+    }, relayed ? RELAY_OPEN_MS : OPEN_MS);
 
     ws.onopen = () => {
       clearTimeout(this.openTimer);
