@@ -49,6 +49,8 @@ pub struct AlertInput {
     pub message: Option<String>,
     /// What the market cost when the level was set, for which way it was reached.
     pub at_price: Option<f64>,
+    /// How its line is drawn (see `style`); empty for the chart's default.
+    pub style: Value,
 }
 
 /// Which way the price came to the level: `Some(true)` it rose to it, `Some(false)`
@@ -111,7 +113,11 @@ pub fn parse_body(body: &Value) -> Result<AlertInput, String> {
     let b = body.as_object().ok_or("body must be a JSON object")?;
     let market = b.get("market").and_then(Value::as_str).and_then(MarketRef::parse).ok_or("market must be venue:SYMBOL")?.to_string();
     let at_price = b.get("atPrice").and_then(Value::as_f64).filter(|p| p.is_finite() && *p > 0.0);
-    Ok(AlertInput { market, condition: condition(b.get("condition"))?, price: price(b.get("price"))?, message: message(b.get("message"))?, at_price })
+    let style = match b.get("style") {
+        None | Some(Value::Null) => json!({}),
+        Some(s) => style(s)?,
+    };
+    Ok(AlertInput { market, condition: condition(b.get("condition"))?, price: price(b.get("price"))?, message: message(b.get("message"))?, at_price, style })
 }
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
@@ -134,8 +140,8 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(body
     }
     let row = client
         .query_one(
-            &format!("INSERT INTO alert (owner, market, condition, price, message, created_at, start_price) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {COLUMNS}"),
-            &[&owner, &input.market, &input.condition, &input.price, &input.message, &now_ms(), &input.at_price],
+            &format!("INSERT INTO alert (owner, market, condition, price, message, created_at, start_price, style) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {COLUMNS}"),
+            &[&owner, &input.market, &input.condition, &input.price, &input.message, &now_ms(), &input.at_price, &input.style],
         )
         .await?;
     Ok((StatusCode::CREATED, Json(json!({ "alert": row_json(&row) }))))
@@ -309,7 +315,10 @@ mod tests {
     #[test]
     fn an_alert_needs_a_market_a_condition_and_a_price() {
         let ok = parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 75547.8, "message": "  " })).unwrap();
-        assert_eq!(ok, AlertInput { market: "binance-perp:BTCUSDT".into(), condition: "crossing".into(), price: 75547.8, message: None, at_price: None });
+        assert_eq!(ok, AlertInput { market: "binance-perp:BTCUSDT".into(), condition: "crossing".into(), price: 75547.8, message: None, at_price: None, style: json!({}) });
+        let styled = parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 1, "style": { "color": "#F23645", "width": 2 } })).unwrap();
+        assert_eq!(styled.style, json!({ "color": "#f23645", "width": 2.0 }), "made in the style last used");
+        assert!(parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 1, "style": { "dash": "wavy" } })).unwrap_err().contains("dash"));
         let placed = parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 80000, "atPrice": 83000 })).unwrap();
         assert_eq!(placed.at_price, Some(83_000.0), "the price it was set from");
         assert_eq!(parse_body(&json!({ "market": "binance-perp:BTCUSDT", "condition": "crossing", "price": 1, "atPrice": 0 })).unwrap().at_price, None);

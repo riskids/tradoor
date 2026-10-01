@@ -15,6 +15,7 @@ import { api, catalog, errorText, type Alert, type AlertCondition, type AlertLog
 import { alertTitle, fires, rose } from './alert-rules';
 import { watchDay } from './day-feed';
 import { formatPrice, priceDecimals } from './format';
+import { readJson, writePref } from './prefs';
 import { toast } from './toasts';
 import { activate, addPanel, newPanel, tabsOf } from '../workspace/model';
 import { doc, setPanelMarket, targetChart, update } from '../workspace/store';
@@ -85,9 +86,19 @@ function upsert(alert: Alert): void {
 
 // ------------------------------------------------------------------ actions
 
+/**
+ * The style last given to an alert's line in this browser: the next alert is
+ * drawn in it too, so a reader who likes theirs red need not say so each time.
+ */
+const LAST_STYLE = 'alert-style';
+function lastStyle(): AlertStyle | undefined {
+  const s = readJson(LAST_STYLE);
+  return s && typeof s === 'object' && !Array.isArray(s) ? (s as AlertStyle) : undefined;
+}
+
 export async function createAlert(market: string, condition: AlertCondition, price: number, message: string | null = null, atPrice?: number): Promise<Alert> {
   askNotifications();
-  const { alert } = await api.createAlert({ market, condition, price, message, atPrice });
+  const { alert } = await api.createAlert({ market, condition, price, message, atPrice, style: lastStyle() });
   ensurePanel();
   upsert(alert);
   changed();
@@ -103,6 +114,7 @@ export async function editAlert(id: number, patch: { price?: number; condition?:
 /** How its line is drawn; the alert itself is left as it was. */
 export async function styleAlert(id: number, style: AlertStyle): Promise<void> {
   const { alert } = await api.updateAlert(id, { style });
+  writePref(LAST_STYLE, JSON.stringify(alert.style ?? style));
   upsert(alert);
   changed();
 }
