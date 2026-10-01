@@ -257,12 +257,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   });
 
   // ---------------------------------------------------------------- alerts
-  // The market's active alerts, drawn by the engine as levels.
+  // The market's active alerts, drawn by the engine as levels. The style is
+  // copied out: an alert's own is a store proxy, which a worker cannot be sent.
   createEffect(() => {
     const draft = alertDraft();
     const list = alertState.alerts
       .filter((a) => a.active && a.market === market())
-      .map((a) => ({ id: a.id, price: a.price, style: draft?.id === a.id ? draft.style : a.style }));
+      .map((a) => ({ id: a.id, price: a.price, style: { ...(draft?.id === a.id ? draft.style : a.style) } }));
     send({ t: 'alerts', id: sid, list });
   });
   // The add-alert button and an alert's label stay while the pointer is on
