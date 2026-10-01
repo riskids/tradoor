@@ -384,8 +384,6 @@ class Slot {
     this.markPrice();
     this.engine.clear_live();
     this.engine.set_days(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
-    // Read off the prices again, unless a ratio sets its own (see refold).
-    this.engine.set_price_decimals(-1);
     // What is drawn stays, dimmed, rather than blanking the chart for the
     // third of a second the next market's candles take to arrive.
     this.fresh = true;
@@ -435,8 +433,9 @@ class Slot {
     const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
     const last = folded.time.length > 0 ? folded.time[folded.time.length - 1]! : Number.NEGATIVE_INFINITY;
     this.foldedLast = last;
-    // A ratio has no exchange's tick to keep to: its decimals come from its own moves.
-    if (series.source === 'ratio') this.engine.set_price_decimals((series as RatioSeries).decimals());
+    // A ratio has no exchange's tick to keep to: its decimals come from its own
+    // moves. Any other market's are read off its prices (-1).
+    this.engine.set_price_decimals(series.source === 'ratio' ? (series as RatioSeries).decimals() : -1);
     this.extra = this.extra.filter((b) => b.time > last);
     this.closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
     this.pushCandles();
@@ -465,6 +464,9 @@ class Slot {
   }
 
   private startLive(gen: number, tf: TfInfo): void {
+    // Back from a lock: the bars that closed while the phone slept are asked
+    // for at once, before the stream has even found its feet again.
+    this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
     const legs = ratioLegs(this.market);
     if (legs && tf.live && this.series?.source === 'ratio') {
       this.startRatioLive(gen, tf.live, legs, this.series as RatioSeries);
@@ -502,9 +504,6 @@ class Slot {
         if (state === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail().catch(() => undefined);
       },
     };
-    // Back from a lock: the bars that closed while the phone slept are asked
-    // for at once, before the stream has even found its feet again.
-    this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
     let off = false;
     this.cleanup.push(() => {
       off = true;
@@ -553,7 +552,6 @@ class Slot {
         this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed }, listener));
       });
     });
-    this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
   }
 
   private onLive(bar: Bar | null): void {
