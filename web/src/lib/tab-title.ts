@@ -16,6 +16,7 @@ export function tabTitle(market: string | null, last: LastPrice | undefined): st
   const name = isPerp(market) ? `${symbolOf(market)}.P` : symbolOf(market);
   // A price from before the chart switched market belongs to the old one.
   if (!last || last.market !== market || !Number.isFinite(last.price)) return name;
-  const digits = Math.min(MAX_PRICE_DECIMALS, Math.max(last.precision, decimalsOf(last.price)));
+  // The chart's precision stands — a ratio's may pass the cap that keeps float noise out.
+  const digits = Math.max(last.precision, Math.min(MAX_PRICE_DECIMALS, decimalsOf(last.price)));
   return `${name} ${formatPrice(last.price, digits)}${ARROW[last.direction]}`;
 }

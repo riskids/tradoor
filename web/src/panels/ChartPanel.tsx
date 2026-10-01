@@ -1425,7 +1425,8 @@ function LiveBadge(props: { market: string; live: LiveStatus; relayed: boolean; 
   const text = () => {
     const p = props.price;
     if (!p || !Number.isFinite(p.price)) return '';
-    digits = Math.min(MAX_PRICE_DECIMALS, Math.max(digits, p.precision, decimalsOf(p.price)));
+    // The chart's own precision stands, even past the cap that keeps float noise out.
+    digits = Math.max(p.precision, Math.min(MAX_PRICE_DECIMALS, Math.max(digits, decimalsOf(p.price))));
     return formatPrice(p.price, digits);
   };
   const state = () => LIVE[props.live];

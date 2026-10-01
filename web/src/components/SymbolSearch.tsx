@@ -7,7 +7,7 @@ import { createEffect, createMemo, createResource, createSignal, For, on, onMoun
 import { catalog, errorText, type Product } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { ExchangeLogo, exchangeOfVenue, LIVE_EXCHANGES, type ExchangeId } from '../lib/exchanges';
-import { isChartMarket, isMarket, ratioOf } from '../lib/markets';
+import { isChartMarket, isMarket, ratioOf, venueLabel } from '../lib/markets';
 
 type Kind = 'all' | 'perp' | 'spot';
 
@@ -175,7 +175,7 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
                       {p()[0].symbol} / {p()[1].symbol}
                     </span>
                     <span class="dim grow">
-                      {p()[0].base} priced in {p()[1].base}
+                      {venueLabel(p()[0].market)} / {venueLabel(p()[1].market)}
                     </span>
                     <span class="venue" style={{ 'min-width': '84px' }}>
                       <ExchangeLogo exchange={exchangeOfVenue(p()[0].venue)} size={13} />

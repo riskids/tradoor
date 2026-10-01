@@ -7,7 +7,7 @@
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import type { Cols, Series } from './history.ts';
-import { divide, RatioSeries, ratioBar } from './ratio.ts';
+import { divide, RatioSeries, ratioBar, ratioDecimals } from './ratio.ts';
 
 const cols = (rows: [number, number, number, number, number][]): Cols => ({
   time: Float64Array.from(rows.map((r) => r[0])),
@@ -91,4 +91,13 @@ Deno.test('the forming ratio waits for both sides to stand on one bar, and is as
   assertEquals(series.stream(0, 'live', false), ['connecting', false], 'live only once both are');
   assertEquals(series.stream(1, 'live', true), ['live', true], 'and relayed if either is');
   assertEquals(series.stream(0, 'retrying', false), ['retrying', true]);
+});
+
+Deno.test('a ratio is shown to the decimals its own moves need', () => {
+  const bars = (price: number, range: number) => cols(Array.from({ length: 5 }, (_, i) => [i, price, price + range / 2, price - range / 2, price] as [number, number, number, number, number]));
+  assertEquals(ratioDecimals(bars(0.00000114, 0.000000015)), 9, 'XPL in BTC: a tiny price moving in its ninth decimal');
+  assertEquals(ratioDecimals(bars(1.0003, 0.0002)), 5, "BTC's perpetual in its spot: all the interest past the point");
+  assertEquals(ratioDecimals(bars(31.07, 0.2)), 2, 'BTC in ETH: as any price');
+  assertEquals(ratioDecimals(bars(0.03218, 0.0002)), 5);
+  assertEquals(ratioDecimals(cols([])), 8, 'nothing loaded yet');
 });

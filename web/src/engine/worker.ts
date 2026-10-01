@@ -384,6 +384,8 @@ class Slot {
     this.markPrice();
     this.engine.clear_live();
     this.engine.set_days(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
+    // Read off the prices again, unless a ratio sets its own (see refold).
+    this.engine.set_price_decimals(-1);
     // What is drawn stays, dimmed, rather than blanking the chart for the
     // third of a second the next market's candles take to arrive.
     this.fresh = true;
@@ -433,6 +435,8 @@ class Slot {
     const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
     const last = folded.time.length > 0 ? folded.time[folded.time.length - 1]! : Number.NEGATIVE_INFINITY;
     this.foldedLast = last;
+    // A ratio has no exchange's tick to keep to: its decimals come from its own moves.
+    if (series.source === 'ratio') this.engine.set_price_decimals((series as RatioSeries).decimals());
     this.extra = this.extra.filter((b) => b.time > last);
     this.closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
     this.pushCandles();

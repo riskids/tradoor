@@ -246,6 +246,15 @@ Shapes are drawn with WebGL2 in the worker where the browser allows it there
 where it does not: a frame is single-coloured triangles, so runs of one colour
 fill as one path. `?renderer=2d` forces that path in development.
 
+A chart's market may be a ratio, `venue:A/venue:B` — XPL on Bybit priced in BTC
+on Binance — offered by the symbol search when a query has a stroke between two
+markets (TradingView's `BYBIT:XPLUSDT.P/BINANCE:BTCUSDT` works too). The worker
+loads `engine/ratio.ts` only then: each side is its own market's series, folded
+to the chart's bars and divided bar by bar, and the forming bar is the two
+streams divided once both stand on the same bar. No exchange ticks a ratio, so
+its decimals come from its own moves, up to ten. Liquidations, flow marks and
+alerts stay off it; its drawings are kept under its own name.
+
 On a phone (under 760px wide) the workspace is one chart and nothing else,
 the shape every phone charting app has: the chart in use fills the screen, its
 own toolbar is the top of the app and carries the menu, and the panels a wide

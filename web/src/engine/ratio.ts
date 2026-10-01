@@ -70,6 +70,27 @@ export function divide(a: Cols, b: Cols): Cols {
 }
 
 /**
+ * Decimals for a ratio's prices, which no exchange ticks: enough that a bar's
+ * usual range reads to two figures, and the price itself to three. XPL in BTC
+ * wants nine, BTC's perpetual in its spot five, BTC in ETH two.
+ */
+export function ratioDecimals(c: Cols): number {
+  const n = c.time.length;
+  if (n === 0) return 8;
+  const ranges: number[] = [];
+  for (let i = Math.max(0, n - 200); i < n; i += 1) {
+    const range = c.high[i]! - c.low[i]!;
+    if (range > 0) ranges.push(range);
+  }
+  ranges.sort((a, b) => a - b);
+  const range = ranges[ranges.length >> 1];
+  const price = Math.abs(c.close[n - 1]!);
+  const byRange = range ? Math.ceil(-Math.log10(range)) + 1 : 0;
+  const byPrice = price > 0 ? Math.ceil(-Math.log10(price)) + 2 : 0;
+  return Math.min(10, Math.max(2, byRange, byPrice));
+}
+
+/**
  * A ratio as the chart reads a series. `ensure` and `older` take bars of the
  * chart's own timeframe; each side is asked for what that is in its own bars.
  */
@@ -127,6 +148,11 @@ export class RatioSeries implements CandleSeries {
     this.streams[side] = [state, relayed];
     const worst = (['retrying', 'stalled', 'connecting'] as const).find((s) => this.streams.some(([st]) => st === s)) ?? 'live';
     return [worst, this.streams.some(([, r]) => r)];
+  }
+
+  /** The decimals its prices are shown to: see `ratioDecimals`. */
+  decimals(): number {
+    return ratioDecimals(this.cols);
   }
 
   async ensure(bars: number): Promise<void> {
