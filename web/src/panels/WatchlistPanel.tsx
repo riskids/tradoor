@@ -60,7 +60,10 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
   const markets = () => items().filter((m) => !isSection(m));
   const collapsed = () => props.panel.collapsed ?? [];
   const flags = () => props.panel.flags ?? {};
-  const shown = () => visible(items(), collapsed()).map((i) => items()[i]!);
+  /** A section being dragged: every section shows folded meanwhile, so it
+   *  moves among their headers as a market moves among rows. */
+  const [folding, setFolding] = createSignal(false);
+  const shown = () => visible(items(), folding() ? items().filter(isSection).map(sectionName) : collapsed()).map((i) => items()[i]!);
 
   // Seed the price from the catalogue so rows are not blank until the first tick.
   createEffect(() => {
@@ -189,16 +192,15 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     const bottom = els.length ? els[els.length - 1]!.getBoundingClientRect().bottom : box.top;
     const landing = (to: number, edge: number) => ({ to: to >= start && to <= end ? null : to, lineY: edge - box.top + list.scrollTop });
     // A section carries its markets, so it lands between whole sections, never
-    // among another's rows: the line snaps to the nearest of those places.
+    // among another's rows. Every section is folded while it moves, so the
+    // places it may land are rows on screen, chosen as a market's are: the
+    // first whose middle is below the pointer.
     if (isSection(items()[from]!)) {
-      const top = (to: number) => (to >= items().length ? bottom : (els.find((el) => el.dataset.item === items()[to])?.getBoundingClientRect().top ?? null));
-      let best: { to: number; edge: number } | null = null;
       for (const to of sectionStops(items())) {
-        const edge = top(to);
-        if (edge === null) continue;
-        if (!best || Math.abs(edge - y) < Math.abs(best.edge - y)) best = { to, edge };
+        const r = els.find((el) => el.dataset.item === items()[to])?.getBoundingClientRect();
+        if (r && y < r.top + r.height / 2) return landing(to, r.top);
       }
-      return best ? landing(best.to, best.edge) : { to: null, lineY: 0 };
+      return landing(items().length, bottom);
     }
     let to = items().length;
     let edge = bottom;
@@ -219,6 +221,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_PX) return;
       press.started = true;
       setMenu(null);
+      if (isSection(items()[press.from]!)) setFolding(true);
     }
     // Near an edge, the list scrolls to reach rows out of view.
     const box = list.getBoundingClientRect();
@@ -241,6 +244,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     press = null;
     batch(() => {
       setDrag(null);
+      setFolding(false);
       if (d && d.to !== null) patchPanel(id, { markets: move(items(), d.from, d.to) });
     });
   };
