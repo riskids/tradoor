@@ -22,13 +22,14 @@ pub const MAX_PER_OWNER: i64 = 800;
 const LOG_KEPT: i64 = 500;
 const MAX_MESSAGE: usize = 280;
 
-const COLUMNS: &str = "id, market, condition, price, message, active, created_at, triggered_at, trigger_price, start_price";
+const COLUMNS: &str = "id, market, condition, price, message, active, created_at, triggered_at, trigger_price, start_price, style";
 
 fn row_json(r: &tokio_postgres::Row) -> Value {
     json!({
         "id": r.get::<_, i64>(0), "market": r.get::<_, String>(1), "condition": r.get::<_, String>(2), "price": r.get::<_, f64>(3),
         "message": r.get::<_, Option<String>>(4), "active": r.get::<_, bool>(5), "createdAt": r.get::<_, i64>(6),
         "triggeredAt": r.get::<_, Option<i64>>(7), "triggerPrice": r.get::<_, Option<f64>>(8), "startPrice": r.get::<_, Option<f64>>(9),
+        "style": r.get::<_, Value>(10),
     })
 }
 
@@ -81,6 +82,28 @@ fn message(v: Option<&Value>) -> Result<Option<String>, String> {
         Some(Value::String(s)) if s.chars().count() <= MAX_MESSAGE => Ok(Some(s.trim().to_string())),
         _ => Err(format!("message must be text of at most {MAX_MESSAGE} characters")),
     }
+}
+
+/// How the alert's line is drawn: `{color?: "#rrggbb[aa]", dash?: "solid" |
+/// "dashed" | "dotted", width?: 1–4}`. What is left out is the chart's default,
+/// and nothing else is kept.
+pub fn style(v: &Value) -> Result<Value, String> {
+    let s = v.as_object().ok_or("style must be an object")?;
+    let mut out = serde_json::Map::new();
+    if let Some(c) = s.get("color").filter(|c| !c.is_null()) {
+        let hex = c.as_str().and_then(|c| c.strip_prefix('#')).filter(|h| matches!(h.len(), 6 | 8) && h.bytes().all(|b| b.is_ascii_hexdigit()));
+        let hex = hex.ok_or("style.color must be #rrggbb or #rrggbbaa")?;
+        out.insert("color".into(), Value::String(format!("#{}", hex.to_ascii_lowercase())));
+    }
+    if let Some(d) = s.get("dash").filter(|d| !d.is_null()) {
+        let dash = d.as_str().filter(|d| matches!(*d, "solid" | "dashed" | "dotted")).ok_or("style.dash must be solid, dashed or dotted")?;
+        out.insert("dash".into(), Value::String(dash.into()));
+    }
+    if let Some(w) = s.get("width").filter(|w| !w.is_null()) {
+        let width = w.as_f64().filter(|w| (1.0..=4.0).contains(w)).ok_or("style.width must be from 1 to 4")?;
+        out.insert("width".into(), json!(width));
+    }
+    Ok(Value::Object(out))
 }
 
 /// An alert off the wire; the error names the field and becomes the 400.
@@ -153,6 +176,7 @@ pub async fn record_trigger(
 
 /// Edit, restart or trigger one alert:
 /// `{price?, condition?, message?}` edits it (and restarts it, as TradingView does);
+/// `{style}` restyles its line and leaves it as it was;
 /// `{active: true}` restarts a stopped one; `{triggered: {value}}` records a trigger
 /// — the alert stops and the log gains a line.
 pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
@@ -186,6 +210,10 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
         Some(v) => message(Some(v)).map_err(ApiError::bad_request)?,
         None => row.get(4),
     };
+    let new_style = match b.get("style") {
+        Some(v) => style(v).map_err(ApiError::bad_request)?,
+        None => row.get(10),
+    };
     let restart = b.get("active") == Some(&Value::Bool(true)) || b.contains_key("price") || b.contains_key("condition");
     let stop = b.get("active") == Some(&Value::Bool(false));
     let active = if stop { false } else { restart || row.get::<_, bool>(5) };
@@ -195,12 +223,12 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let updated = client
         .query_one(
             &format!(
-                "UPDATE alert SET price = $3, condition = $4, message = $5, active = $6, start_price = $8,
+                "UPDATE alert SET price = $3, condition = $4, message = $5, active = $6, start_price = $8, style = $9,
                         triggered_at = CASE WHEN $7 THEN NULL ELSE triggered_at END,
                         trigger_price = CASE WHEN $7 THEN NULL ELSE trigger_price END
                  WHERE id = $1 AND owner = $2 RETURNING {COLUMNS}"
             ),
-            &[&id, &owner, &new_price, &new_condition, &new_message, &active, &restart, &start],
+            &[&id, &owner, &new_price, &new_condition, &new_message, &active, &restart, &start, &new_style],
         )
         .await?;
     Ok(Json(json!({ "alert": row_json(&updated) })))
@@ -263,6 +291,19 @@ mod tests {
         assert_eq!(rose("greater", 100.0, None), Some(true), "the condition says it without help");
         assert_eq!(rose("less", 100.0, None), Some(false));
         assert_eq!(rose("less", 100.0, Some(90.0)), Some(true), "the price it was set from wins");
+    }
+
+    #[test]
+    fn a_style_keeps_what_draws_a_line_and_refuses_the_rest() {
+        let ok = style(&json!({ "color": "#F23645CC", "dash": "dotted", "width": 2, "extra": "dropped" })).unwrap();
+        assert_eq!(ok, json!({ "color": "#f23645cc", "dash": "dotted", "width": 2.0 }), "lower-cased, and only the known keys");
+        assert_eq!(style(&json!({})).unwrap(), json!({}), "empty is the chart's default");
+        assert_eq!(style(&json!({ "color": null })).unwrap(), json!({}), "a null clears a setting");
+        assert!(style(&json!({ "color": "red" })).is_err(), "colours are hex");
+        assert!(style(&json!({ "color": "#12345" })).is_err());
+        assert!(style(&json!({ "dash": "wavy" })).is_err());
+        assert!(style(&json!({ "width": 9 })).is_err(), "no wider than four");
+        assert!(style(&json!("solid")).is_err(), "an object, not a word");
     }
 
     #[test]

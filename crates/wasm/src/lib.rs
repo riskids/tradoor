@@ -18,6 +18,7 @@ use tradoor_core::live::{Kline, LiveBar, LiveFeed};
 use tradoor_core::studies::STUDIES;
 use tradoor_core::timeframe::fold;
 use tradoor_core::{ChartTimeframe, Interval};
+use tradoor_render::drawings::Dash;
 use tradoor_render::{Anchor, Chart, DrawingKind, DrawingShape, DrawingStyle, Event, Magnet};
 use wasm_bindgen::prelude::*;
 
@@ -442,9 +443,9 @@ impl ChartEngine {
     }
 
     /// The market's active price alerts, as `[id, price, id, price, …]`.
+    /// `[id, price, rgba, dash, width, …]`: see `alert_lines`.
     pub fn set_alerts(&mut self, flat: &[f64]) {
-        let alerts = flat.chunks_exact(2).filter(|c| c[1].is_finite() && c[1] > 0.0).map(|c| tradoor_render::chart::AlertLine { id: c[0] as i64, price: c[1] }).collect();
-        self.chart.set_alerts(alerts);
+        self.chart.set_alerts(alert_lines(flat));
     }
 
     /// Minutes whose taker flow ran hard, as `[at, price, usd, …]`, oldest first.
@@ -723,3 +724,45 @@ pub fn indicator_values(
     set(&o, "profile", profile);
     Ok(o.into())
 }
+
+/// Alert levels off the flat array the page sends: `[id, price, rgba, dash,
+/// width, …]` — `rgba` as `0xrrggbbaa`, 0 for the theme's colour; `dash` 1
+/// solid, 2 dashed, 3 dotted, 0 for dashed; `width` 0 for a pixel.
+fn alert_lines(flat: &[f64]) -> Vec<tradoor_render::chart::AlertLine> {
+    flat.chunks_exact(5)
+        .filter(|c| c[1].is_finite() && c[1] > 0.0)
+        .map(|c| {
+            let mut line = tradoor_render::chart::AlertLine::at(c[0] as i64, c[1]);
+            if c[2] > 0.0 && c[2] <= f64::from(u32::MAX) {
+                let v = c[2] as u32;
+                line.color = Some(tradoor_render::color::Color { r: (v >> 24) as u8, g: (v >> 16) as u8, b: (v >> 8) as u8, a: v as u8 });
+            }
+            line.dash = match c[3] as u8 {
+                1 => Dash::Solid,
+                3 => Dash::Dotted,
+                _ => Dash::Dashed,
+            };
+            if c[4].is_finite() && c[4] > 0.0 {
+                line.width = (c[4] as f32).min(4.0);
+            }
+            line
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tradoor_render::chart::AlertLine;
+    use tradoor_render::color::Color;
+
+    #[test]
+    fn alert_lines_read_their_style_off_the_flat_array() {
+        let lines = alert_lines(&[7.0, 84_345.0, 0.0, 0.0, 0.0, 8.0, 84_000.0, f64::from(0xf236_4580_u32), 1.0, 2.0]);
+        assert_eq!(lines[0], AlertLine::at(7, 84_345.0), "nothing set: the default line");
+        assert_eq!(lines[1].color, Some(Color { r: 0xf2, g: 0x36, b: 0x45, a: 0x80 }));
+        assert_eq!((lines[1].dash, lines[1].width), (Dash::Solid, 2.0));
+        assert!(alert_lines(&[7.0, 84_345.0]).is_empty(), "the old two-number form is not misread");
+    }
+}
+

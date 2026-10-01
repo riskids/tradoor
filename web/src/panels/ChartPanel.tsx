@@ -7,7 +7,7 @@ import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, S
 import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, TOOL_KEYS } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
-import { api, catalog, errorText, type ChartKind, type Drawing, type Product } from '../lib/api';
+import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
 import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
@@ -25,7 +25,7 @@ import { liquidationVenues } from '../lib/liquidation-venues';
 import { formatClock, formatFileTime, zoneLabel } from '../lib/timezone';
 import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { symbolOf, venueLabel } from '../lib/markets';
-import { alertState, createAlert, deleteAlert, digitsFor, editAlert, titleOf } from '../lib/alerts';
+import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert, titleOf } from '../lib/alerts';
 import { toast } from '../lib/toasts';
 import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
@@ -34,6 +34,7 @@ import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../wo
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
 const OpenInterestSettings = lazy(() => import('../components/OpenInterestSettings').then((m) => ({ default: m.OpenInterestSettings })));
+const AlertStyleSettings = lazy(() => import('../components/AlertStyleSettings').then((m) => ({ default: m.AlertStyleSettings })));
 const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
 
 const TOOLS: { kind: string; icon: IconName; title: string }[] = [
@@ -145,11 +146,17 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   /** The drawing whose settings dialog is open. */
   const [editing, setEditing] = createSignal<number | null>(null);
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
+  /** The alert a right-click landed on, and where its menu opens. */
+  const [alertMenu, setAlertMenu] = createSignal<{ id: number; x: number; y: number } | null>(null);
+  /** The alert whose line is being restyled, and the style shown meanwhile. */
+  const [alertStyling, setAlertStyling] = createSignal<number | null>(null);
+  const [alertDraft, setAlertDraft] = createSignal<{ id: number; style: AlertStyle } | null>(null);
   const [tfMenu, setTfMenu] = createSignal<number | null>(null);
   /** The TPO quick access menu, open at this x in the toolbar. */
   const [tpoMenu, setTpoMenu] = createSignal<number | null>(null);
   useDismiss(tpoMenu, () => setTpoMenu(null));
   useDismiss(menu, () => setMenu(null));
+  useDismiss(alertMenu, () => setAlertMenu(null));
   useDismiss(tfMenu, () => setTfMenu(null));
 
   let box!: HTMLDivElement;
@@ -252,7 +259,10 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   // ---------------------------------------------------------------- alerts
   // The market's active alerts, drawn by the engine as levels.
   createEffect(() => {
-    const list = alertState.alerts.filter((a) => a.active && a.market === market()).map((a) => ({ id: a.id, price: a.price }));
+    const draft = alertDraft();
+    const list = alertState.alerts
+      .filter((a) => a.active && a.market === market())
+      .map((a) => ({ id: a.id, price: a.price, style: draft?.id === a.id ? draft.style : a.style }));
     send({ t: 'alerts', id: sid, list });
   });
   // The add-alert button and an alert's label stay while the pointer is on
@@ -1025,6 +1035,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             e.preventDefault();
             if (fingerLast) return;
             const p = local(e);
+            // On an alert's line or badge: that alert's own menu, not the chart's.
+            const over = hoveredAlert();
+            if (over) {
+              setMenu(null);
+              setAlertMenu({ id: over.alert.id, x: Math.max(0, Math.min(p.x, box.clientWidth - 200)), y: Math.max(0, Math.min(p.y, box.clientHeight - 80)) });
+              return;
+            }
             setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 120)) });
           }}
         >
@@ -1093,6 +1110,16 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               >
                 <span>{titleOf(h().alert)}</span>
                 <button
+                  data-tip="Line style — colour, opacity, thickness"
+                  aria-label="Style this alert's line"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAlertStyling(h().alert.id);
+                  }}
+                >
+                  <Icon name="settings" size={12} />
+                </button>
+                <button
                   data-tip="Delete this alert"
                   aria-label="Delete this alert"
                   onClick={(e) => {
@@ -1159,6 +1186,30 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               </button>
             </Show>
           </div>
+          <Show when={alertMenu()}>
+            {(m) => (
+              <div class="menu" style={{ left: `${m().x}px`, top: `${m().y}px` }} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+                <button
+                  onClick={() => {
+                    setAlertStyling(m().id);
+                    setAlertMenu(null);
+                  }}
+                >
+                  Line style…<span class="dim">colour, opacity, thickness</span>
+                </button>
+                <hr />
+                <button
+                  onClick={() => {
+                    const id = m().id;
+                    setAlertMenu(null);
+                    deleteAlert(id).catch((err) => toast({ tone: 'warn', title: 'Alert not deleted', body: errorText(err) }));
+                  }}
+                >
+                  Delete alert
+                </button>
+              </div>
+            )}
+          </Show>
           <Show when={menu()}>
             {(m) => (
               <div class="menu" style={{ left: `${m().x}px`, top: `${m().y}px` }} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
@@ -1214,6 +1265,34 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
 
       <Show when={studyEditing()} keyed>
         {(studyId) => <OpenInterestSettings id={studyId} onApply={(next) => replaceStudy(studyId, next)} onClose={() => setStudyEditing(null)} />}
+      </Show>
+      {/* Keyed on the id, not the alert: the list is reloaded now and then, and
+          a fresh copy of the same alert must not start the dialog over. */}
+      <Show when={alertStyling()} keyed>
+        {(alertId) => (
+          <Show when={untrack(() => alertState.alerts.find((x) => x.id === alertId))}>
+            {(a) => (
+              <AlertStyleSettings
+                title={titleOf(a())}
+                style={a().style}
+                onPreview={(style) => setAlertDraft({ id: alertId, style })}
+                onApply={(style) => {
+                  setAlertStyling(null);
+                  // The draft stays drawn until the saved style replaces it, so the
+                  // line does not flick back to its old look for the round trip.
+                  setAlertDraft({ id: alertId, style });
+                  styleAlert(alertId, style)
+                    .catch((err) => toast({ tone: 'warn', title: 'Alert style not saved', body: errorText(err) }))
+                    .finally(() => setAlertDraft((d) => (d?.style === style ? null : d)));
+                }}
+                onCancel={() => {
+                  setAlertStyling(null);
+                  setAlertDraft(null);
+                }}
+              />
+            )}
+          </Show>
+        )}
       </Show>
 
       {/* Keyed on the id alone: each previewed change must not remount the dialog. */}

@@ -11,7 +11,7 @@
  */
 import { createEffect, createRoot, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
-import { api, catalog, errorText, type Alert, type AlertCondition, type AlertLog, type Catalog } from './api';
+import { api, catalog, errorText, type Alert, type AlertCondition, type AlertLog, type AlertStyle, type Catalog } from './api';
 import { alertTitle, fires, rose } from './alert-rules';
 import { watchDay } from './day-feed';
 import { formatPrice, priceDecimals } from './format';
@@ -96,6 +96,13 @@ export async function createAlert(market: string, condition: AlertCondition, pri
 
 export async function editAlert(id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; atPrice?: number }): Promise<void> {
   const { alert } = await api.updateAlert(id, patch);
+  upsert(alert);
+  changed();
+}
+
+/** How its line is drawn; the alert itself is left as it was. */
+export async function styleAlert(id: number, style: AlertStyle): Promise<void> {
+  const { alert } = await api.updateAlert(id, { style });
   upsert(alert);
   changed();
 }

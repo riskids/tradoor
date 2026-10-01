@@ -153,6 +153,15 @@ export interface Alert {
   triggerPrice: number | null;
   /** What the market cost when the level was set: which way it is reached. */
   startPrice: number | null;
+  /** How its line is drawn; what is left out is the chart's default. */
+  style?: AlertStyle;
+}
+
+/** An alert line's colour (`#rrggbb[aa]`, opacity included), dash and width. */
+export interface AlertStyle {
+  color?: string;
+  dash?: 'solid' | 'dashed' | 'dotted';
+  width?: number;
 }
 
 /** One trigger, kept after its alert is edited or deleted. */
@@ -255,7 +264,7 @@ export const api = {
   clearDrawings: (market: string, timeframe: string, chart: ChartKind) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'DELETE' }),
   alerts: () => json<{ alerts: Alert[]; log: AlertLog[] }>('/api/alerts'),
   createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null; atPrice?: number }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
-  updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean; atPrice?: number }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
+  updateAlert: (id: number, patch: { price?: number; condition?: AlertCondition; message?: string | null; active?: boolean; atPrice?: number; style?: AlertStyle }) => json<{ alert: Alert }>(`/api/alerts/${id}`, { method: 'PATCH', body: patch }),
   triggerAlert: (id: number, value: number, from?: number | null) => json<{ alert: Alert; log: AlertLog | null }>(`/api/alerts/${id}`, { method: 'PATCH', body: { triggered: { value, from } } }),
   deleteAlert: (id: number) => send(`/api/alerts/${id}`, { method: 'DELETE' }),
   clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),

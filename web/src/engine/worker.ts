@@ -61,6 +61,12 @@ const scope = self as unknown as { postMessage(msg: FromWorker): void; onmessage
 const post = (msg: FromWorker): void => scope.postMessage(msg);
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const EMPTY = new Float64Array(0);
+/** An alert line's style as the engine reads it: see `set_alerts`. */
+const DASHES: Record<string, number> = { solid: 1, dashed: 2, dotted: 3 };
+const rgba = (color: string | undefined): number => {
+  const hex = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(color ?? '');
+  return hex ? parseInt(hex[1]! + (hex[2] ?? 'ff'), 16) : 0;
+};
 
 const hub = new StreamHub();
 const theme = new Map<string, string>();
@@ -889,7 +895,7 @@ function handle(msg: ToWorker): void {
       slot.engine.set_drawings(msg.list);
       break;
     case 'alerts':
-      slot.engine.set_alerts(Float64Array.from(msg.list.flatMap((a) => [a.id, a.price])));
+      slot.engine.set_alerts(Float64Array.from(msg.list.flatMap((a) => [a.id, a.price, rgba(a.style?.color), DASHES[a.style?.dash ?? ''] ?? 0, a.style?.width ?? 0])));
       break;
     case 'footprint':
       slot.engine.set_footprint(msg.flat, msg.grid);

@@ -1,5 +1,6 @@
 /** Messages between the page and the engine worker. */
 import type { SocketState } from './streams';
+import type { AlertStyle } from '../lib/api';
 
 export type LiveStatus = 'off' | SocketState;
 
@@ -172,7 +173,7 @@ export type ToWorker =
   | { t: 'magnet'; id: string; value: MagnetMode }
   | { t: 'drawings'; id: string; list: DrawingShape[] }
   /** The market's active price alerts. */
-  | { t: 'alerts'; id: string; list: { id: number; price: number }[] }
+  | { t: 'alerts'; id: string; list: { id: number; price: number; style?: AlertStyle }[] }
   /** Minutes whose taker flow ran hard, marked on the candles. */
   | { t: 'flow'; id: string; marks: { at: number; price: number; usd: number }[] }
   /** Volume by price: per bar, its time, how many levels follow, then each

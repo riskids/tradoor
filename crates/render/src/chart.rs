@@ -10,7 +10,7 @@ use tradoor_core::time::DAY;
 use tradoor_core::{Candle, ChartTimeframe, Interval};
 
 use crate::color::Color;
-use crate::drawings::{self, Anchor, DrawingKind, DrawingShape, DrawingStyle, Placed, MAX_POINTS};
+use crate::drawings::{self, Anchor, Dash, DrawingKind, DrawingShape, DrawingStyle, Placed, MAX_POINTS};
 use crate::footprint;
 use crate::geometry::{logical_to_time, ribbon_runs, time_to_logical, visible_slice, RibbonRun};
 use crate::paint::{Align, Baseline, Frame, Rect};
@@ -103,6 +103,17 @@ pub struct FlowMark {
 pub struct AlertLine {
     pub id: i64,
     pub price: f64,
+    /// Its own colour, opacity and all; the theme's alert colour when none.
+    pub color: Option<Color>,
+    pub dash: Dash,
+    pub width: f32,
+}
+
+impl AlertLine {
+    /// A level as alerts are drawn unless styled: the theme's colour, dashed, a pixel wide.
+    pub fn at(id: i64, price: f64) -> Self {
+        Self { id, price, color: None, dash: Dash::Dashed, width: 1.0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1430,20 +1441,24 @@ impl Chart {
             drawings::paint(f, &placed, price.plot, t);
         }
 
-        // Price alerts: a dotted level, solid while the pointer holds it, with a
-        // ring by the axis as TradingView marks them.
+        // Price alerts: a level in its own style (dashed unless set otherwise),
+        // solid while the pointer holds it, with a ring by the axis as
+        // TradingView marks them. The ring and the badge keep the colour whole,
+        // however faint the line, so the level can always be found and read.
         let held_alert = match self.drag {
             Drag::Alert { id, .. } => Some(id),
             _ => self.crosshair.filter(|_| self.tool.is_none()).and_then(|(x, y)| self.alert_handle_at(x, y)).map(|(id, _)| id),
         };
         for a in &self.alerts {
             let y = f.snap(price.scale.y(a.price) as f32);
-            if held_alert == Some(a.id) {
-                f.hline(0.0, plot_w, y, 1.0, t.alert);
-            } else {
-                f.dashed_line(0.0, y, plot_w, y, 1.0, t.alert, 4.0, 3.0);
+            let color = a.color.unwrap_or(t.alert);
+            match a.dash {
+                _ if held_alert == Some(a.id) => f.hline(0.0, plot_w, y, a.width, color),
+                Dash::Solid => f.hline(0.0, plot_w, y, a.width, color),
+                Dash::Dashed => f.dashed_line(0.0, y, plot_w, y, a.width, color, 4.0, 3.0),
+                Dash::Dotted => f.dashed_line(0.0, y, plot_w, y, a.width, color, a.width.max(1.5), 3.0),
             }
-            f.circle(plot_w - 10.0, y, 4.5, t.alert);
+            f.circle(plot_w - 10.0, y, 4.5, color.with_alpha(255));
             f.circle(plot_w - 10.0, y, 3.0, t.background);
         }
 
@@ -1485,7 +1500,8 @@ impl Chart {
             badges.push(Badge { pane: 0, y: last_y + badge_h, text: format_countdown(close_at - now), bg: t.countdown_background, fg: t.countdown_text });
         }
         for a in &self.alerts {
-            badges.push(Badge { pane: 0, y: price.scale.y(a.price) as f32, text: format_price(a.price, Some(p)), bg: t.alert, fg: t.alert.contrast_text() });
+            let bg = a.color.unwrap_or(t.alert).with_alpha(255);
+            badges.push(Badge { pane: 0, y: price.scale.y(a.price) as f32, text: format_price(a.price, Some(p)), bg, fg: bg.contrast_text() });
         }
         let last_value = |values: &[Option<f64>]| values.iter().rev().flatten().next().copied();
         if !self.hidden.contains("ema200") {
@@ -3004,7 +3020,7 @@ mod tests {
     fn an_alert_line_is_found_under_the_pointer_and_dragged_to_a_new_price() {
         let mut c = chart();
         let level = c.anchor_at(300.0, 200.0).unwrap().price;
-        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.set_alerts(vec![AlertLine::at(9, level)]);
         c.render(1_800_000_000_000);
         assert_eq!(c.alert_at(300.0, 202.0).map(|(id, _)| id), Some(9));
         assert_eq!(c.alert_at(300.0, 220.0), None);
@@ -3014,7 +3030,7 @@ mod tests {
         c.pointer_down(300.0, 200.0, 0);
         c.pointer_move(300.0, 260.0);
         // A refresh from the page mid-drag does not snap it back.
-        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.set_alerts(vec![AlertLine::at(9, level)]);
         c.pointer_up(300.0, 260.0);
         let moved = c.take_events().into_iter().find_map(|e| match e {
             Event::AlertMoved { id: 9, price } => Some(price),
@@ -3029,7 +3045,7 @@ mod tests {
     fn an_alert_is_dragged_by_its_badge_on_the_price_axis_too() {
         let mut c = chart();
         let level = c.anchor_at(300.0, 200.0).unwrap().price;
-        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.set_alerts(vec![AlertLine::at(9, level)]);
         c.render(1_800_000_000_000);
         let axis_x = c.plot_width() + 10.0;
         assert_eq!(c.alert_handle_at(axis_x, 203.0).map(|(id, _)| id), Some(9), "the badge is a handle");
@@ -3047,10 +3063,27 @@ mod tests {
     }
 
     #[test]
+    fn an_alert_line_is_drawn_in_its_own_style() {
+        let mut c = chart();
+        let level = c.anchor_at(300.0, 200.0).unwrap().price;
+        let t = c.theme.clone();
+        let count = |c: &mut Chart, color: Color| c.render(1_800_000_000_000).colors.chunks(4).filter(|p| *p == [color.r, color.g, color.b, color.a]).count();
+
+        c.set_alerts(vec![AlertLine::at(9, level)]);
+        assert!(count(&mut c, t.alert) > 0, "unstyled, in the theme's colour as before");
+
+        let faint = Color::hex(0xf23645).with_alpha(0x60);
+        c.set_alerts(vec![AlertLine { color: Some(faint), dash: Dash::Solid, width: 2.0, ..AlertLine::at(9, level) }]);
+        assert!(count(&mut c, faint) > 0, "the line in its colour, at its opacity");
+        assert!(count(&mut c, faint.with_alpha(255)) > 0, "its ring and badge in the colour whole, to be found and read");
+        assert_eq!(count(&mut c, t.alert), 0, "and nothing left in the theme's");
+    }
+
+    #[test]
     fn a_finger_scaling_or_panning_past_an_alert_leaves_it_where_it_is() {
         let mut c = chart();
         let level = c.anchor_at(300.0, 200.0).unwrap().price;
-        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.set_alerts(vec![AlertLine::at(9, level)]);
         c.render(1_800_000_000_000);
         c.set_touch(true);
         let axis_x = c.plot_width() + 10.0;
