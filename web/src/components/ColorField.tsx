@@ -1,9 +1,8 @@
 /** A colour swatch that opens a palette, a custom colour and an opacity slider.
  *  Kept apart from the drawing dialog so the chart's toolbar can use it without
  *  loading the dialog. */
-import { createSignal, For, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
-import { useDismiss } from '../lib/dismiss';
 
 /** A palette in the spirit of TradingView's: greys, then hues in three strengths. */
 export const PALETTE = [
@@ -51,7 +50,30 @@ export function ColorField(props: { value: string; onChange(v: string): void; ti
     closeOpenPalette = next ? close : null;
     setOpenState(next);
   };
-  useDismiss(open, close);
+  let palette: HTMLDivElement | undefined;
+  // Closed by a press anywhere outside it, heard on the way down: a dialog the
+  // field sits in keeps its own presses from the chart, and the palette stayed
+  // open over the dialog's buttons. Escape closes it and hands the focus back
+  // to the swatch, so a second Escape reaches the dialog.
+  createEffect(() => {
+    if (!open()) return;
+    const onDown = (e: PointerEvent) => {
+      const at = e.target as Node;
+      if (!palette?.contains(at) && !button.contains(at)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      close();
+      button.focus();
+    };
+    addEventListener('pointerdown', onDown, true);
+    addEventListener('keydown', onKey, true);
+    onCleanup(() => {
+      removeEventListener('pointerdown', onDown, true);
+      removeEventListener('keydown', onKey, true);
+    });
+  });
   onCleanup(() => {
     if (closeOpenPalette === close) closeOpenPalette = null;
   });
@@ -68,7 +90,7 @@ export function ColorField(props: { value: string; onChange(v: string): void; ti
       />
       <Show when={open()}>
         <Portal>
-          <div class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
+          <div ref={palette} class="palette" style={{ left: `${open()!.left}px`, top: `${open()!.top}px` }} onPointerDown={(e) => e.stopPropagation()}>
             <div class="grid">
               <For each={PALETTE}>
                 {(c) => <button classList={{ cur: parts().hex.toLowerCase() === c }} style={{ background: c }} data-tip={c} onClick={() => props.onChange(joinColor(c, parts().opacity))} />}

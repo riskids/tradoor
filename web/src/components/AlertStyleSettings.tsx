@@ -1,9 +1,9 @@
 /**
  * How an alert's line is drawn: its colour and opacity, thickness and dash,
- * as a drawing's are set. The chart shows each change as it is made; Ok keeps
- * it, and Cancel puts the line back as it was.
+ * as a drawing's are set. The chart shows each change as it is made; Ok, or a
+ * click anywhere else, keeps it, and Cancel or Escape puts the line back.
  */
-import { createSignal, For, onMount } from 'solid-js';
+import { createSignal, For, onCleanup, onMount } from 'solid-js';
 import type { AlertStyle } from '../lib/api';
 import { ColorField } from './ColorField';
 
@@ -22,6 +22,20 @@ export function AlertStyleSettings(props: { title: string; style: AlertStyle | u
   onMount(() => queueMicrotask(() => panel.focus()));
 
   const ok = () => props.onApply(style());
+  const changed = () => (['color', 'dash', 'width'] as const).some((k) => style()[k] !== props.style?.[k]);
+  // A press outside the dialog — and outside its palette, which is placed on
+  // the page's body — is done with it, as with a popover: what was changed is
+  // kept, and with nothing changed there is nothing to save.
+  onMount(() => {
+    const onDown = (e: PointerEvent) => {
+      const at = e.target as Element;
+      if (panel.contains(at) || at.closest?.('.palette')) return;
+      if (changed()) ok();
+      else props.onCancel();
+    };
+    addEventListener('pointerdown', onDown, true);
+    onCleanup(() => removeEventListener('pointerdown', onDown, true));
+  });
 
   return (
     <div
