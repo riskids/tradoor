@@ -100,6 +100,11 @@ const RANGES: { label: string; days: number | 'ytd' | null }[] = [
   { label: 'All', days: null },
 ];
 
+/** How long a finger stays put before it is a hold, and how far it may drift
+ *  meanwhile — as far as the engine lets a press go before it pans. */
+const HOLD_MS = 400;
+const HOLD_SLOP = 5;
+
 const LIVE: Record<LiveStatus, { label: string; tone: string; title: string }> = {
   off: { label: 'CLOSED BARS', tone: 'dim', title: 'The exchange streams no candle of this length; it is folded from shorter bars and refreshed every few minutes.' },
   connecting: { label: 'CONNECTING', tone: 'dim', title: 'Opening the exchange stream.' },
@@ -278,7 +283,26 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   };
   const pointer = (kind: PointerKind, e: MouseEvent) => {
     const p = local(e);
-    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+    const touch = 'pointerType' in e && (e as PointerEvent).pointerType === 'touch';
+    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, touch });
+  };
+
+  // ---- hold: one finger kept still is the crosshair, as in TradingView's app.
+  // A press pans a phone's chart, so the crosshair cannot be what a press
+  // gives; the engine is told when a finger has stayed put, and decides what
+  // a hold means where it is (the crosshair, an alert taken, a tool aiming).
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdFrom: { x: number; y: number } | null = null;
+  /** The finger lifted was a hold: its crosshair stays to be read, so the
+   *  pointerleave that follows a lifted finger is not passed on. */
+  let keepCrosshair = false;
+  /** The last press was a finger's: the long press that would open the
+   *  browser's menu is a hold here instead. */
+  let fingerLast = false;
+  const dropHold = () => {
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+    holdFrom = null;
   };
 
   // ---- pinch: two fingers zoom time about the point between them, and carry
@@ -926,8 +950,21 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           onPointerDown={(e) => {
             if (e.button === 2) return;
             box.setPointerCapture(e.pointerId);
+            fingerLast = e.pointerType === 'touch';
+            dropHold();
+            keepCrosshair = false;
             if (e.pointerType === 'touch') {
               fingers.set(e.pointerId, local(e));
+              if (fingers.size === 1) {
+                const at = local(e);
+                holdFrom = at;
+                holdTimer = setTimeout(() => {
+                  holdTimer = undefined;
+                  send({ t: 'pointer', id: sid, kind: 'hold', x: at.x, y: at.y, button: 0, touch: true });
+                  keepCrosshair = true;
+                  navigator.vibrate?.(8);
+                }, HOLD_MS);
+              }
               if (fingers.size >= 2) {
                 // The first finger was panning or drawing: it is let go where
                 // it stands rather than finishing whatever it began.
@@ -945,6 +982,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             if (e.pointerType === 'touch') {
               if (!fingers.has(e.pointerId)) return;
               fingers.set(e.pointerId, local(e));
+              // Moved before the hold came due: a pan, not a hold.
+              const p = local(e);
+              if (holdFrom && Math.hypot(p.x - holdFrom.x, p.y - holdFrom.y) > HOLD_SLOP) dropHold();
               const now = between();
               if (now && pinch) {
                 if (pinch.spread > 0 && now.spread > 0) {
@@ -964,16 +1004,26 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           }}
           onPointerUp={(e) => {
             if (box.hasPointerCapture(e.pointerId)) box.releasePointerCapture(e.pointerId);
+            dropHold();
             if (e.pointerType === 'touch' && lift(e)) return;
             if (e.button !== 2) pointer('up', e);
           }}
           onPointerCancel={(e) => {
+            dropHold();
+            keepCrosshair = false;
             if (e.pointerType !== 'touch' || !lift(e)) pointer('leave', e);
           }}
-          onPointerLeave={(e) => pointer('leave', e)}
+          onPointerLeave={(e) => {
+            if (e.pointerType === 'touch' && keepCrosshair) {
+              keepCrosshair = false;
+              return;
+            }
+            pointer('leave', e);
+          }}
           onDblClick={(e) => pointer('dblclick', e)}
           onContextMenu={(e) => {
             e.preventDefault();
+            if (fingerLast) return;
             const p = local(e);
             setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 120)) });
           }}

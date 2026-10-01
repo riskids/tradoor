@@ -147,7 +147,8 @@ export type CallName = keyof Calls;
 /** Where drawing anchors are pulled: nowhere, a bar's price when near, or always. */
 export type MagnetMode = 'off' | 'weak' | 'strong';
 
-export type PointerKind = 'move' | 'down' | 'up' | 'leave' | 'dblclick';
+/** `hold`: a finger kept still where it went down, timed by the page. */
+export type PointerKind = 'move' | 'down' | 'up' | 'leave' | 'dblclick' | 'hold';
 
 export type ToWorker =
   /** `flat`: shapes on the 2D canvas even where WebGL2 is available (development only). */
@@ -184,7 +185,7 @@ export type ToWorker =
   | { t: 'autoScale'; id: string }
   | { t: 'range'; id: string; days: number | null }
   /** `shift`: held, so lines being drawn stay level. `ctrl` (or Cmd): a weak magnet while held. */
-  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean; ctrl?: boolean }
+  | { t: 'pointer'; id: string; kind: PointerKind; x: number; y: number; button: number; shift?: boolean; ctrl?: boolean; touch?: boolean }
   | { t: 'wheel'; id: string; x: number; y: number; dx: number; dy: number }
   | { t: 'theme'; key: string; value: string }
   /** Every exchange's mark, as `markSpec` writes it, numbered by MARK_ORDER. */

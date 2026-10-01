@@ -42,6 +42,8 @@ const FLOW_MAX_RADIUS: f32 = 9.0;
 /// How near an alert's line the pointer must be to take it. A hairline is hard
 /// to hit, so the grab reaches further than the line is drawn.
 const ALERT_HIT_PX: f32 = 7.0;
+/// And a finger held on one, broader than a pointer and covering what it aims at.
+const ALERT_HOLD_PX: f32 = 16.0;
 
 /// TradingView's magnet: anchors placed or dragged land on a bar's open, high,
 /// low or close — when near one (weak, elsewhere on a whole tick) or always
@@ -205,6 +207,9 @@ enum Drag {
     Anchor { id: i64, index: usize, moved: bool },
     /// Moving a price alert's level.
     Alert { id: i64, moved: bool },
+    /// A finger held still: the crosshair follows it and nothing pans, and with
+    /// a tool armed, lifting it places the next anchor where it was aimed.
+    Held,
     /// Pressed with a tool armed: a drag places its next anchors in one gesture.
     Draw { kind: DrawingKind, start: Anchor, start_px: (f32, f32), moved: bool },
 }
@@ -308,6 +313,8 @@ pub struct Chart {
     magnet: Magnet,
     /// Ctrl held: a weak magnet for as long as it is, when the magnet is off.
     ctrl: bool,
+    /// The press under way is a finger's, not a mouse's.
+    touch_input: bool,
     placed: Vec<Anchor>,
     draft: Option<DrawingShape>,
     events: Vec<Event>,
@@ -365,6 +372,7 @@ impl Chart {
             shift: false,
             magnet: Magnet::Off,
             ctrl: false,
+            touch_input: false,
             selected: None,
             tool: None,
             placed: Vec::new(),
@@ -739,6 +747,10 @@ impl Chart {
 
     /// The alert line within a few pixels of (x, y) on the price pane.
     pub fn alert_at(&self, x: f32, y: f32) -> Option<(i64, f32)> {
+        self.alert_within(x, y, ALERT_HIT_PX)
+    }
+
+    fn alert_within(&self, x: f32, y: f32, reach: f32) -> Option<(i64, f32)> {
         let pane = self.panes.first()?;
         if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
             return None;
@@ -746,7 +758,7 @@ impl Chart {
         self.alerts
             .iter()
             .map(|a| (a.id, pane.scale.y(a.price) as f32))
-            .filter(|(_, ay)| (ay - y).abs() <= ALERT_HIT_PX)
+            .filter(|(_, ay)| (ay - y).abs() <= reach)
             .min_by(|a, b| (a.1 - y).abs().total_cmp(&(b.1 - y).abs()))
     }
 
@@ -871,6 +883,10 @@ impl Chart {
 
     pub fn set_ctrl(&mut self, ctrl: bool) {
         self.ctrl = ctrl;
+    }
+
+    pub fn set_touch(&mut self, touch: bool) {
+        self.touch_input = touch;
     }
 
     /// The magnet in force: the chosen one, or a weak one while Ctrl is held over none.
@@ -1892,6 +1908,7 @@ impl Chart {
             Drag::Press { panning: true, .. } => Cursor::Grabbing,
             Drag::Shape { .. } | Drag::Anchor { .. } => Cursor::Move,
             Drag::Alert { .. } => Cursor::NsResize,
+            Drag::Held => Cursor::Crosshair,
             Drag::PriceAxis { .. } => Cursor::NsResize,
             Drag::TimeAxis { .. } => Cursor::ColResize,
             Drag::Separator { .. } => Cursor::RowResize,
@@ -1946,6 +1963,8 @@ impl Chart {
                 self.resize_panes(upper, y - last_y);
                 self.drag = Drag::Separator { upper, last_y: y };
             }
+            // The crosshair, set above, is all a held finger moves.
+            Drag::Held => {}
             Drag::Alert { id, .. } => {
                 if let Some(pane) = self.panes.first() {
                     let step = 10f64.powi(-(self.precision() as i32));
@@ -2002,10 +2021,13 @@ impl Chart {
             return;
         }
         let free = self.tool.is_none();
+        // A finger passing over an alert on its way to scale or pan is not
+        // taking hold of it: on a touch screen the alert waits for a hold.
+        let grab_alerts = !self.touch_input;
         self.drag = match self.zone(x, y) {
             Zone::Separator(i) if free => Drag::Separator { upper: i, last_y: y },
             // An alert's badge on the axis moves the alert; the bare axis scales.
-            Zone::PriceAxis(0) if free => match self.alert_badge_at(x, y) {
+            Zone::PriceAxis(0) if free => match self.alert_badge_at(x, y).filter(|_| grab_alerts) {
                 Some(id) => Drag::Alert { id, moved: false },
                 None => Drag::PriceAxis { pane: 0, last_y: y },
             },
@@ -2024,7 +2046,7 @@ impl Chart {
             Zone::Plot(0) if free => {
                 if let Some((id, index)) = self.handle_at(x, y) {
                     Drag::Anchor { id, index, moved: false }
-                } else if let Some((id, _)) = self.alert_at(x, y) {
+                } else if let Some((id, _)) = self.alert_at(x, y).filter(|_| grab_alerts) {
                     Drag::Alert { id, moved: false }
                 } else if let Some(id) = self.drawing_at(x, y) {
                     self.select(Some(id));
@@ -2045,9 +2067,36 @@ impl Chart {
         self.touch();
     }
 
+    /// A finger held still where it went down — the page times it, as only the
+    /// page knows how long a press has lasted. On a phone a press is how the
+    /// chart is panned, so the crosshair waits for a hold, as it does in
+    /// TradingView's app; held on an alert's line or badge, the finger takes
+    /// the alert instead, which a passing one no longer does. With a tool
+    /// armed, the finger then aims and lifting it places the anchor.
+    pub fn pointer_hold(&mut self, x: f32, y: f32) {
+        match self.drag {
+            Drag::Press { panning: false, pane, .. } if self.tool.is_none() => {
+                self.drag = match self.alert_within(x, y, ALERT_HOLD_PX).filter(|_| pane == 0) {
+                    Some((id, _)) => Drag::Alert { id, moved: false },
+                    None => Drag::Held,
+                };
+            }
+            Drag::PriceAxis { pane: 0, .. } if self.tool.is_none() => match self.alert_badge_at(x, y) {
+                Some(id) => self.drag = Drag::Alert { id, moved: false },
+                None => return,
+            },
+            Drag::Draw { moved: false, .. } => self.drag = Drag::Held,
+            _ => return,
+        }
+        self.crosshair = Some((x, y));
+        self.cursor = self.cursor_for(x, y);
+        self.touch();
+    }
+
     pub fn pointer_up(&mut self, x: f32, y: f32) {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Press { start, panning: false, .. } if (x - start.0).hypot(y - start.1) <= CLICK_SLOP => self.click(x, y),
+            Drag::Held if self.tool.is_some() => self.click(x, y),
             Drag::Brush { .. } => {
                 let points = std::mem::take(&mut self.placed);
                 self.draft = None;
@@ -2995,6 +3044,70 @@ mod tests {
         });
         assert!(moved.is_some_and(|p| p > level), "dragged up is higher, not a price scale zoom: {moved:?}");
         assert!(c.auto_scale(), "the scale was not touched");
+    }
+
+    #[test]
+    fn a_finger_scaling_or_panning_past_an_alert_leaves_it_where_it_is() {
+        let mut c = chart();
+        let level = c.anchor_at(300.0, 200.0).unwrap().price;
+        c.set_alerts(vec![AlertLine { id: 9, price: level }]);
+        c.render(1_800_000_000_000);
+        c.set_touch(true);
+        let axis_x = c.plot_width() + 10.0;
+
+        // On its badge, the drag a phone scales prices with.
+        c.pointer_down(axis_x, 200.0, 0);
+        c.pointer_move(axis_x, 150.0);
+        c.pointer_up(axis_x, 150.0);
+        // And across its line, the drag that pans.
+        c.pointer_down(300.0, 201.0, 0);
+        c.pointer_move(300.0, 260.0);
+        c.pointer_up(300.0, 260.0);
+        assert!(!c.take_events().iter().any(|e| matches!(e, Event::AlertMoved { .. })), "neither moved the alert");
+        assert!(!c.auto_scale(), "the axis drag scaled prices instead");
+
+        // Held, the line is taken — from a little further than a pointer reaches.
+        c.pointer_down(300.0, c.panes[0].scale.y(level) as f32 + 12.0, 0);
+        c.pointer_hold(300.0, c.panes[0].scale.y(level) as f32 + 12.0);
+        c.pointer_move(300.0, 100.0);
+        c.pointer_up(300.0, 100.0);
+        let moved = c.take_events().into_iter().find_map(|e| match e {
+            Event::AlertMoved { id: 9, price } => Some(price),
+            _ => None,
+        });
+        assert!(moved.is_some_and(|p| p > level), "{moved:?}");
+    }
+
+    #[test]
+    fn a_held_finger_is_a_crosshair_and_with_a_tool_it_aims() {
+        let mut c = chart();
+        c.set_touch(true);
+        let before = c.time.right_offset;
+        c.pointer_down(400.0, 300.0, 0);
+        c.pointer_hold(400.0, 300.0);
+        c.pointer_move(250.0, 180.0);
+        assert_eq!(c.time.right_offset, before, "a held finger does not pan");
+        assert_eq!(c.crosshair, Some((250.0, 180.0)), "the crosshair goes with it");
+        c.pointer_up(250.0, 180.0);
+        assert_eq!(c.crosshair, Some((250.0, 180.0)), "and stays where it was let go, to be read");
+        assert!(c.drawings.is_empty() && c.take_events().is_empty(), "with no tool, nothing is placed");
+
+        c.set_tool(Some(DrawingKind::Trendline));
+        let aim = |c: &mut Chart, from: (f32, f32), to: (f32, f32)| {
+            c.pointer_down(from.0, from.1, 0);
+            c.pointer_hold(from.0, from.1);
+            c.pointer_move(to.0, to.1);
+            c.pointer_up(to.0, to.1);
+        };
+        aim(&mut c, (300.0, 300.0), (320.0, 250.0));
+        aim(&mut c, (500.0, 300.0), (540.0, 200.0));
+        let points = c.take_events().into_iter().find_map(|e| match e {
+            Event::DrawingCreated { kind: DrawingKind::Trendline, points } => Some(points),
+            _ => None,
+        });
+        let points = points.expect("two holds placed a trend line");
+        let first = c.anchor_at(320.0, 250.0).unwrap();
+        assert!((points[0].price - first.price).abs() < 1e-6 * first.price.abs(), "anchored where the finger was lifted, not where it went down");
     }
 
     #[test]

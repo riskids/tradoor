@@ -247,6 +247,11 @@ impl ChartEngine {
         self.chart.set_ctrl(ctrl);
     }
 
+    /// The press under way is a finger's: alerts wait for a hold.
+    pub fn set_touch(&mut self, touch: bool) {
+        self.chart.set_touch(touch);
+    }
+
     /// `off`, `weak` or `strong`.
     pub fn set_magnet(&mut self, mode: &str) {
         self.chart.set_magnet(match mode {
@@ -283,6 +288,10 @@ impl ChartEngine {
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
         self.chart.pointer_up(x, y);
+    }
+
+    pub fn pointer_hold(&mut self, x: f32, y: f32) {
+        self.chart.pointer_hold(x, y);
     }
 
     pub fn pointer_leave(&mut self) {
