@@ -1934,7 +1934,11 @@ impl Chart {
                 Zone::TimeAxis => Cursor::ColResize,
                 Zone::Plot(0) if self.handle_at(x, y).is_some() => Cursor::Pointer,
                 Zone::Plot(0) if self.alert_at(x, y).is_some() => Cursor::NsResize,
-                Zone::Plot(0) if self.drawing_at(x, y).is_some() => Cursor::Move,
+                Zone::Plot(0) => match self.drawing_at(x, y) {
+                    Some(id) if self.selected == Some(id) => Cursor::Move,
+                    Some(_) => Cursor::Pointer,
+                    None => Cursor::Crosshair,
+                },
                 Zone::Plot(_) => Cursor::Crosshair,
                 Zone::Outside => Cursor::Default,
             },
@@ -2057,15 +2061,17 @@ impl Chart {
                 }
                 None => Drag::None,
             },
-            // A handle of the selected drawing reshapes it, anywhere else on a
-            // drawing moves the whole thing, and bare chart pans.
+            // A handle of the selected drawing reshapes it and anywhere else on
+            // it moves it. Any other drawing is only picked by a click: a drag
+            // that starts on it pans, as on bare chart, since a position's box
+            // or a fib's levels cover so much of the screen that the chart
+            // could hardly be moved past them without moving them.
             Zone::Plot(0) if free => {
                 if let Some((id, index)) = self.handle_at(x, y) {
                     Drag::Anchor { id, index, moved: false }
                 } else if let Some((id, _)) = self.alert_at(x, y).filter(|_| grab_alerts) {
                     Drag::Alert { id, moved: false }
-                } else if let Some(id) = self.drawing_at(x, y) {
-                    self.select(Some(id));
+                } else if let Some(id) = self.drawing_at(x, y).filter(|id| self.selected == Some(*id)) {
                     Drag::Shape { id, last: (x, y), moved: false }
                 } else {
                     Drag::Press { start: (x, y), last_x: x, last_y: y, pane: 0, panning: false, price_pan: false }
@@ -2845,11 +2851,25 @@ mod tests {
         c.render(1_800_000_000_000);
 
         let (mx, my) = ((c.time.x(400.0) + c.time.x(450.0)) as f32 / 2.0, 175.0);
+        // Not chosen yet, it is passed over: the drag pans the chart.
+        let offset = c.time.right_offset;
+        c.pointer_down(mx, my, 0);
+        c.pointer_move(mx + 60.0, my + 40.0);
+        c.pointer_up(mx + 60.0, my + 40.0);
+        assert!(!c.take_events().iter().any(|e| matches!(e, Event::DrawingChanged { .. })), "an unchosen drawing stays where it was");
+        assert_ne!(c.time.right_offset, offset, "and the chart moved instead");
+        c.render(1_800_000_000_000);
+
+        // A click chooses it; then a drag moves it. The pan moved the line on
+        // screen, so its middle is found again.
+        let ends = c.place(&c.drawings[0], false).unwrap().points;
+        let (mx, my) = ((ends[0].0 + ends[1].0) / 2.0, (ends[0].1 + ends[1].1) / 2.0);
+        click(&mut c, mx, my);
+        assert!(c.take_events().contains(&Event::SelectionChanged(Some(3))));
         c.pointer_down(mx, my, 0);
         c.pointer_move(mx, my + 40.0);
         c.pointer_up(mx, my + 40.0);
         let events = c.take_events();
-        assert!(events.contains(&Event::SelectionChanged(Some(3))), "{events:?}");
         let Some(Event::DrawingChanged { id, points }) = events.into_iter().find(|e| matches!(e, Event::DrawingChanged { .. })) else { panic!("no change event") };
         assert_eq!(id, 3);
         assert!(points[0].price < a.price && points[1].price < b.price, "dragging down lowers both ends");
