@@ -6,7 +6,7 @@
  * Every operation here mutates a draft; the store clones, applies and
  * reconciles, so the tree functions stay plain and testable.
  */
-import { DEFAULT_MARKET, isMarket } from '../lib/markets';
+import { DEFAULT_MARKET, isChartMarket, isMarket } from '../lib/markets';
 import { FLAGS, isSection, SECTION_NAME_MAX, sectionName } from '../lib/watchlist';
 
 const isSectionItem = (v: unknown): v is string => typeof v === 'string' && isSection(v) && v.length > 1 && v.length <= SECTION_NAME_MAX + 1;
@@ -232,7 +232,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
   if (!isObj(raw) || !PANEL_TYPES.includes(raw.type as PanelType)) return null;
   const p = newPanel(raw.type as PanelType, {
     link: isLink(raw.link) ? raw.link : null,
-    market: isMarket(raw.market) ? raw.market : DEFAULT_MARKET,
+    market: isChartMarket(raw.market) ? raw.market : DEFAULT_MARKET,
     timeframe: isTimeframe(raw.timeframe) ? raw.timeframe : DEFAULT_TIMEFRAME,
   });
   p.id = id;
@@ -319,7 +319,7 @@ export function validate(raw: unknown): WorkspaceDoc | null {
   for (const c of LINK_COLORS) {
     const l = isObj(raw.links) ? raw.links[c] : null;
     links[c] = {
-      market: isObj(l) && isMarket(l.market) ? l.market : DEFAULT_MARKET,
+      market: isObj(l) && isChartMarket(l.market) ? l.market : DEFAULT_MARKET,
       timeframe: isObj(l) && isTimeframe(l.timeframe) ? l.timeframe : DEFAULT_TIMEFRAME,
     };
   }

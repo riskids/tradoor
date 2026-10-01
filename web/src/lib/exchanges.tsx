@@ -3,10 +3,10 @@
  * streams and history loaders; the rest are here for their liquidations.
  * Marks are the official ones, on a black disc, from rsalianto's exchange icons.
  */
-import type { Component, JSX } from 'solid-js';
+import { Show, type Component, type JSX } from 'solid-js';
 import { Dynamic, For } from 'solid-js/web';
 import { MARKS, type ExchangeMark } from './exchange-marks';
-import { parseMarket, type Venue } from './markets';
+import { parseMarket, ratioLegs, venueLabel, type Venue } from './markets';
 
 export type ExchangeId = 'binance' | 'bybit' | 'okx' | 'bitget' | 'hyperliquid' | 'kraken' | 'lighter' | 'gate' | 'htx' | 'bitmex' | 'bitfinex' | 'aster' | 'deribit';
 
@@ -68,8 +68,24 @@ export function ExchangeLogo(props: { exchange: ExchangeDef; size?: number }) {
   return <Dynamic component={props.exchange.Logo} size={props.size} />;
 }
 
-/** Logo, optionally the exchange's name, and PERP or SPOT. */
+/** Logo, optionally the exchange's name, and PERP or SPOT — for a ratio, each
+ *  of its markets' logos either side of the stroke. */
 export function VenueTag(props: { market: string; name?: boolean; size?: number }) {
+  const legs = () => ratioLegs(props.market);
+  return (
+    <Show when={legs()} fallback={<OneVenue market={props.market} name={props.name} size={props.size} />}>
+      {(l) => (
+        <span class="venue ratio" data-tip={venueLabel(props.market)}>
+          <OneVenue market={l()[0]} size={props.size} />
+          <span class="dim">/</span>
+          <OneVenue market={l()[1]} size={props.size} />
+        </span>
+      )}
+    </Show>
+  );
+}
+
+function OneVenue(props: { market: string; name?: boolean; size?: number }) {
   const ref = () => parseMarket(props.market);
   const exchange = () => exchangeOfVenue(ref()?.venue ?? 'binance');
   return (

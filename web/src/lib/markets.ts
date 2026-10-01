@@ -53,9 +53,34 @@ export function parseMarket(ref: string): MarketRef | null {
 
 export const isMarket = (v: unknown): v is string => typeof v === 'string' && parseMarket(v) !== null;
 
-export const symbolOf = (ref: string): string => parseMarket(ref)?.symbol ?? ref;
+/**
+ * One market priced in another — `bybit-perp:XPLUSDT/binance-spot:BTCUSDT`,
+ * TradingView's `BYBIT:XPLUSDT.P/BINANCE:BTCUSDT` — drawn as the first's
+ * candles divided by the second's. Its two markets, or null for anything else.
+ */
+export function ratioLegs(ref: string): [string, string] | null {
+  const at = ref.indexOf('/');
+  if (at < 0) return null;
+  const [a, b] = [ref.slice(0, at), ref.slice(at + 1)];
+  return a !== b && parseMarket(a) && parseMarket(b) ? [a, b] : null;
+}
+
+export const isRatio = (ref: string): boolean => ratioLegs(ref) !== null;
+
+/** What a chart may show: one market, or one priced in another. */
+export const isChartMarket = (v: unknown): v is string => typeof v === 'string' && (parseMarket(v) !== null || ratioLegs(v) !== null);
+
+export const ratioOf = (a: string, b: string): string => `${a}/${b}`;
+
+export function symbolOf(ref: string): string {
+  const legs = ratioLegs(ref);
+  if (legs) return `${symbolOf(legs[0])}/${symbolOf(legs[1])}`;
+  return parseMarket(ref)?.symbol ?? ref;
+}
 
 export function venueLabel(ref: string): string {
+  const legs = ratioLegs(ref);
+  if (legs) return `${venueLabel(legs[0])} / ${venueLabel(legs[1])}`;
   const m = parseMarket(ref);
   return m ? VENUE_LABEL[m.venue] : '';
 }

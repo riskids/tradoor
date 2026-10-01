@@ -86,7 +86,7 @@ export interface ChartStatus {
   error: string | null;
   bars: number;
   /** Stored partitions, or the exchange's REST API for a market nobody archived. */
-  source: 'archive' | 'exchange' | null;
+  source: 'archive' | 'exchange' | 'ratio' | null;
   live: LiveStatus;
   /** Through the tradoor server, because this network blocks the exchange. */
   relayed: boolean;

@@ -8,8 +8,9 @@ import wasmUrl from '../wasm/pkg/tradoor_wasm_bg.wasm?url';
 import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
 import { MARK_ORDER, markIndex } from '../lib/mark-order';
-import { parseMarket } from '../lib/markets';
-import { concatCols, emptyCols, intervalMs, lowerBound, openSeries, sliceCols, type Cols, type Series } from './history';
+import { parseMarket, ratioLegs, type MarketRef } from '../lib/markets';
+import { concatCols, emptyCols, intervalMs, lowerBound, openSeries, sliceCols, type CandleSeries, type Cols, type Series } from './history';
+import type { RatioSeries } from './ratio';
 import { restInterval } from './intervals';
 import { nativeOf } from '../lib/native';
 import type { CallName, Calls, ChartEvent, ChartStatus, DailyBars, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
@@ -100,8 +101,22 @@ function precisionOf(c: Cols): number {
 }
 
 /** Base bars needed for `bars` bars of `tf` from this series. */
-const baseBars = (series: Series, tf: TfInfo, bars: number): number =>
-  Math.min(MAX_BASE_BARS, series.source === 'archive' ? Math.ceil((bars * tf.barMs) / tf.baseMs) : Math.ceil((bars * tf.barMs) / intervalMs(series.interval)));
+const baseBars = (series: CandleSeries, tf: TfInfo, bars: number): number =>
+  // A ratio is folded to the chart's bars already, and asks each side for its own.
+  series.source === 'ratio'
+    ? bars
+    : Math.min(MAX_BASE_BARS, series.source === 'archive' ? Math.ceil((bars * tf.barMs) / tf.baseMs) : Math.ceil((bars * tf.barMs) / intervalMs(series.interval)));
+
+/** A chart's candles: one market's series, or one market priced in another. */
+async function openChartSeries(market: string, tf: TfInfo): Promise<CandleSeries> {
+  const legs = ratioLegs(market);
+  if (!legs) return openSeries(market, tf.base, tf.interval);
+  const [a, b] = await Promise.all(legs.map((leg) => openSeries(leg, tf.base, tf.interval)));
+  const fold = (c: Cols) => fold_candles(tf.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
+  // Loaded only here: a chart of one market never pays for it.
+  const { RatioSeries } = await import('./ratio');
+  return new RatioSeries([a!, b!], tf.timeframe, fold, (leg, bars) => baseBars(leg, tf, bars));
+}
 
 /** Where the chart's bar of `timeframe` that `t` falls in opens. */
 function barStart(timeframe: string, t: number): number {
@@ -156,7 +171,7 @@ class Slot {
   private market = '';
   private timeframe = '';
   private bars = CHART_BARS;
-  private series: Series | null = null;
+  private series: CandleSeries | null = null;
   /** Closed bars at the chart's timeframe, as the engine holds them. */
   private closed: Cols = emptyCols();
   /** Bars the stream closed that stored history and REST do not cover yet. */
@@ -385,7 +400,7 @@ class Slot {
     this.engine.set_message('Loading…');
     this.setStatus({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
     try {
-      const series = await openSeries(market, tf.base, tf.interval);
+      const series = await openChartSeries(market, tf);
       if (gen !== this.gen) return;
       this.series = series;
       this.cleanup.push(series.subscribe(() => this.refold()));
@@ -446,6 +461,11 @@ class Slot {
   }
 
   private startLive(gen: number, tf: TfInfo): void {
+    const legs = ratioLegs(this.market);
+    if (legs && tf.live && this.series?.source === 'ratio') {
+      this.startRatioLive(gen, tf.live, legs, this.series as RatioSeries);
+      return;
+    }
     const ref = parseMarket(this.market);
     if (!ref || !tf.live) {
       this.setStatus({ live: 'off' });
@@ -491,6 +511,45 @@ class Slot {
       // Binance's kline publishes about once a second; trades fill in between.
       if (ref.venue.startsWith('binance')) this.cleanup.push(hub.subscribe(ref.venue, { kind: 'trades', symbol }, listener));
     });
+  }
+
+  /**
+   * A ratio's forming bar: each market's own stream — combined into the
+   * chart's bar where its exchange streams a shorter one — and the two divided
+   * whenever both stand on the same bar. It is live when both are.
+   */
+  private startRatioLive(gen: number, live: string, legs: [string, string], series: RatioSeries): void {
+    const feed = new LiveFeedEngine(this.timeframe);
+    this.feed = feed;
+    let off = false;
+    this.cleanup.push(() => {
+      off = true;
+    });
+    legs.forEach((leg, i) => {
+      const ref = parseMarket(leg) as MarketRef;
+      const streamed = restInterval(ref.venue, live);
+      const combine = streamed !== live ? combiner(this.timeframe, series.legs[i]!.cols) : null;
+      const listener: StreamListener = {
+        message: (m: StreamMsg) => {
+          if (gen !== this.gen || m.kind !== 'kline') return;
+          const k = combine ? combine(m) : m;
+          const r = k && series.join(i as 0 | 1, k);
+          if (r && feed.apply_kline(r.openTime, r.open, r.high, r.low, r.close, 0, 0, r.closed)) this.onLive(feed.bar() as Bar | null);
+        },
+        state: (state: SocketState, viaRelay: boolean) => {
+          if (gen !== this.gen) return;
+          const was = this.status.live;
+          const [worst, relayed] = series.stream(i as 0 | 1, state, viaRelay);
+          this.setStatus({ live: worst, relayed });
+          if (worst === 'live' && (was === 'retrying' || was === 'stalled')) void this.series?.refreshTail().catch(() => undefined);
+        },
+      };
+      void nativeOf(leg).then((symbol) => {
+        if (off || gen !== this.gen) return;
+        this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed }, listener));
+      });
+    });
+    this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
   }
 
   private onLive(bar: Bar | null): void {
@@ -656,9 +715,9 @@ class Slot {
 // ---------------------------------------------------------------- analysis calls
 
 /** A series kept alive and loaded for the length of one call. */
-async function hold(market: string, timeframe: string, bars: number): Promise<{ series: Series; tf: TfInfo; release: () => void }> {
+async function hold(market: string, timeframe: string, bars: number): Promise<{ series: CandleSeries; tf: TfInfo; release: () => void }> {
   const tf = info(timeframe);
-  const series = await openSeries(market, tf.base, tf.interval);
+  const series = await openChartSeries(market, tf);
   const release = series.subscribe(() => {});
   try {
     await series.ensure(baseBars(series, tf, bars));
@@ -734,7 +793,7 @@ const calls: Handlers = {
 async function prefetchCall({ market, timeframe }: Calls['prefetch']['args']): Promise<null> {
   try {
     const tf = info(timeframe);
-    const series = await openSeries(market, tf.base, tf.interval);
+    const series = await openChartSeries(market, tf);
     // Held while it loads, so it is not evicted before the chart arrives.
     const release = series.subscribe(() => {});
     try {

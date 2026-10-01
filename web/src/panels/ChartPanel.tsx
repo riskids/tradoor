@@ -24,7 +24,7 @@ import { VenueTag } from '../lib/exchanges';
 import { liquidationVenues } from '../lib/liquidation-venues';
 import { formatClock, formatFileTime, zoneLabel } from '../lib/timezone';
 import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
-import { symbolOf, venueLabel } from '../lib/markets';
+import { isRatio, symbolOf, venueLabel } from '../lib/markets';
 import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert, titleOf } from '../lib/alerts';
 import { toast } from '../lib/toasts';
 import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
@@ -180,7 +180,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   // Minutes whose taker flow ran hard, marked on the candles. They are the Flow
   // study's: without it nothing is asked for and nothing is drawn. The server
   // keeps two days; which minutes count is the size set in the flow panel.
-  const flowOn = () => splitList(props.panel.studies).some((s) => s.split(':')[0] === 'flow');
+  const flowOn = () => !isRatio(market()) && splitList(props.panel.studies).some((s) => s.split(':')[0] === 'flow');
   createEffect(() => {
     if (flowOn()) onCleanup(watchFlowMarks(market()));
   });
@@ -272,7 +272,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [overAlert, setOverAlert] = createSignal<{ id: number; y: number } | null>(null);
   const axisX = () => legend()?.axisX ?? 0;
   // Not over an alert's line: its own label is there, with its own delete.
-  const clock = () => overClock() ?? (tool() === '' && !legend()?.alert && !overAlert() ? (legend()?.cursor ?? null) : null);
+  // A ratio is no market an alert can watch: no clock on its axis.
+  const clock = () => (isRatio(market()) ? null : (overClock() ?? (tool() === '' && !legend()?.alert && !overAlert() ? (legend()?.cursor ?? null) : null)));
   const hoveredAlert = () => {
     const h = overAlert() ?? legend()?.alert ?? null;
     const a = h && alertState.alerts.find((x) => x.id === h.id && x.active);
@@ -396,7 +397,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       current = false;
     });
     const post = (products: readonly Product[] | null) => {
-      if (current) send({ t: 'liquidationMarkets', id: sid, markets: liquidationVenues(m, products).flatMap((v) => (v.market ? [v.market] : [])) });
+      // A ratio has no ticker of its own whose liquidations could be followed.
+      if (current) send({ t: 'liquidationMarkets', id: sid, markets: isRatio(m) ? [] : liquidationVenues(m, products).flatMap((v) => (v.market ? [v.market] : [])) });
     };
     catalog().then(
       (c) => post(c.products),
@@ -1326,7 +1328,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         </For>
         <span class="spacer" />
         <Show when={status().error}>{(err) => <span class="warn" data-tip={err()}>▲ {err()} · </span>}</Show>
-        <span class="dim num" data-tip={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : 'Candles from the exchange; this market is not archived here'}>
+        <span class="dim num" data-tip={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : status().source === 'ratio' ? 'One market priced in the other: each bar of the first divided by the same bar of the second' : 'Candles from the exchange; this market is not archived here'}>
           {status().loading ? 'loading… · ' : ''}
           {status().bars.toLocaleString('en-US')} bars{status().source ? ` · ${status().source}` : ''} · {zoneLabel()}
         </span>

@@ -119,16 +119,27 @@ pub struct Scope {
     chart: Option<String>,
 }
 
+/// The market a chart shows: one, or one priced in another — `venue:A/venue:B`,
+/// two different markets — whose drawings are its own.
+pub fn chart_market(raw: &str) -> Option<String> {
+    if let Some(market) = MarketRef::parse(raw) {
+        return Some(market.to_string());
+    }
+    let (a, b) = raw.split_once('/')?;
+    let (a, b) = (MarketRef::parse(a)?.to_string(), MarketRef::parse(b)?.to_string());
+    (a != b).then(|| format!("{a}/{b}"))
+}
+
 impl Scope {
     fn validated(&self) -> ApiResult<(String, &str, &str)> {
-        let market = MarketRef::parse(&self.market).ok_or_else(|| ApiError::bad_request(format!("not a market: '{}' (expected venue:SYMBOL)", self.market)))?;
+        let market = chart_market(&self.market).ok_or_else(|| ApiError::bad_request(format!("not a market: '{}' (expected venue:SYMBOL, or venue:A/venue:B)", self.market)))?;
         ChartTimeframe::parse(&self.timeframe).ok_or_else(|| ApiError::bad_request(format!("invalid timeframe: '{}'", self.timeframe)))?;
         let chart = match self.chart.as_deref() {
             None | Some("candles") => "candles",
             Some("tpo") => "tpo",
             Some(other) => return Err(ApiError::bad_request(format!("chart is candles or tpo, not '{other}'"))),
         };
-        Ok((market.to_string(), &self.timeframe, chart))
+        Ok((market, &self.timeframe, chart))
     }
 }
 
@@ -247,6 +258,15 @@ pub async fn clear(State(state): State<AppState>, headers: HeaderMap, Query(scop
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ratio_chart_keeps_drawings_of_its_own() {
+        assert_eq!(chart_market("binance-perp:BTCUSDT").as_deref(), Some("binance-perp:BTCUSDT"));
+        assert_eq!(chart_market("bybit-perp:XPLUSDT/binance-spot:BTCUSDT").as_deref(), Some("bybit-perp:XPLUSDT/binance-spot:BTCUSDT"));
+        assert_eq!(chart_market("binance-perp:BTCUSDT/binance-perp:BTCUSDT"), None, "a market over itself is no ratio");
+        assert_eq!(chart_market("XPLUSDT/BTCUSDT"), None, "each side names its venue");
+        assert_eq!(chart_market("binance-perp:BTCUSDT/"), None);
+    }
 
     fn point() -> Value {
         json!({ "time": 1_780_000_000_000i64, "price": 62_000 })

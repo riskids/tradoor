@@ -291,7 +291,21 @@ function disjoint(list: readonly PartitionInfo[]): PartitionInfo[] {
 
 // ---------------------------------------------------------------- series
 
-export type SeriesSource = 'archive' | 'exchange';
+/** `ratio`: one market priced in another, its two sides each archive or exchange. */
+export type SeriesSource = 'archive' | 'exchange' | 'ratio';
+
+/** What a chart reads its candles from: one market's series, or one market
+ *  priced in another (see ratio.ts). */
+export interface CandleSeries {
+  readonly cols: Cols;
+  readonly exhausted: boolean;
+  readonly interval: string;
+  readonly source: SeriesSource;
+  subscribe(listener: () => void): () => void;
+  ensure(bars: number): Promise<void>;
+  older(): Promise<boolean>;
+  refreshTail(force?: boolean): Promise<void>;
+}
 
 /** Base bars fetched per scroll past the oldest one held. */
 const OLDER_BARS = 5_000;
