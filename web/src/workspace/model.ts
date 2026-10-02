@@ -111,6 +111,8 @@ export interface FlowPanelState extends PanelBase {
   type: 'flow';
   /** The coin shown, of those the server follows. */
   coin: string;
+  /** The coins' order along the toolbar, as dragged; the rest follow in the server's. */
+  order: string[];
 }
 
 export type AlertSort = 'newest' | 'symbol' | 'state';
@@ -181,7 +183,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
     case 'liquidations':
       return { ...base, type, minUsd: 0 };
     case 'flow':
-      return { ...base, type, coin: 'BTC' };
+      return { ...base, type, coin: 'BTC', order: [] };
     case 'alerts':
       return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
@@ -279,6 +281,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;
   } else if (p.type === 'flow') {
     if (typeof raw.coin === 'string' && /^[A-Z0-9]{1,20}$/.test(raw.coin)) p.coin = raw.coin;
+    if (Array.isArray(raw.order)) p.order = [...new Set(raw.order.filter((c: unknown): c is string => typeof c === 'string' && /^[A-Z0-9]{1,20}$/.test(c)))].slice(0, 20);
   } else if (p.type === 'values' && raw.basis === 'tpo') {
     p.basis = 'tpo';
   }

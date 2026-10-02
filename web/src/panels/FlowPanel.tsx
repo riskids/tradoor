@@ -4,8 +4,9 @@
  * to be worth a word beneath them.
  *
  * BTC is always followed. The server's admins add another coin from here, and
- * the server records it for a day from when they last asked; anyone can read
- * the coins being recorded.
+ * the server records it for a day from when they last asked, or until they
+ * stop it with the chip's ×; anyone can read the coins being recorded, and
+ * drag the chips into the order they like.
  *
  * The list is the panel; what counts as hard — a size per market, and whether
  * Telegram hears about it — sits under the gear, since it is set once and read
@@ -82,9 +83,53 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
 
   /** The coin shown: the one chosen, or BTC once that one has lapsed. */
   const shown = () => state()?.coin ?? coin();
-  const coins = (): FlowCoin[] => state()?.coins ?? [ALWAYS];
+  /** The coins followed, in this panel's order: those it has not placed come last, in the server's. */
+  const coins = (): FlowCoin[] => {
+    const order = props.panel.order ?? [];
+    const list = state()?.coins ?? [ALWAYS];
+    const rank = (c: FlowCoin) => (order.includes(c.coin) ? order.indexOf(c.coin) : order.length + list.indexOf(c));
+    return [...list].sort((a, b) => rank(a) - rank(b));
+  };
   const recording = () => coins().find((c) => c.coin === shown() && c.until !== null);
   const choose = (name: string) => patchPanel(props.panel.id, { coin: name });
+
+  // Dragging a chip along the toolbar: where it would land, as an index among the chips.
+  const [drag, setDrag] = createSignal<{ coin: string; to: number } | null>(null);
+  let chips!: HTMLSpanElement;
+  /** A press that moved was a drag: the click that ends it does not choose. */
+  let draggedAt = 0;
+  const landing = (x: number): number =>
+    [...chips.querySelectorAll<HTMLElement>('.fl-chip')].filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.left + r.width / 2 < x;
+    }).length;
+  const press = (e: PointerEvent, coin: string) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('.x')) return;
+    const startX = e.clientX;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - startX) < 5) return;
+      moved = true;
+      setDrag({ coin, to: landing(ev.clientX) });
+    };
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
+      const d = drag();
+      setDrag(null);
+      if (!moved || !d) return;
+      draggedAt = performance.now();
+      const list = coins().map((c) => c.coin);
+      const from = list.indexOf(d.coin);
+      list.splice(from, 1);
+      list.splice(d.to > from ? d.to - 1 : d.to, 0, d.coin);
+      patchPanel(props.panel.id, { order: list });
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+  };
 
   /** Record a coin for the next day, or a day from now if it already is. */
   const follow = async (text: string) => {
@@ -137,19 +182,39 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
         <span class="caps" style={{ padding: '0 4px' }}>
           Flow
         </span>
-        <For each={coins()}>
-          {(c) => (
-            <button
-              class="tb fl-coin"
-              classList={{ on: c.coin === shown() }}
-              data-tip={c.until === null ? 'Always recorded' : `Recorded until ${formatClock(c.until)}`}
-              onClick={() => choose(c.coin)}
-            >
-              {c.coin}
-              <Show when={c.until}>{(until) => <span class="left">{left(until(), now())}</span>}</Show>
-            </button>
-          )}
-        </For>
+        <span class="fl-chips" ref={chips}>
+          <For each={coins()}>
+            {(c, i) => (
+              <span
+                class="fl-chip"
+                classList={{
+                  on: c.coin === shown(),
+                  dragging: drag()?.coin === c.coin,
+                  before: drag()?.to === i(),
+                  after: drag()?.to === coins().length && i() === coins().length - 1,
+                }}
+                onPointerDown={(e) => press(e, c.coin)}
+              >
+                <button
+                  class="tb fl-coin"
+                  classList={{ on: c.coin === shown() }}
+                  data-tip={c.until === null ? 'Always recorded · drag to reorder' : `Recorded until ${formatClock(c.until)} · drag to reorder`}
+                  onClick={() => {
+                    if (performance.now() - draggedAt > 300) choose(c.coin);
+                  }}
+                >
+                  {c.coin}
+                  <Show when={c.until}>{(until) => <span class="left">{left(until(), now())}</span>}</Show>
+                </button>
+                <Show when={state()?.admin && c.until !== null}>
+                  <button class="x" aria-label={`Stop recording ${c.coin}`} data-tip={`Stop recording ${c.coin}`} onClick={() => void stop(c.coin)}>
+                    <Icon name="close" size={9} stroke={2.4} />
+                  </button>
+                </Show>
+              </span>
+            )}
+          </For>
+        </span>
         <Show when={state()?.admin}>
           <Show
             when={adding()}

@@ -147,10 +147,11 @@ its flow falls back to half the threshold, so one push does not ring over.
 BTC is always followed. An admin — a browser id listed in `TRADOOR_ADMINS` —
 adds another coin from the panel's `+`, and the server follows it on each of
 those exchanges that lists it, quoted as BTC is there, for a day from when it
-was last asked for; Keep 24h asks again, Stop ends it, and at the end of its day
+was last asked for; Keep 24h asks again, Stop or the chip's × ends it, and at the end of its day
 it lapses and its streams close. Its threshold until the reader sets one is
 three times its usual minute over the last day. Anyone can read the coins being
-followed; only an admin chooses them, at most ten at once.
+followed, and drag the chips into the order they like (kept with the panel);
+only an admin chooses them, at most ten at once.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels
