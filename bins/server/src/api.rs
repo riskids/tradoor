@@ -47,6 +47,10 @@ impl ApiError {
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self(StatusCode::NOT_FOUND, msg.into())
     }
+
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self(StatusCode::FORBIDDEN, msg.into())
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -110,6 +114,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/alerts/{id}", delete(alerts::delete_one).patch(alerts::update))
         .route("/flow", get(flow::state))
         .route("/flow/minutes", get(flow::minutes))
+        .route("/flow/coins/{coin}", axum::routing::put(flow::follow_coin).delete(flow::unfollow_coin))
         .route("/flow/{market}", axum::routing::put(flow::watch))
         .route("/footprint", get(footprint::bars))
         .route("/footprint/markets", get(footprint::recorded))

@@ -88,7 +88,8 @@ The file format is described in [format.md](format.md).
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
-| `GET /api/flow` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | every followed market's flow and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
+| `GET /api/flow?coin=` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | one coin's flow on every market it is followed on, the coins followed, and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
+| `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, or stop |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
 | `GET PATCH /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; the reader's zone and how long messages stay; a link code; a test message; unlink |
@@ -106,7 +107,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
-| `flow_minute`, `flow_watch`, `flow_event` | net taker flow by the minute for two days, what each reader asks of each market, and the crossings they were told about |
+| `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
@@ -142,6 +143,14 @@ Flow study, added from the indicator list like any other and hidden with its
 eye: the minutes themselves, so they show at any timeframe, and hovering one
 names the money, the minute and the price. After a crossing a market stays quiet until
 its flow falls back to half the threshold, so one push does not ring over.
+
+BTC is always followed. An admin — a browser id listed in `TRADOOR_ADMINS` —
+adds another coin from the panel's `+`, and the server follows it on each of
+those exchanges that lists it, quoted as BTC is there, for a day from when it
+was last asked for; Keep 24h asks again, Stop ends it, and at the end of its day
+it lapses and its streams close. Its threshold until the reader sets one is
+three times its usual minute over the last day. Anyone can read the coins being
+followed; only an admin chooses them, at most ten at once.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels

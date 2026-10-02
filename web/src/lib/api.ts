@@ -216,10 +216,22 @@ export interface FlowMinute {
   price: number;
 }
 
+/** A coin whose flow the server follows. */
+export interface FlowCoin {
+  coin: string;
+  /** When it lapses; null for BTC, which is always followed. */
+  until: number | null;
+}
+
 export interface FlowState {
   /** Whether this server follows any market's flow. */
   watching: boolean;
   windowMs?: number;
+  /** The coin shown: the one asked for, or BTC once that one has lapsed. */
+  coin?: string;
+  coins?: FlowCoin[];
+  /** Whether this browser may choose the coins followed. */
+  admin?: boolean;
   markets: FlowMarket[];
   events: FlowEvent[];
 }
@@ -278,7 +290,9 @@ export const api = {
   telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
-  flow: () => json<FlowState>('/api/flow'),
+  flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
+  flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),
+  flowUnfollow: (coin: string) => json<{ coin: string }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'DELETE' }),
   flowMinutes: (market: string) => json<{ market: string; thresholdUsd: number; minutes: FlowMinute[] }>(`/api/flow/minutes?market=${encodeURIComponent(market)}`),
   flowWatch: (market: string, watch: { thresholdUsd: number; notify: boolean }) => json<FlowWatch>(`/api/flow/${encodeURIComponent(market)}`, { method: 'PUT', body: watch }),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),

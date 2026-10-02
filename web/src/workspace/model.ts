@@ -109,6 +109,8 @@ export interface LiquidationsPanelState extends PanelBase {
 
 export interface FlowPanelState extends PanelBase {
   type: 'flow';
+  /** The coin shown, of those the server follows. */
+  coin: string;
 }
 
 export type AlertSort = 'newest' | 'symbol' | 'state';
@@ -179,7 +181,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
     case 'liquidations':
       return { ...base, type, minUsd: 0 };
     case 'flow':
-      return { ...base, type };
+      return { ...base, type, coin: 'BTC' };
     case 'alerts':
       return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
@@ -275,6 +277,8 @@ function readPanel(id: string, raw: unknown): Panel | null {
   } else if (p.type === 'liquidations') {
     const n = Number(raw.minUsd);
     if (Number.isFinite(n) && n >= 0) p.minUsd = n;
+  } else if (p.type === 'flow') {
+    if (typeof raw.coin === 'string' && /^[A-Z0-9]{1,20}$/.test(raw.coin)) p.coin = raw.coin;
   } else if (p.type === 'values' && raw.basis === 'tpo') {
     p.basis = 'tpo';
   }

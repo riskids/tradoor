@@ -607,6 +607,14 @@ table.venues tr.off td { color: var(--dim); }
 .flow .flow-event { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
 .flow .grow { flex: 1; }
 .flow .note { padding: 8px; line-height: 1.5; }
+.flow .toolbar { gap: 2px; }
+.fl-coin .left { color: var(--dim); font-size: 10px; }
+.fl-coin.on .left { color: inherit; opacity: 0.7; }
+.fl-add { display: flex; align-items: center; gap: 2px; }
+.fl-add input.box { width: 72px; text-transform: uppercase; }
+.fl-note { display: flex; align-items: center; gap: 4px; padding: 3px 4px 3px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.fl-note .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb.danger:hover:not(:disabled) { color: var(--bear); }
 .fl-menu { right: 4px; top: 24px; width: 268px; max-width: calc(100% - 8px); max-height: min(420px, 70%); overflow-y: auto; }
 .fl-menu .cap { padding: 5px 8px; color: var(--muted); font-size: 11px; }
 .fl-menu .cap.note { border-top: 1px solid var(--border); color: var(--dim); line-height: 1.5; }

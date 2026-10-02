@@ -149,6 +149,14 @@ impl Catalog {
             .collect()
     }
 
+    /// Those of `markets` (`bybit-perp:BTCUSDT`) an exchange lists, in their order.
+    pub async fn listed(&self, markets: &[String]) -> Vec<String> {
+        self.get().await;
+        let state = self.state.lock().await;
+        let Some(cached) = state.as_ref() else { return Vec::new() };
+        markets.iter().filter(|m| cached.by_venue.iter().flat_map(|(_, p)| p).any(|p| p.market == **m)).cloned().collect()
+    }
+
     /// Whether any exchange lists a perpetual on `coin` — the coin as a chart
     /// names it, its symbol less the quote: `BTC`, `1000PEPE`.
     pub async fn lists_perp(&self, coin: &str) -> bool {

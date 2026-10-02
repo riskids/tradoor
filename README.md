@@ -156,6 +156,18 @@ them once per browser, a minute into its first visit, and not again once
 closed or used; a click is counted in Analytics as `referral_click`. Open the
 site once with `?noreferral` on a device and the card is never offered there.
 
+## Flow of other coins
+
+The Flow panel always shows BTC. To let a browser add other coins from the
+panel's `+` (each is recorded for 24 hours, renewed with Keep 24h), copy its id
+from Settings → Browser id into the server's `.env` and restart the server:
+
+```
+TRADOOR_ADMINS=<browser id>,<another browser id>
+```
+
+Without it the panel only reads the coins already recorded.
+
 ## Security
 
 There are no accounts: a browser's random id is what makes its drawings and
