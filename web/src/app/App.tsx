@@ -16,6 +16,7 @@ import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { showAlertsPanel, startAlerts, unread } from '../lib/alerts';
 import { Toasts } from '../components/Toasts';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
+import { referralCard, startReferral } from '../lib/referral';
 import { Layout, panelTitle } from '../workspace/Layout';
 import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
 import {
@@ -36,7 +37,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, overlay, setOverlay, TOOL_KEYS } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, mobileMenu, overlay, setOverlay, TOOL_KEYS } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -45,6 +46,8 @@ const CommandPalette = lazy(() => import('../components/CommandPalette').then((m
 const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then((m) => ({ default: m.IndicatorPicker })));
 const Settings = lazy(() => import('../components/Settings').then((m) => ({ default: m.Settings })));
 const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
+const ReferralDialog = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralDialog })));
+const ReferralCard = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralCard })));
 
 const splitList = (s: string): string[] => s.split(',').filter(Boolean);
 
@@ -100,6 +103,7 @@ function commands(): Command[] {
   list.push(
     { group: 'App', label: 'Settings and colours…', run: () => setOverlay({ kind: 'settings' }) },
     { group: 'App', label: 'Keyboard shortcuts', hint: '?', run: () => setOverlay({ kind: 'help' }) },
+    { group: 'App', label: 'Partner exchanges — sign-up rewards', run: () => setOverlay({ kind: 'referrals' }) },
     {
       group: 'App',
       label: 'Reset workspace to default',
@@ -364,6 +368,8 @@ function Overlays() {
             return <Settings onClose={closeOverlay} />;
           case 'help':
             return <Help onClose={closeOverlay} />;
+          case 'referrals':
+            return <ReferralDialog onClose={closeOverlay} />;
           case 'note':
             return <NoteInput initial={o.initial} onClose={closeOverlay} onSave={o.save} />;
         }
@@ -404,6 +410,7 @@ export function App() {
     if (chart) focusPanel(chart.id);
     void syncWithServer();
     startAlerts();
+    if (!IS_CRAWLER) startReferral();
     addEventListener('keydown', onKeyDown);
     addEventListener('contextmenu', onContextMenu);
     const off = onEngineFailure(setEngineError);
@@ -436,6 +443,9 @@ export function App() {
           <span>{doc.name}</span>
         </span>
         <span class="spacer" />
+        <button class="item ref-btn" data-tip="Partner exchanges: sign-up rewards on Bybit and Binance" onClick={() => setOverlay({ kind: 'referrals' })}>
+          <Icon name="gift" size={13} /> <span>Rewards</span>
+        </button>
         <Health />
         <button class="item alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
           <Icon name="alarm" size={13} />
@@ -457,6 +467,10 @@ export function App() {
       </main>
       <StatusBar />
       <Overlays />
+      {/* Offered once, and never over a dialog or the phone's menu. */}
+      <Show when={referralCard() && !overlay() && !mobileMenu()}>
+        <ReferralCard />
+      </Show>
       <Toasts />
     </div>
   );

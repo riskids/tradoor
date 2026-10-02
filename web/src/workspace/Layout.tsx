@@ -104,7 +104,7 @@ function MobileShell() {
     focusPanel(panel.id);
   };
 
-  const overlay = (kind: 'palette' | 'settings' | 'help') => () => {
+  const overlay = (kind: 'palette' | 'settings' | 'help' | 'referrals') => () => {
     setMobileMenu(false);
     setOverlay({ kind });
   };
@@ -179,6 +179,11 @@ function MobileShell() {
           <button onClick={overlay('palette')}>Commands</button>
           <button onClick={overlay('settings')}>Settings</button>
           <button onClick={overlay('help')}>Shortcuts</button>
+          <hr />
+          <button class="ref-item" onClick={overlay('referrals')}>
+            <Icon name="gift" size={15} />
+            <span class="grow">Partner exchanges</span>
+          </button>
         </nav>
       </Show>
     </>

@@ -555,6 +555,39 @@ table.venues tr.off td { color: var(--dim); }
 .toast .x:hover { color: var(--text); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
+/* ------------------------------------------------------------ partner exchanges */
+.topbar .ref-btn svg, .mdrawer .ref-item svg { color: var(--primary); }
+.ref-intro { margin: 0; padding: 12px 14px 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.ref-list { display: flex; flex-direction: column; gap: 6px; padding: 0 14px 14px; }
+.ref-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; transition: border-color 0.12s, background 0.12s; }
+.ref-row:hover { border-color: color-mix(in oklab, var(--primary) 55%, transparent); background: var(--surface-3); }
+.ref-row .xlogo { flex: none; }
+.ref-row .who { flex: 1; display: grid; gap: 4px; min-width: 0; }
+.ref-row .who b { font-size: 13px; font-weight: 600; }
+.ref-row .who span { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ref-row .go { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid color-mix(in oklab, var(--primary) 45%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; transition: background 0.12s, color 0.12s; }
+.ref-row:hover .go { background: var(--primary); color: var(--bg); }
+.ref-card { position: fixed; left: 12px; bottom: 34px; z-index: 79; width: min(330px, calc(100vw - 24px)); border: 1px solid var(--border); border-top: 2px solid var(--primary); background: var(--surface); box-shadow: 0 14px 44px #000d; font-size: 12px; animation: toast-in 0.25s ease-out; }
+.ref-card > header { display: flex; align-items: center; padding: 8px 4px 0 12px; }
+.ref-card .eyebrow { display: flex; align-items: center; gap: 6px; flex: 1; color: var(--primary); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.ref-card .x { display: flex; padding: 5px; color: var(--dim); }
+.ref-card .x:hover { color: var(--text); }
+.ref-card p { margin: 6px 12px 12px; color: var(--muted); line-height: 1.55; }
+.ref-card .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 12px; }
+.ref-card .pair a { display: flex; align-items: center; justify-content: center; gap: 7px; height: 36px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; transition: border-color 0.12s, color 0.12s; }
+.ref-card .pair a svg:last-child { color: var(--dim); }
+.ref-card .pair a:hover { border-color: color-mix(in oklab, var(--primary) 55%, transparent); color: var(--primary); }
+.ref-card > footer { display: flex; justify-content: flex-end; padding: 4px 6px 6px; }
+.ref-card .later { padding: 4px 6px; color: var(--dim); font-size: 11px; }
+.ref-card .later:hover { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .ref-card { animation: none; } }
+@media (max-width: 760px) {
+  .ref-card { left: 8px; right: 8px; bottom: 30px; width: auto; }
+  .ref-row .who span { white-space: normal; }
+  .dialog.ref > header .title { display: block; }
+  .ref-card .pair a { height: 42px; }
+}
+
 /* Flow: net taker flow per market, and the minutes that crossed. */
 .flow { position: relative; }
 .flow .flow-table { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--border); }

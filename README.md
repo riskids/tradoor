@@ -148,6 +148,14 @@ tag host (`web/site.ts`). Google sets its own cookie; the browser id tradoor
 keeps drawings and layouts under is not given to it. Without `GA_ID` the page
 loads nothing from Google.
 
+## Partner exchanges
+
+Rewards in the top bar (Partner exchanges in a phone's menu) lists the Bybit
+and Binance referral links (`web/src/components/Referrals.tsx`). A card offers
+them once per browser, a minute into its first visit, and not again once
+closed or used; a click is counted in Analytics as `referral_click`. Open the
+site once with `?noreferral` on a device and the card is never offered there.
+
 ## Security
 
 There are no accounts: a browser's random id is what makes its drawings and

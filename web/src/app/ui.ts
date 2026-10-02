@@ -10,6 +10,7 @@ export type Overlay =
   | { kind: 'palette' }
   | { kind: 'settings' }
   | { kind: 'help' }
+  | { kind: 'referrals' }
   | { kind: 'note'; initial?: string; save(label: string): void };
 
 export const [overlay, setOverlay] = createSignal<Overlay | null>(null);

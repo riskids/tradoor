@@ -41,6 +41,8 @@ const PATHS = {
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
   sort: 'M7 4v16M4 17l3 3 3-3M14 6h6M14 11h4M14 16h2',
   down: 'M6 9l6 6 6-6',
+  gift: 'M4 11h16v9H4zM3 7h18v4H3zM12 7v13M12 7C11 4.5 8.5 3 7.2 4.3S8.5 7 12 7zM12 7c1-2.5 3.5-4 4.8-2.7S15.5 7 12 7z',
+  external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
 } as const;
 
 export type IconName = keyof typeof PATHS;
