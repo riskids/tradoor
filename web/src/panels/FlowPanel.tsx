@@ -27,6 +27,8 @@ import { patchPanel } from '../workspace/store';
 
 /** How often the flow is asked for again: the server weighs it this often too. */
 const POLL_MS = 5_000;
+/** How long the pointer rests on a chip before it shows it can be dragged. */
+const GRAB_MS = 700;
 
 const money = (v: number): string => `${v < 0 ? '-' : '+'}$${formatTurnover(Math.abs(v))}`;
 const tone = (v: number): string => (v > 0 ? 'bull' : v < 0 ? 'bear' : 'dim');
@@ -103,6 +105,16 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
       const r = el.getBoundingClientRect();
       return r.left + r.width / 2 < x;
     }).length;
+  // The hand that says a chip can be dragged comes only once the pointer rests
+  // on it: passing over to click one should not look like picking it up.
+  const [grab, setGrab] = createSignal<string | null>(null);
+  let grabTimer: ReturnType<typeof setTimeout> | undefined;
+  const rest = (coin: string | null) => {
+    clearTimeout(grabTimer);
+    setGrab(null);
+    if (coin) grabTimer = setTimeout(() => setGrab(coin), GRAB_MS);
+  };
+  onCleanup(() => clearTimeout(grabTimer));
   const press = (e: PointerEvent, coin: string) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('.x')) return;
     const startX = e.clientX;
@@ -110,6 +122,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
     const move = (ev: PointerEvent) => {
       if (!moved && Math.abs(ev.clientX - startX) < 5) return;
       moved = true;
+      if (!drag()) document.documentElement.style.cursor = 'grabbing';
       setDrag({ coin, to: landing(ev.clientX) });
     };
     const up = () => {
@@ -118,6 +131,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
       removeEventListener('pointercancel', up);
       const d = drag();
       setDrag(null);
+      document.documentElement.style.cursor = '';
       if (!moved || !d) return;
       draggedAt = performance.now();
       const list = coins().map((c) => c.coin);
@@ -190,10 +204,13 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
                 classList={{
                   on: c.coin === shown(),
                   dragging: drag()?.coin === c.coin,
+                  grab: grab() === c.coin,
                   before: drag()?.to === i(),
                   after: drag()?.to === coins().length && i() === coins().length - 1,
                 }}
                 onPointerDown={(e) => press(e, c.coin)}
+                onPointerEnter={(e) => e.pointerType === 'mouse' && rest(c.coin)}
+                onPointerLeave={() => rest(null)}
               >
                 <button
                   class="tb fl-coin"

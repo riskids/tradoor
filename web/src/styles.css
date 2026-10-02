@@ -609,7 +609,8 @@ table.venues tr.off td { color: var(--dim); }
 .flow .note { padding: 8px; line-height: 1.5; }
 .flow .toolbar { gap: 2px; }
 .fl-chips { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.fl-chip { position: relative; display: flex; align-items: center; touch-action: pan-y; cursor: grab; }
+.fl-chip { position: relative; display: flex; align-items: center; touch-action: pan-y; }
+.fl-chip.grab { cursor: grab; }
 .fl-chip.dragging { opacity: 0.45; }
 .fl-chip.before::before, .fl-chip.after::after { content: ''; position: absolute; top: 1px; bottom: 1px; width: 2px; background: var(--primary); }
 .fl-chip.before::before { left: -2px; }
