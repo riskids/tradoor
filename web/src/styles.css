@@ -193,13 +193,14 @@ input.box:focus { border-color: var(--primary); outline: 0; }
    the canvas under a tool the user is already aiming with. */
 .hint { position: absolute; left: 50%; bottom: 28px; z-index: 6; transform: translateX(-50%); max-width: calc(100% - 20px); padding: 2px 8px; border: 1px solid var(--border); background: color-mix(in oklab, var(--surface) 86%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .chartwrap { display: flex; flex: 1; min-height: 0; min-width: 0; }
-.rail { display: flex; flex-direction: column; align-items: center; gap: 1px; flex: 0 0 30px; padding: 3px 0; border-right: 1px solid var(--border); background: var(--surface-2); overflow-y: auto; overflow-x: hidden; }
-.rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; color: var(--dim); }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 38px; padding: 4px 0; scrollbar-width: none; border-right: 1px solid var(--border); background: var(--surface-2); overflow-y: auto; overflow-x: hidden; }
+.rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; color: var(--muted); }
+.rail button svg { width: 18px; height: 18px; }
 .rail button:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
 .rail button.on { background: var(--primary); color: var(--bg); }
 .rail button.del:hover:not(:disabled) { color: var(--bear); }
-.rail hr { width: 14px; margin: 3px 0; border: 0; border-top: 1px solid var(--border); }
-.rail .count { font-size: 10px; color: var(--dim); }
+.rail hr { width: 18px; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
+.rail .count { font-size: 11px; color: var(--dim); }
 .canvasbox { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .legend { position: absolute; top: 4px; left: 6px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: calc(100% - 90px); pointer-events: none; font-size: 11px; }
@@ -352,8 +353,9 @@ table.venues tr.off td { color: var(--dim); }
   .toolbar .tb, .toolbar .symbol { min-height: 28px; }
   .burger { min-width: 30px; color: var(--text); }
   /* Drawing tools under a fingertip rather than a pointer. */
-  .rail { flex: 0 0 36px; }
-  .rail button { width: 30px; height: 30px; }
+  .rail { flex: 0 0 40px; }
+  .rail button { width: 34px; height: 34px; }
+  .rail button svg { width: 20px; height: 20px; }
   .dialog { max-height: 88vh; max-height: 88dvh; }
   .backdrop { padding: 4vh 8px 8px; }
   /* A phone has no room for a title, a field, seven exchanges and a close in
@@ -589,9 +591,12 @@ table.venues tr.off td { color: var(--dim); }
 }
 
 /* Flow: net taker flow per market, and the minutes that crossed. */
-.flow { position: relative; }
+.flow { position: relative; container-type: inline-size; }
 .flow .flow-table { flex: 0 1 auto; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--border); }
-.flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 56px); align-items: center; gap: 4px; padding: 4px 8px; font-size: 11px; }
+.flow .flow-head, .flow .flow-line { display: grid; grid-template-columns: minmax(0, 1fr) repeat(5, 56px); align-items: center; gap: 4px; padding: 4px 8px; font-size: 11px; }
+/* Narrow, the five windows close up a little before the venue's name is squeezed out. */
+@container (max-width: 440px) { .flow .flow-head, .flow .flow-line { grid-template-columns: minmax(0, 1fr) repeat(5, 49px); gap: 3px; padding: 4px 6px; font-size: 10px; } }
+.flow .flow-head > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow .flow-head { position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); }
 .flow .flow-line { border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); }
 .flow .flow-line:last-child { border-bottom: 0; }

@@ -144,6 +144,8 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
           <span class="r">1m</span>
           <span class="r">1h</span>
           <span class="r">4h</span>
+          <span class="r">12h</span>
+          <span class="r">24h</span>
         </div>
         <For each={markets()} fallback={<div class="empty">{error() ?? 'This server follows no market’s flow.'}</div>}>
           {(m) => (
@@ -152,6 +154,8 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
               <span class={`num r ${tone(m.minute)}`}>{money(m.minute)}</span>
               <span class={`num r ${tone(m.h1)}`}>{money(m.h1)}</span>
               <span class={`num r ${tone(m.h4)}`}>{money(m.h4)}</span>
+              <span class={`num r ${tone(m.h12)}`}>{money(m.h12)}</span>
+              <span class={`num r ${tone(m.day)}`}>{money(m.day)}</span>
             </div>
           )}
         </For>
