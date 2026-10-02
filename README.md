@@ -160,7 +160,9 @@ site once with `?noreferral` on a device and the card is never offered there.
 
 The Flow panel always shows BTC. To let a browser add other coins from the
 panel's `+` (each is recorded for 24 hours, renewed with Keep 24h), copy its id
-from Settings → Browser id into the server's `.env` and restart the server:
+from Settings → Browser id into `/var/www/tradoor/.env` on the server
+(`deploy/compose.yml` passes it on) and recreate the server container
+(`docker compose up -d server`):
 
 ```
 TRADOOR_ADMINS=<browser id>,<another browser id>
