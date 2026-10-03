@@ -78,22 +78,110 @@ pub struct Found {
     /// 0 to 100: how well the third drive sits on the line, the divergence,
     /// how evenly the drives are spaced, volume fading, and the turn.
     pub score: u32,
+    /// Where the pattern says price goes: back to the pullback before the
+    /// third drive — its low for the bearish pattern, its high for the bullish.
+    pub target: f64,
+    /// Where it is wrong: past the third drive.
+    pub stop: f64,
 }
 
 /// The pattern on `side` whose third drive is the newest, if there is one now.
 pub fn find(candles: &[Candle], side: Side) -> Option<Found> {
-    let bars: Vec<Candle> = match side {
-        Side::Bear => candles.to_vec(),
-        Side::Bull => candles.iter().map(mirror).collect(),
-    };
-    let mut found = search(&bars)?;
-    found.side = side;
-    if side == Side::Bull {
-        for p in found.drives.iter_mut().chain(found.turn.iter_mut()) {
-            p.price = -p.price;
+    let prepared = Prepared::new(candles, side)?;
+    prepared.at(candles.len() - 1)
+}
+
+/// Every pattern the bars held, each as a scan would have reported it the
+/// first time it had turned — the bar that scan read up to, and what it saw.
+/// Nothing after that bar is looked at to find it.
+pub fn history(candles: &[Candle], side: Side) -> Vec<(usize, Found)> {
+    let Some(p) = Prepared::new(candles, side) else { return Vec::new() };
+    let last = candles.len() - 1;
+    let mut out = Vec::new();
+    for (zi, third) in p.pivots.iter().enumerate() {
+        let Some(shape) = p.shape(zi) else { continue };
+        for at in third.confirmed_at..=(third.confirmed_at + WAIT_BARS).min(last) {
+            // A newer drive, a break, or the wait run out: it never turned.
+            let Some(found) = p.judge(&shape, at) else { break };
+            if found.turn.is_some() {
+                out.push((at, found));
+                break;
+            }
         }
     }
-    Some(found)
+    out
+}
+
+/// How a pattern played out after it was reported at `entry`: target or stop
+/// first, or neither within the window. `after` is the bars that followed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outcome {
+    pub result: Hit,
+    /// Bars until it was decided, or the bars looked at.
+    pub bars: usize,
+    /// The move from entry to the exit, in percent, positive the pattern's way.
+    pub ret: f64,
+    /// The furthest it went the pattern's way, and against, in percent.
+    pub best: f64,
+    pub worst: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Target,
+    Stop,
+    /// Neither, within the window.
+    Expired,
+    /// Not enough bars yet to say.
+    Open,
+    /// Price was already past the target when the pattern turned.
+    Passed,
+}
+
+impl Hit {
+    pub fn id(self) -> &'static str {
+        match self {
+            Hit::Target => "target",
+            Hit::Stop => "stop",
+            Hit::Expired => "expired",
+            Hit::Open => "open",
+            Hit::Passed => "passed",
+        }
+    }
+}
+
+/// Bars a pattern is given to reach its target: four days.
+pub const OUTCOME_BARS: usize = 24;
+
+pub fn outcome(side: Side, entry: f64, target: f64, stop: f64, after: &[Candle]) -> Outcome {
+    let bear = side == Side::Bear;
+    let pct = |p: f64| if bear { (entry - p) / entry * 100.0 } else { (p - entry) / entry * 100.0 };
+    let mut out = Outcome { result: Hit::Open, bars: 0, ret: 0.0, best: 0.0, worst: 0.0 };
+    if (bear && entry <= target) || (!bear && entry >= target) {
+        out.result = Hit::Passed;
+        return out;
+    }
+    for (i, k) in after.iter().take(OUTCOME_BARS).enumerate() {
+        let (with, against) = if bear { (k.low, k.high) } else { (k.high, k.low) };
+        out.bars = i + 1;
+        // Both in one bar: which came first is not known, so the stop is taken.
+        if (bear && against >= stop) || (!bear && against <= stop) {
+            out.worst = out.worst.min(pct(stop));
+            (out.result, out.ret) = (Hit::Stop, pct(stop));
+            return out;
+        }
+        out.best = out.best.max(pct(with));
+        out.worst = out.worst.min(pct(against));
+        if (bear && with <= target) || (!bear && with >= target) {
+            (out.result, out.ret) = (Hit::Target, pct(target));
+            return out;
+        }
+    }
+    if out.bars >= OUTCOME_BARS {
+        out.result = Hit::Expired;
+        out.ret = pct(after[OUTCOME_BARS - 1].close);
+    }
+    out
 }
 
 /// Highs and lows swapped and every price negated: lows become highs.
@@ -101,115 +189,164 @@ fn mirror(c: &Candle) -> Candle {
     Candle { open: -c.open, high: -c.low, low: -c.high, close: -c.close, ..*c }
 }
 
-/// The bearish search, on bars as they are or mirrored.
-fn search(c: &[Candle]) -> Option<Found> {
-    let n = c.len();
-    if n < 60 {
-        return None;
-    }
-    let last = n - 1;
-    let high: Vec<Option<f64>> = c.iter().map(|k| Some(k.high)).collect();
-    let close: Vec<Option<f64>> = c.iter().map(|k| Some(k.close)).collect();
-    let atr = atr(c, 14);
-    let rsi = rsi(&close, 14);
-    let stoch = stoch_rsi(&close, 14, 14, 3, 3);
-    let pivots = pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT);
+/// The geometry of three drives ending at one pivot: which earlier pivots are
+/// the first two, how well the third sits on their line, and its pullback.
+struct Shape {
+    a: usize,
+    b: usize,
+    z: usize,
+    fit: f64,
+    /// The extreme of the pullback before the third drive.
+    target: f64,
+}
 
-    // The third drive is the newest, and nothing since has gone past it.
-    let third = *pivots.last()?;
-    let z = third.index;
-    if c[z + 1..].iter().any(|k| k.high >= third.value) {
-        return None;
-    }
-    let atr_at = |i: usize| atr[i].filter(|a| *a > 0.0);
-    let atr_z = atr_at(z)?;
+/// The bars, as they are or mirrored, with what every search reads of them.
+/// Each series is causal — its value at a bar depends on no later bar — so the
+/// search can be run as of any bar without looking past it.
+struct Prepared {
+    side: Side,
+    c: Vec<Candle>,
+    atr: Vec<Option<f64>>,
+    rsi: Vec<Option<f64>>,
+    k: Vec<Option<f64>>,
+    d: Vec<Option<f64>>,
+    pivots: Vec<tradoor_core::indicators::Pivot>,
+}
 
-    let mut best: Option<(f64, usize, usize)> = None;
-    let earlier = &pivots[pivots.len().saturating_sub(LOOK_BACK + 1)..pivots.len() - 1];
-    for (bi, b) in earlier.iter().enumerate() {
-        if b.index + MIN_GAP > z || b.value >= third.value {
-            continue;
+impl Prepared {
+    fn new(candles: &[Candle], side: Side) -> Option<Self> {
+        if candles.len() < 60 {
+            return None;
         }
-        let Some(atr_b) = atr_at(b.index) else { continue };
-        for a in &earlier[..bi] {
-            if a.index + MIN_GAP > b.index || z - a.index > MAX_SPAN || a.value >= b.value {
+        let c: Vec<Candle> = match side {
+            Side::Bear => candles.to_vec(),
+            Side::Bull => candles.iter().map(mirror).collect(),
+        };
+        let high: Vec<Option<f64>> = c.iter().map(|k| Some(k.high)).collect();
+        let close: Vec<Option<f64>> = c.iter().map(|k| Some(k.close)).collect();
+        let stoch = stoch_rsi(&close, 14, 14, 3, 3);
+        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots: pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT), c })
+    }
+
+    fn atr_at(&self, i: usize) -> Option<f64> {
+        self.atr[i].filter(|a| *a > 0.0)
+    }
+
+    /// The pattern as a scan reading up to `last` would see it.
+    fn at(&self, last: usize) -> Option<Found> {
+        // The third drive is the newest drive known by then.
+        let zi = self.pivots.iter().rposition(|p| p.confirmed_at <= last)?;
+        self.judge(&self.shape(zi)?, last)
+    }
+
+    /// Three drives ending at pivot `zi`, if its earlier pivots make them. Only
+    /// bars up to the third drive are read.
+    fn shape(&self, zi: usize) -> Option<Shape> {
+        let c = &self.c;
+        let third = self.pivots[zi];
+        let z = third.index;
+        let atr_z = self.atr_at(z)?;
+        let mut best: Option<Shape> = None;
+        let earlier = &self.pivots[zi.saturating_sub(LOOK_BACK)..zi];
+        for (bi, b) in earlier.iter().enumerate() {
+            if b.index + MIN_GAP > z || b.value >= third.value {
                 continue;
             }
-            // Each push clears the last: three drives, not a double top.
-            if b.value - a.value < CLEAR_ATR * atr_b || third.value - b.value < CLEAR_ATR * atr_z {
-                continue;
-            }
-            // The first drive is a fresh high, over everything as far back as the drives are apart.
-            let before = &c[a.index.saturating_sub(b.index - a.index)..a.index];
-            if before.iter().any(|k| k.high >= a.value) {
-                continue;
-            }
-            let line = |i: usize| a.value + (b.value - a.value) * (i as f64 - a.index as f64) / (b.index - a.index) as f64;
-            // The third drive reaches the line, give or take.
-            let off = (third.value - line(z)) / atr_z;
-            if off.abs() > ALIGN_ATR {
-                continue;
-            }
-            // The line holds between the drives: they are pushes to it, not a range under it.
-            if (a.index + 1..z).filter(|i| *i != b.index).any(|i| c[i].high > line(i) + LINE_ATR * atr_at(i).unwrap_or(atr_z)) {
-                continue;
-            }
-            // And between them price pulled back for real.
-            let low_between = |from: usize, to: usize| c[from + 1..to].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
-            let low_before = before.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
-            let (low_ab, low_bz) = (low_between(a.index, b.index), low_between(b.index, z));
-            if a.value - low_ab < (PULLBACK_ATR * atr_b).max(RETRACE * (a.value - low_before))
-                || b.value - low_bz < (PULLBACK_ATR * atr_z).max(RETRACE * (b.value - low_ab))
-            {
-                continue;
-            }
-            let fit = 1.0 - off.abs() / ALIGN_ATR;
-            if best.is_none_or(|(f, _, _)| fit > f) {
-                best = Some((fit, a.index, b.index));
+            let Some(atr_b) = self.atr_at(b.index) else { continue };
+            for a in &earlier[..bi] {
+                if a.index + MIN_GAP > b.index || z - a.index > MAX_SPAN || a.value >= b.value {
+                    continue;
+                }
+                // Each push clears the last: three drives, not a double top.
+                if b.value - a.value < CLEAR_ATR * atr_b || third.value - b.value < CLEAR_ATR * atr_z {
+                    continue;
+                }
+                // The first drive is a fresh high, over everything as far back as the drives are apart.
+                let before = &c[a.index.saturating_sub(b.index - a.index)..a.index];
+                if before.iter().any(|k| k.high >= a.value) {
+                    continue;
+                }
+                let line = |i: usize| a.value + (b.value - a.value) * (i as f64 - a.index as f64) / (b.index - a.index) as f64;
+                // The third drive reaches the line, give or take.
+                let off = (third.value - line(z)) / atr_z;
+                if off.abs() > ALIGN_ATR {
+                    continue;
+                }
+                // The line holds between the drives: they are pushes to it, not a range under it.
+                if (a.index + 1..z).filter(|i| *i != b.index).any(|i| c[i].high > line(i) + LINE_ATR * self.atr_at(i).unwrap_or(atr_z)) {
+                    continue;
+                }
+                // And between them price pulled back for real.
+                let low_between = |from: usize, to: usize| c[from + 1..to].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+                let low_before = before.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+                let (low_ab, low_bz) = (low_between(a.index, b.index), low_between(b.index, z));
+                if a.value - low_ab < (PULLBACK_ATR * atr_b).max(RETRACE * (a.value - low_before))
+                    || b.value - low_bz < (PULLBACK_ATR * atr_z).max(RETRACE * (b.value - low_ab))
+                {
+                    continue;
+                }
+                let fit = 1.0 - off.abs() / ALIGN_ATR;
+                if best.as_ref().is_none_or(|s| fit > s.fit) {
+                    best = Some(Shape { a: a.index, b: b.index, z, fit, target: low_bz });
+                }
             }
         }
-    }
-    let (fit, ai, bi) = best?;
-    let line = |i: usize| c[ai].high + (c[bi].high - c[ai].high) * (i as f64 - ai as f64) / (bi - ai) as f64;
-
-    // Broken: a close well through the line since the third drive.
-    if (z + 1..n).any(|i| c[i].close > line(i) + BREAK_ATR * atr_at(i).unwrap_or(atr_z)) {
-        return None;
+        best
     }
 
-    let turn = turn_down(&stoch.k, &stoch.d, z);
-    match turn {
-        Some(t) if last - t > KEEP_BARS => return None,
-        None if last - z > WAIT_BARS => return None,
-        _ => {}
-    }
-
-    let (ra, rb, rz) = (rsi[ai].unwrap_or(50.0), rsi[bi].unwrap_or(50.0), rsi[z].unwrap_or(50.0));
-    let divergence = rz < rb;
-    let (gap1, gap2) = ((bi - ai) as f64, (z - bi) as f64);
-    let volume = |i: usize| c[i.saturating_sub(2)..=(i + 2).min(last)].iter().map(|k| k.volume).sum::<f64>();
-    let mut score = 30.0 * fit + 15.0 * gap1.min(gap2) / gap1.max(gap2);
-    if divergence {
-        score += 15.0;
-        if rb < ra {
-            score += 10.0;
+    /// A shape as of `last`: still standing, turned or still waiting, scored.
+    fn judge(&self, shape: &Shape, last: usize) -> Option<Found> {
+        let c = &self.c;
+        let Shape { a, b, z, fit, target } = *shape;
+        let top = c[z].high;
+        // Outdone since: the newer high is the pattern now, if any is.
+        if c[z + 1..=last].iter().any(|k| k.high >= top) {
+            return None;
         }
-    }
-    if volume(z) < volume(bi) {
-        score += 15.0;
-    }
-    if turn.is_some() {
-        score += 15.0;
-    }
+        let atr_z = self.atr_at(z)?;
+        let line = |i: usize| c[a].high + (c[b].high - c[a].high) * (i as f64 - a as f64) / (b - a) as f64;
+        // Broken: a close well through the line since the third drive.
+        if (z + 1..=last).any(|i| c[i].close > line(i) + BREAK_ATR * self.atr_at(i).unwrap_or(atr_z)) {
+            return None;
+        }
+        let turn = turn_down(&self.k[..=last], &self.d[..=last], z);
+        match turn {
+            Some(t) if last - t > KEEP_BARS => return None,
+            None if last - z > WAIT_BARS => return None,
+            _ => {}
+        }
 
-    let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price };
-    Some(Found {
-        side: Side::Bear,
-        drives: [point(ai, c[ai].high), point(bi, c[bi].high), point(z, third.value)],
-        turn: turn.map(|t| point(t, c[t].close)),
-        divergence,
-        score: score.round().clamp(0.0, 100.0) as u32,
-    })
+        let (ra, rb, rz) = (self.rsi[a].unwrap_or(50.0), self.rsi[b].unwrap_or(50.0), self.rsi[z].unwrap_or(50.0));
+        let divergence = rz < rb;
+        let (gap1, gap2) = ((b - a) as f64, (z - b) as f64);
+        let volume = |i: usize| c[i.saturating_sub(2)..=(i + 2).min(last)].iter().map(|k| k.volume).sum::<f64>();
+        let mut score = 30.0 * fit + 15.0 * gap1.min(gap2) / gap1.max(gap2);
+        if divergence {
+            score += 15.0;
+            if rb < ra {
+                score += 10.0;
+            }
+        }
+        if volume(z) < volume(b) {
+            score += 15.0;
+        }
+        if turn.is_some() {
+            score += 15.0;
+        }
+
+        // Prices back the right way up for the bullish side.
+        let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
+        let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
+        Some(Found {
+            side: self.side,
+            drives: [point(a, c[a].high), point(b, c[b].high), point(z, top)],
+            turn: turn.map(|t| point(t, c[t].close)),
+            divergence,
+            score: score.round().clamp(0.0, 100.0) as u32,
+            target: sign * target,
+            stop: sign * top,
+        })
+    }
 }
 
 /// The first bar from `from` on where K crosses under D, having been
@@ -269,6 +406,32 @@ mod tests {
         if let Some(turn) = found.turn {
             assert!(turn.index >= 120, "the turn comes after the third drive");
         }
+    }
+
+    #[test]
+    fn the_history_reports_a_pattern_as_a_scan_would_have_then() {
+        let bars = three_up(&[(126, 114.0), (150, 104.0)]);
+        let reported = history(&bars, Side::Bear);
+        assert_eq!(reported.len(), 1);
+        let (at, found) = &reported[0];
+        assert_eq!(*at, 122, "the first scan after the third drive is known, the turn already in");
+        assert_eq!(find(&bars[..=*at], Side::Bear).as_ref(), Some(found), "the same as that scan found, seeing nothing later");
+        assert_eq!((found.target, found.stop), (104.5, 120.5), "back to the last pullback; wrong past the third drive");
+    }
+
+    #[test]
+    fn an_outcome_is_the_target_or_the_stop_whichever_comes_first() {
+        let bar = |high: f64, low: f64| Candle { open_time: 0, open: low, high, low, close: (high + low) / 2.0, volume: 1.0, quote_volume: None };
+        let won = outcome(Side::Bear, 116.0, 104.5, 120.5, &[bar(118.0, 112.0), bar(113.0, 104.0)]);
+        assert_eq!((won.result, won.bars), (Hit::Target, 2));
+        assert!((won.ret - (116.0 - 104.5) / 116.0 * 100.0).abs() < 1e-9);
+        assert_eq!(outcome(Side::Bear, 116.0, 104.5, 120.5, &[bar(121.0, 104.0)]).result, Hit::Stop, "both in one bar: the stop, not knowing which came first");
+        let flat = vec![bar(117.0, 115.0); OUTCOME_BARS];
+        let expired = outcome(Side::Bear, 116.0, 104.5, 120.5, &flat);
+        assert_eq!((expired.result, expired.ret), (Hit::Expired, 0.0));
+        assert_eq!(outcome(Side::Bear, 116.0, 104.5, 120.5, &flat[..3]).result, Hit::Open, "too soon to say");
+        assert_eq!(outcome(Side::Bear, 104.0, 104.5, 120.5, &flat).result, Hit::Passed);
+        assert_eq!(outcome(Side::Bull, 102.0, 111.0, 95.0, &[bar(112.0, 101.0)]).result, Hit::Target, "the bullish way up");
     }
 
     #[test]

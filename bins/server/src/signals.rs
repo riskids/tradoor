@@ -4,7 +4,15 @@
 //! drives either way (`drives`). A pattern is kept with the last scan that
 //! still saw it: the panel lists what the latest scan saw, and the readers who
 //! asked are told on Telegram, once, when a pattern turns.
+//!
+//! The record: a pattern that turned is entered at the close the scan read,
+//! and each scan after weighs the bars since against its target and its stop
+//! until one is reached or four days pass (`drives::outcome`). The same rules
+//! are replayed weekly — and whenever they change — over some 166 days of
+//! every coin's bars, bar by bar and seeing nothing past the bar a scan would
+//! have read, for what the record would have been.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,13 +30,20 @@ use tradoor_venues::{binance, bybit, Exchange, MarketRef};
 use crate::api::{owner, ApiError, ApiResult, AppState};
 use crate::catalog::Catalog;
 use crate::dns::Doh;
-use crate::drives::{self, Found, Side};
+use crate::drives::{self, Found, Hit, Side};
 use crate::telegram::{self, Telegram};
 
 /// Coins screened, by a day's turnover.
 const COINS: usize = 200;
 /// Closed bars read per coin: enough for forty days of drives and their warm-up.
 const BARS: u32 = 500;
+/// Closed bars a replay reads per coin: as many as Bybit gives in one ask, some 166 days.
+const HISTORY_BARS: u32 = 1000;
+/// The rules' version. A change to `drives` bumps it, and the history is
+/// replayed under the new rules after the next scan.
+const VERSION: i32 = 1;
+/// How old a replay may grow before it is run again.
+const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
 /// How long after a bar closes it is read: the exchanges take a moment to settle it.
 const SETTLE_MS: i64 = 60_000;
@@ -73,6 +88,11 @@ impl Screener {
                     tracing::warn!(error = %e, "signal scan");
                 }
             }
+            if self.replay_due().await {
+                if let Err(e) = self.replay(bar).await {
+                    tracing::warn!(error = %e, "signal replay");
+                }
+            }
             let wait = bar + STEP + SETTLE_MS - now_ms();
             tokio::time::sleep(Duration::from_millis(wait.max(1_000) as u64)).await;
         }
@@ -85,35 +105,125 @@ impl Screener {
             bail!("the catalogue lists no perpetuals yet");
         }
         let results: Vec<(String, anyhow::Result<Vec<Candle>>)> =
-            futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar).await) }).buffer_unordered(AT_ONCE).collect().await;
-        let mut read = 0;
+            futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, BARS).await) }).buffer_unordered(AT_ONCE).collect().await;
+        let mut held = HashMap::new();
         let mut found = Vec::new();
         for (market, bars) in results {
             match bars {
                 Ok(bars) => {
-                    read += 1;
                     let price = bars.last().map_or(0.0, |c| c.close);
                     for side in [Side::Bear, Side::Bull] {
                         if let Some(f) = drives::find(&bars, side) {
                             found.push((market.clone(), f, price));
                         }
                     }
+                    held.insert(market, bars);
                 }
                 Err(e) => tracing::debug!(%market, error = %e, "signal scan: bars not read"),
             }
         }
-        self.keep(bar, read, &found).await?;
-        tracing::info!(markets = read, found = found.len(), secs = (now_ms() - started) / 1000, "signal scan");
+        self.keep(bar, held.len(), &found).await?;
+        tracing::info!(markets = held.len(), found = found.len(), secs = (now_ms() - started) / 1000, "signal scan");
+        if let Err(e) = self.settle(bar, &held).await {
+            tracing::warn!(error = %e, "weighing the patterns that turned");
+        }
         self.tell(bar).await
     }
 
-    /// A market's closed four-hour bars up to `bar`, oldest first.
-    async fn bars(&self, market: &str, bar: i64) -> anyhow::Result<Vec<Candle>> {
+    /// Each pattern that turned and has not played out, against the bars since it was entered.
+    async fn settle(&self, bar: i64, held: &HashMap<String, Vec<Candle>>) -> anyhow::Result<()> {
+        let client = self.pool.get().await?;
+        let open = client
+            .query("SELECT id, market, side, entry_at, entry, target, stop FROM signal WHERE outcome IS NULL AND entry_at IS NOT NULL AND target IS NOT NULL", &[])
+            .await?;
+        for row in open {
+            let (id, market, entry_at): (i64, String, i64) = (row.get(0), row.get(1), row.get(3));
+            let side = if row.get::<_, String>(2) == "bull" { Side::Bull } else { Side::Bear };
+            // A coin that has left the two hundred is still followed to its end.
+            let fetched;
+            let bars = match held.get(&market) {
+                Some(bars) => bars,
+                None => match self.bars(&market, bar, BARS).await {
+                    Ok(bars) => {
+                        fetched = bars;
+                        &fetched
+                    }
+                    Err(_) => continue,
+                },
+            };
+            let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= entry_at).cloned().collect();
+            let o = drives::outcome(side, row.get(4), row.get(5), row.get(6), &after);
+            let decided = o.result != Hit::Open;
+            client
+                .execute(
+                    "UPDATE signal SET outcome = $2, outcome_at = $3, ret = $4, best = $5, worst = $6 WHERE id = $1",
+                    &[&id, &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn replay_due(&self) -> bool {
+        let Ok(client) = self.pool.get().await else { return false };
+        match client.query_opt("SELECT at, version FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await {
+            Ok(Some(run)) => run.get::<_, i32>(1) != VERSION || run.get::<_, i64>(0) < now_ms() - REPLAY_EVERY_MS,
+            Ok(None) => true,
+            Err(_) => false,
+        }
+    }
+
+    /// The rules run over each coin's history as the scans would have run them,
+    /// and how each pattern then played out.
+    async fn replay(&self, bar: i64) -> anyhow::Result<()> {
+        let started = now_ms();
+        let markets = self.catalog.perp_leaders(COINS).await;
+        if markets.is_empty() {
+            bail!("the catalogue lists no perpetuals yet");
+        }
+        let results: Vec<(String, anyhow::Result<Vec<Candle>>)> =
+            futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, HISTORY_BARS).await) }).buffer_unordered(2).collect().await;
+        let (mut read, mut from) = (0, bar);
+        let mut rows = Replayed::default();
+        for (market, bars) in results {
+            let Ok(bars) = bars else { continue };
+            read += 1;
+            from = from.min(bars.first().map_or(bar, |c| c.open_time));
+            for side in [Side::Bear, Side::Bull] {
+                for (at, f) in drives::history(&bars, side) {
+                    let entry = bars[at].close;
+                    let o = drives::outcome(side, entry, f.target, f.stop, &bars[at + 1..]);
+                    if matches!(o.result, Hit::Open | Hit::Passed) {
+                        continue;
+                    }
+                    rows.push(&market, side, bars[at].open_time + STEP, entry, &f, &o);
+                }
+            }
+        }
+        let mut client = self.pool.get().await?;
+        let tx = client.transaction().await?;
+        let at = now_ms();
+        tx.execute("INSERT INTO signal_backtest_run (at, version, markets, from_at, to_at) VALUES ($1, $2, $3, $4, $5)", &[&at, &VERSION, &(read as i32), &from, &bar]).await?;
+        tx.execute(
+            "INSERT INTO signal_backtest (run, market, side, entry_at, entry, target, stop, score, divergence, outcome, bars, ret, best, worst)
+             SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::int[], $9::bool[], $10::text[], $11::int[], $12::float8[], $13::float8[], $14::float8[])
+             ON CONFLICT DO NOTHING",
+            &[&at, &rows.market, &rows.side, &rows.entry_at, &rows.entry, &rows.target, &rows.stop, &rows.score, &rows.divergence, &rows.outcome, &rows.bars, &rows.ret, &rows.best, &rows.worst],
+        )
+        .await?;
+        tx.execute("DELETE FROM signal_backtest_run WHERE at <> $1", &[&at]).await?;
+        tx.commit().await?;
+        tracing::info!(markets = read, patterns = rows.market.len(), secs = (now_ms() - started) / 1000, "signal replay");
+        Ok(())
+    }
+
+    /// A market's last `count` closed four-hour bars up to `bar`, oldest first.
+    async fn bars(&self, market: &str, bar: i64, count: u32) -> anyhow::Result<Vec<Candle>> {
         let m = MarketRef::parse(market).ok_or_else(|| anyhow!("{market} is not a market"))?;
         let exchange = m.venue.exchange();
         let url = match exchange {
-            Exchange::Binance => binance::klines_url(binance::PERP_REST, &m, Interval::H4, None, None, BARS),
-            Exchange::Bybit => bybit::klines_url(bybit::REST, &m, Interval::H4, None, None, BARS),
+            Exchange::Binance => binance::klines_url(binance::PERP_REST, &m, Interval::H4, None, None, count),
+            Exchange::Bybit => bybit::klines_url(bybit::REST, &m, Interval::H4, None, None, count),
             _ => bail!("only Binance and Bybit are screened"),
         };
         let resp = self.http.get(&url).send().await?;
@@ -153,14 +263,18 @@ impl Screener {
         for (market, f, price) in found {
             let drives = Value::Array(f.drives.iter().map(|d| json!({ "at": d.at, "price": d.price })).collect());
             let (turned_at, turn_price) = (f.turn.map(|t| t.at), f.turn.map(|t| t.price));
+            // Entered where the first scan to see it turned read up to.
+            let (entry_at, entry) = (f.turn.map(|_| bar), f.turn.map(|_| *price));
             tx.execute(
-                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar)
-                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11)
+                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, target, stop, entry_at, entry)
+                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15)
                  ON CONFLICT (kind, market, side, timeframe, third_at) DO UPDATE SET
                      drives = EXCLUDED.drives, turned_at = COALESCE(signal.turned_at, EXCLUDED.turned_at),
                      turn_price = COALESCE(signal.turn_price, EXCLUDED.turn_price), score = EXCLUDED.score,
-                     divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar",
-                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar],
+                     divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar,
+                     target = EXCLUDED.target, stop = EXCLUDED.stop,
+                     entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry)",
+                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &f.target, &f.stop, &entry_at, &entry],
             )
             .await?;
         }
@@ -198,6 +312,42 @@ impl Screener {
             telegram.send_to_owner(&owner, |offset| signal_text(&lines, bar, offset)).await;
         }
         Ok(())
+    }
+}
+
+/// Replayed patterns, a column each, for one insert.
+#[derive(Default)]
+struct Replayed {
+    market: Vec<String>,
+    side: Vec<&'static str>,
+    entry_at: Vec<i64>,
+    entry: Vec<f64>,
+    target: Vec<f64>,
+    stop: Vec<f64>,
+    score: Vec<i32>,
+    divergence: Vec<bool>,
+    outcome: Vec<&'static str>,
+    bars: Vec<i32>,
+    ret: Vec<f64>,
+    best: Vec<f64>,
+    worst: Vec<f64>,
+}
+
+impl Replayed {
+    fn push(&mut self, market: &str, side: Side, entry_at: i64, entry: f64, f: &Found, o: &drives::Outcome) {
+        self.market.push(market.to_string());
+        self.side.push(side.id());
+        self.entry_at.push(entry_at);
+        self.entry.push(entry);
+        self.target.push(f.target);
+        self.stop.push(f.stop);
+        self.score.push(f.score as i32);
+        self.divergence.push(f.divergence);
+        self.outcome.push(o.result.id());
+        self.bars.push(o.bars as i32);
+        self.ret.push(o.ret);
+        self.best.push(o.best);
+        self.worst.push(o.worst);
     }
 }
 
@@ -250,7 +400,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     let signals = match &scan {
         Some(scan) => client
             .query(
-                "SELECT id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar FROM signal
+                "SELECT id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret FROM signal
                  WHERE seen_bar = $1 ORDER BY turned_at IS NULL, score DESC, market",
                 &[&scan.get::<_, i64>(0)],
             )
@@ -268,6 +418,11 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
                     "divergence": r.get::<_, bool>(7),
                     "price": r.get::<_, f64>(8),
                     "foundAt": r.get::<_, i64>(9),
+                    "target": r.get::<_, Option<f64>>(10),
+                    "stop": r.get::<_, Option<f64>>(11),
+                    "entry": r.get::<_, Option<f64>>(12),
+                    "outcome": r.get::<_, Option<String>>(13),
+                    "ret": r.get::<_, Option<f64>>(14),
                 })
             })
             .collect(),
@@ -283,6 +438,115 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         "telegram": state.telegram.is_some(),
         "linked": linked,
         "signals": signals,
+    })))
+}
+
+/// One pattern's result, as the record counts it.
+struct Played {
+    side: String,
+    score: i32,
+    divergence: bool,
+    outcome: String,
+    ret: f64,
+    best: f64,
+    worst: f64,
+}
+
+/// The record by side, and within a side by score and by divergence: how many,
+/// how many reached the target first, the stop first or neither in four days,
+/// and the average move — to the exit, and at best and worst on the way.
+fn summarize(played: &[Played]) -> Vec<Value> {
+    let groups: [(&str, fn(&Played) -> bool); 5] = [
+        ("all", |_| true),
+        ("70", |p| p.score >= 70),
+        ("50", |p| (50..70).contains(&p.score)),
+        ("0", |p| p.score < 50),
+        ("div", |p| p.divergence),
+    ];
+    let mut out = Vec::new();
+    for side in ["bear", "bull"] {
+        for (group, keep) in groups {
+            let rows: Vec<&Played> = played.iter().filter(|p| p.side == side && p.outcome != "passed" && keep(p)).collect();
+            let n = rows.len();
+            let count = |o: &str| rows.iter().filter(|p| p.outcome == o).count();
+            let mean = |f: fn(&Played) -> f64| if n == 0 { 0.0 } else { rows.iter().map(|p| f(p)).sum::<f64>() / n as f64 };
+            out.push(json!({
+                "side": side,
+                "group": group,
+                "n": n,
+                "target": count("target"),
+                "stop": count("stop"),
+                "expired": count("expired"),
+                "ret": mean(|p| p.ret),
+                "best": mean(|p| p.best),
+                "worst": mean(|p| p.worst),
+            }));
+        }
+    }
+    out
+}
+
+/// `GET /api/signals/stats`: the record — the latest replay of the history,
+/// the live patterns since the screener began, and the latest of those.
+pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    owner(&headers)?;
+    let client = state.pool.get().await?;
+    let played = |r: &tokio_postgres::Row| Played { side: r.get(0), score: r.get(1), divergence: r.get(2), outcome: r.get(3), ret: r.get(4), best: r.get(5), worst: r.get(6) };
+    let backtest = match client.query_opt("SELECT at, version, markets, from_at, to_at FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await? {
+        Some(run) => {
+            let at: i64 = run.get(0);
+            let rows = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal_backtest WHERE run = $1", &[&at]).await?;
+            json!({
+                "at": at,
+                "version": run.get::<_, i32>(1),
+                "markets": run.get::<_, i32>(2),
+                "from": run.get::<_, i64>(3),
+                "to": run.get::<_, i64>(4),
+                "groups": summarize(&rows.iter().map(played).collect::<Vec<_>>()),
+            })
+        }
+        None => Value::Null,
+    };
+    let decided = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal WHERE outcome IS NOT NULL", &[]).await?;
+    let since = client.query_one("SELECT min(entry_at), count(*) FILTER (WHERE outcome IS NULL) FROM signal WHERE entry_at IS NOT NULL", &[]).await?;
+    let recent = client
+        .query(
+            "SELECT id, market, side, drives, score, divergence, entry_at, entry, target, stop, outcome, outcome_at, ret, best, worst FROM signal
+             WHERE entry_at IS NOT NULL ORDER BY entry_at DESC, score DESC LIMIT 60",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, i64>(0),
+                "market": r.get::<_, String>(1),
+                "side": r.get::<_, String>(2),
+                "drives": r.get::<_, Value>(3),
+                "score": r.get::<_, i32>(4),
+                "divergence": r.get::<_, bool>(5),
+                "entryAt": r.get::<_, i64>(6),
+                "entry": r.get::<_, Option<f64>>(7),
+                "target": r.get::<_, Option<f64>>(8),
+                "stop": r.get::<_, Option<f64>>(9),
+                "outcome": r.get::<_, Option<String>>(10),
+                "outcomeAt": r.get::<_, Option<i64>>(11),
+                "ret": r.get::<_, Option<f64>>(12),
+                "best": r.get::<_, Option<f64>>(13),
+                "worst": r.get::<_, Option<f64>>(14),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "version": VERSION,
+        "windowBars": drives::OUTCOME_BARS,
+        "backtest": backtest,
+        "live": {
+            "since": since.get::<_, Option<i64>>(0),
+            "open": since.get::<_, i64>(1),
+            "groups": summarize(&decided.iter().map(played).collect::<Vec<_>>()),
+        },
+        "recent": recent,
     })))
 }
 
@@ -310,6 +574,21 @@ mod tests {
         assert_eq!(settled(close + 30_000), close - STEP, "half a minute after a close, that bar is still settling");
         assert_eq!(settled(close + SETTLE_MS), close);
         assert_eq!(settled(close + STEP - 1), close);
+    }
+
+    #[test]
+    fn the_record_counts_each_side_by_score_and_divergence() {
+        let p = |side: &str, score: i32, divergence: bool, outcome: &str, ret: f64| Played { side: side.into(), score, divergence, outcome: outcome.into(), ret, best: ret.max(0.0), worst: ret.min(0.0) };
+        let played = [p("bear", 80, true, "target", 6.0), p("bear", 75, false, "stop", -2.0), p("bear", 40, true, "expired", 1.0), p("bear", 60, false, "passed", 0.0), p("bull", 55, false, "target", 4.0)];
+        let groups = summarize(&played);
+        let find = |side: &str, group: &str| groups.iter().find(|g| g["side"] == side && g["group"] == group).unwrap().clone();
+        let all = find("bear", "all");
+        assert_eq!((all["n"].as_u64(), all["target"].as_u64(), all["stop"].as_u64(), all["expired"].as_u64()), (Some(3), Some(1), Some(1), Some(1)), "a pattern already past its target is no trade");
+        assert!((all["ret"].as_f64().unwrap() - 5.0 / 3.0).abs() < 1e-9);
+        assert_eq!(find("bear", "70")["n"].as_u64(), Some(2));
+        assert_eq!(find("bear", "div")["target"].as_u64(), Some(1));
+        assert_eq!(find("bull", "50")["n"].as_u64(), Some(1));
+        assert_eq!(find("bull", "70")["n"].as_u64(), Some(0));
     }
 
     #[test]

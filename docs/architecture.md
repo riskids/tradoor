@@ -90,7 +90,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/flow?coin=` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | one coin's flow on every market it is followed on, the coins followed, and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
 | `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, or stop |
-| `GET /api/signals` · `PUT /api/signals/notify` | what the latest screener scan found, with when it ran and runs next; whether this reader is told on Telegram when a pattern turns |
+| `GET /api/signals` · `PUT /api/signals/notify` · `GET /api/signals/stats` | what the latest screener scan found, with when it ran and runs next; whether this reader is told on Telegram when a pattern turns; the record — the history replayed, the live patterns since, and the latest of them |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
 | `GET PATCH /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; the reader's zone and how long messages stay; a link code; a test message; unlink |
@@ -108,7 +108,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
-| `signal_scan`, `signal`, `signal_watch` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days), and who is told when one turns |
+| `signal_scan`, `signal`, `signal_watch`, `signal_backtest_run`, `signal_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -173,6 +173,16 @@ four hours with the line and the drives' numbered circles drawn — locked, and
 gone when closed or the market changes, unless Keep drawings saves them as the
 chart's own (`circle` is a drawing kind for that). Telegram, for readers who
 turn it on, hears once per scan of the patterns that turned in it.
+
+The record says how they went. A pattern that turned is entered at the close
+the scan read; its target is the pullback before the third drive and its stop
+the third drive itself, and each scan after weighs the bars since — target or
+stop first, a bar touching both counted as the stop, or neither within four
+days. The same rules are replayed weekly, and whenever `VERSION` in `signals`
+changes, over the last thousand bars (some 166 days) of every coin: as of each
+bar, seeing nothing after it, which is why the detector keeps its shape (read
+up to the third drive) apart from its judgement as of a bar. The panel's Record
+shows both by side, score and divergence, with the latest live patterns.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels

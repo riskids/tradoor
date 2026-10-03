@@ -256,6 +256,59 @@ export interface Signal {
   /** The close of the newest bar the scan read. */
   price: number;
   foundAt: number;
+  /** Where the pattern points, where it is wrong, and where it was entered once it turned. */
+  target: number | null;
+  stop: number | null;
+  entry: number | null;
+  /** How it played out, once it has; and the move so far, the pattern's way. */
+  outcome: SignalOutcome | null;
+  ret: number | null;
+}
+
+/** Target or stop first, neither within four days, or already past the target when it turned. */
+export type SignalOutcome = 'target' | 'stop' | 'expired' | 'passed';
+
+/** One line of the record: a side, and a cut of it by score or divergence. */
+export interface SignalGroup {
+  side: 'bear' | 'bull';
+  group: 'all' | '70' | '50' | '0' | 'div';
+  n: number;
+  target: number;
+  stop: number;
+  expired: number;
+  /** Average moves in percent, positive the pattern's way: to the exit, and at best and worst before it. */
+  ret: number;
+  best: number;
+  worst: number;
+}
+
+/** A live pattern that turned, and how it went. */
+export interface SignalPlayed {
+  id: number;
+  market: string;
+  side: 'bear' | 'bull';
+  drives: SignalPoint[];
+  score: number;
+  divergence: boolean;
+  entryAt: number;
+  entry: number | null;
+  target: number | null;
+  stop: number | null;
+  outcome: SignalOutcome | null;
+  outcomeAt: number | null;
+  ret: number | null;
+  best: number | null;
+  worst: number | null;
+}
+
+export interface SignalStats {
+  version: number;
+  /** Bars a pattern is given to reach its target. */
+  windowBars: number;
+  /** The rules replayed over the history, bar by bar. */
+  backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[] } | null;
+  live: { since: number | null; open: number; groups: SignalGroup[] };
+  recent: SignalPlayed[];
 }
 
 export interface SignalsState {
@@ -328,6 +381,7 @@ export const api = {
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   signals: () => json<SignalsState>('/api/signals'),
+  signalStats: () => json<SignalStats>('/api/signals/stats'),
   signalsNotify: (notify: boolean) => json<{ notify: boolean }>('/api/signals/notify', { method: 'PUT', body: { notify } }),
   flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
   flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),

@@ -116,6 +116,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/flow/minutes", get(flow::minutes))
         .route("/signals", get(signals::list))
         .route("/signals/notify", axum::routing::put(signals::set_notify))
+        .route("/signals/stats", get(signals::stats))
         .route("/flow/coins/{coin}", axum::routing::put(flow::follow_coin).delete(flow::unfollow_coin))
         .route("/flow/{market}", axum::routing::put(flow::watch))
         .route("/footprint", get(footprint::bars))

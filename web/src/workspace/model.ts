@@ -120,6 +120,8 @@ export interface SignalsPanelState extends PanelBase {
   type: 'signals';
   /** Which way: both, or bearish or bullish only. */
   side: 'all' | 'bear' | 'bull';
+  /** The patterns now, or the record of how they went. */
+  view: 'list' | 'record';
 }
 
 export type AlertSort = 'newest' | 'symbol' | 'state';
@@ -192,7 +194,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
     case 'flow':
       return { ...base, type, coin: 'BTC', order: [] };
     case 'signals':
-      return { ...base, type, side: 'all' };
+      return { ...base, type, side: 'all', view: 'list' };
     case 'alerts':
       return { ...base, type, tab: 'alerts', sort: 'newest' };
   }
@@ -293,6 +295,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
     if (Array.isArray(raw.order)) p.order = [...new Set(raw.order.filter((c: unknown): c is string => typeof c === 'string' && /^[A-Z0-9]{1,20}$/.test(c)))].slice(0, 20);
   } else if (p.type === 'signals') {
     if (raw.side === 'bear' || raw.side === 'bull') p.side = raw.side;
+    if (raw.view === 'record') p.view = 'record';
   } else if (p.type === 'values' && raw.basis === 'tpo') {
     p.basis = 'tpo';
   }
