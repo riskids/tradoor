@@ -303,6 +303,36 @@ export interface SignalPlayed {
   worst: number | null;
 }
 
+/** The touches of one side: what they became, and target or breakout first. */
+export interface SignalTouchGroup {
+  side: 'bear' | 'bull';
+  n: number;
+  /** Became three drives within four days, and of those, turned. */
+  pattern: number;
+  turned: number;
+  target: number;
+  stop: number;
+  expired: number;
+  ret: number;
+  best: number;
+  worst: number;
+}
+
+/** A live touch of a line, and how it went. */
+export interface SignalTouchPlayed {
+  market: string;
+  side: 'bear' | 'bull';
+  drives: SignalPoint[];
+  touchedAt: number;
+  touchPrice: number;
+  target: number | null;
+  became: 'turned' | 'pattern' | 'none' | null;
+  outcome: SignalOutcome | null;
+  ret: number | null;
+  best: number | null;
+  worst: number | null;
+}
+
 export interface SignalStats {
   version: number;
   /** Bars a pattern is given to reach its target. */
@@ -311,6 +341,12 @@ export interface SignalStats {
   backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[] } | null;
   live: { since: number | null; open: number; groups: SignalGroup[] };
   recent: SignalPlayed[];
+  /** Price at the line between scans: replayed, live, and the latest. */
+  touches: {
+    replayed: SignalTouchGroup[];
+    live: { since: number | null; open: number; groups: SignalTouchGroup[] };
+    recent: SignalTouchPlayed[];
+  };
 }
 
 /** Price reaching the line of two drives between scans: a third drive as it happens. */

@@ -108,7 +108,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
-| `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
+| `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest`, `signal_touch_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -184,6 +184,14 @@ those lines: price past the second drive by half an ATR and within an ATR of
 the line marks the setup AT LINE, shown at the top of the list and told at
 once to readers who turned that on (a second Telegram switch). The bars still
 have to close and Stochastic RSI to turn for it to be a pattern.
+
+A touch has a record too: entered at the price that reached the line, aimed
+at the pullback after the second drive, stopped by a close an ATR through the
+line (a breakout), and marked with what the scans of the next four days made
+of its two drives — three drives that turned, three drives, or none. The
+replay catches touches the way the live check does, the setup the scan before
+had kept and the bar after reaching the line's near edge, and the scan and
+the replay share the setup code (`Prepared::setup_at`).
 
 The record says how they went. A pattern that turned is entered at the close
 the scan read; its target is the pullback before the third drive and its stop

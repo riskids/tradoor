@@ -46,7 +46,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 2;
+const VERSION: i32 = 3;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -139,6 +139,9 @@ impl Screener {
         tracing::info!(markets = held.len(), found = found.len(), setups = setups.len(), secs = (now_ms() - started) / 1000, "signal scan");
         if let Err(e) = self.settle(bar, &held).await {
             tracing::warn!(error = %e, "weighing the patterns that turned");
+        }
+        if let Err(e) = self.settle_touches(bar, &held).await {
+            tracing::warn!(error = %e, "weighing the touches of a line");
         }
         self.tell(bar).await
     }
@@ -257,6 +260,62 @@ impl Screener {
         Ok(serde_json::from_str(&body)?)
     }
 
+    /// Each line price reached and not yet played out: what the two drives
+    /// became, and target or breakout first, against the bars since.
+    async fn settle_touches(&self, bar: i64, held: &HashMap<String, Vec<Candle>>) -> anyhow::Result<()> {
+        let client = self.pool.get().await?;
+        let open = client
+            .query(
+                "SELECT market, side, first_at, second_at, drives, atr, clear, until_at, touched_at, touch_price FROM signal_setup
+                 WHERE touched_at IS NOT NULL AND outcome IS NULL",
+                &[],
+            )
+            .await?;
+        for row in open {
+            let market: String = row.get(0);
+            let side: String = row.get(1);
+            let (first_at, second_at, touched_at, entry): (i64, i64, i64, f64) = (row.get(2), row.get(3), row.get(8), row.get(9));
+            let Some(setup) = setup_of(&side, &row.get(4), row.get(5), row.get(6), row.get(7)) else { continue };
+            let fetched;
+            let bars = match held.get(&market) {
+                Some(bars) => bars,
+                None => match self.bars(&market, bar, BARS).await {
+                    Ok(bars) => {
+                        fetched = bars;
+                        &fetched
+                    }
+                    Err(_) => continue,
+                },
+            };
+            let touch_bar = touched_at.div_euclid(STEP) * STEP;
+            let pullback = bars.iter().filter(|k| k.open_time > second_at && k.open_time < touch_bar);
+            let target = if setup.side == Side::Bull { pullback.map(|k| k.high).fold(f64::NEG_INFINITY, f64::max) } else { pullback.map(|k| k.low).fold(f64::INFINITY, f64::min) };
+            if !target.is_finite() {
+                continue;
+            }
+            let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= touch_bar).cloned().collect();
+            let o = drives::touch_outcome(&setup, entry, target, &after);
+            // What the scans made of the two drives: a pattern, and whether it turned.
+            let became = client
+                .query_opt(
+                    "SELECT bool_or(turned_at IS NOT NULL) FROM signal WHERE market = $1 AND side = $2
+                     AND (drives->0->>'at')::bigint = $3 AND (drives->1->>'at')::bigint = $4 HAVING count(*) > 0",
+                    &[&market, &side, &first_at, &second_at],
+                )
+                .await?
+                .map_or(drives::Became::None, |r| if r.get::<_, Option<bool>>(0).unwrap_or(false) { drives::Became::Turned } else { drives::Became::Pattern });
+            let decided = o.result != Hit::Open;
+            client
+                .execute(
+                    "UPDATE signal_setup SET target = $5, became = $6, outcome = $7, outcome_at = $8, ret = $9, best = $10, worst = $11
+                     WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4",
+                    &[&market, &side, &first_at, &second_at, &target, &became.id(), &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn replay_due(&self) -> bool {
         let Ok(client) = self.pool.get().await else { return false };
         match client.query_opt("SELECT at, version FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await {
@@ -278,11 +337,17 @@ impl Screener {
             futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, HISTORY_BARS).await) }).buffer_unordered(2).collect().await;
         let (mut read, mut from) = (0, bar);
         let mut rows = Replayed::default();
+        let mut touches = TouchesReplayed::default();
         for (market, bars) in results {
             let Ok(bars) = bars else { continue };
             read += 1;
             from = from.min(bars.first().map_or(bar, |c| c.open_time));
             for side in [Side::Bear, Side::Bull] {
+                for t in drives::touches(&bars, side) {
+                    if !matches!(t.outcome.result, Hit::Open | Hit::Passed) {
+                        touches.push(&market, side, bars[t.at].open_time, &t);
+                    }
+                }
                 for (at, f) in drives::history(&bars, side) {
                     let entry = bars[at].close;
                     let o = drives::outcome(side, entry, f.target, f.stop, &bars[at + 1..]);
@@ -304,9 +369,16 @@ impl Screener {
             &[&at, &rows.market, &rows.side, &rows.entry_at, &rows.entry, &rows.target, &rows.stop, &rows.score, &rows.divergence, &rows.outcome, &rows.bars, &rows.ret, &rows.best, &rows.worst],
         )
         .await?;
+        tx.execute(
+            "INSERT INTO signal_touch_backtest (run, market, side, touched_at, entry, target, became, outcome, bars, ret, best, worst)
+             SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::float8[], $6::float8[], $7::text[], $8::text[], $9::int[], $10::float8[], $11::float8[], $12::float8[])
+             ON CONFLICT DO NOTHING",
+            &[&at, &touches.market, &touches.side, &touches.at, &touches.entry, &touches.target, &touches.became, &touches.outcome, &touches.bars, &touches.ret, &touches.best, &touches.worst],
+        )
+        .await?;
         tx.execute("DELETE FROM signal_backtest_run WHERE at <> $1", &[&at]).await?;
         tx.commit().await?;
-        tracing::info!(markets = read, patterns = rows.market.len(), secs = (now_ms() - started) / 1000, "signal replay");
+        tracing::info!(markets = read, patterns = rows.market.len(), touches = touches.market.len(), secs = (now_ms() - started) / 1000, "signal replay");
         Ok(())
     }
 
@@ -382,7 +454,9 @@ impl Screener {
             )
             .await?;
         }
-        tx.execute("DELETE FROM signal_setup WHERE seen_bar < $1", &[&(bar - 2 * 24 * 3_600_000)]).await?;
+        // A setup price never reached goes after two days; one it did stays, for the record.
+        tx.execute("DELETE FROM signal_setup WHERE seen_bar < $1 AND touched_at IS NULL", &[&(bar - 2 * 24 * 3_600_000)]).await?;
+        tx.execute("DELETE FROM signal_setup WHERE seen_bar < $1", &[&(bar - KEPT_MS)]).await?;
         tx.execute("DELETE FROM signal WHERE seen_bar < $1", &[&(bar - KEPT_MS)]).await?;
         tx.execute("DELETE FROM signal_scan WHERE bar < $1", &[&(bar - KEPT_MS)]).await?;
         tx.commit().await?;
@@ -476,6 +550,38 @@ impl Replayed {
         self.ret.push(o.ret);
         self.best.push(o.best);
         self.worst.push(o.worst);
+    }
+}
+
+/// Replayed touches, a column each, for one insert.
+#[derive(Default)]
+struct TouchesReplayed {
+    market: Vec<String>,
+    side: Vec<&'static str>,
+    at: Vec<i64>,
+    entry: Vec<f64>,
+    target: Vec<f64>,
+    became: Vec<&'static str>,
+    outcome: Vec<&'static str>,
+    bars: Vec<i32>,
+    ret: Vec<f64>,
+    best: Vec<f64>,
+    worst: Vec<f64>,
+}
+
+impl TouchesReplayed {
+    fn push(&mut self, market: &str, side: Side, at: i64, t: &drives::Touch) {
+        self.market.push(market.to_string());
+        self.side.push(side.id());
+        self.at.push(at);
+        self.entry.push(t.entry);
+        self.target.push(t.target);
+        self.became.push(t.became.id());
+        self.outcome.push(t.outcome.result.id());
+        self.bars.push(t.outcome.bars as i32);
+        self.ret.push(t.outcome.ret);
+        self.best.push(t.outcome.best);
+        self.worst.push(t.outcome.worst);
     }
 }
 
@@ -638,6 +744,42 @@ fn summarize(played: &[Played]) -> Vec<Value> {
     out
 }
 
+/// One touch's result, as the record counts it.
+struct Reached {
+    side: String,
+    became: String,
+    outcome: String,
+    ret: f64,
+    best: f64,
+    worst: f64,
+}
+
+/// The touches by side: how many, how many became three drives and turned,
+/// target or breakout first or neither in four days, and the average move.
+fn summarize_touches(reached: &[Reached]) -> Vec<Value> {
+    ["bear", "bull"]
+        .iter()
+        .map(|side| {
+            let rows: Vec<&Reached> = reached.iter().filter(|r| r.side == *side && r.outcome != "passed").collect();
+            let n = rows.len();
+            let count = |f: &dyn Fn(&Reached) -> bool| rows.iter().filter(|r| f(r)).count();
+            let mean = |f: fn(&Reached) -> f64| if n == 0 { 0.0 } else { rows.iter().map(|r| f(r)).sum::<f64>() / n as f64 };
+            json!({
+                "side": side,
+                "n": n,
+                "pattern": count(&|r| r.became != "none"),
+                "turned": count(&|r| r.became == "turned"),
+                "target": count(&|r| r.outcome == "target"),
+                "stop": count(&|r| r.outcome == "stop"),
+                "expired": count(&|r| r.outcome == "expired"),
+                "ret": mean(|r| r.ret),
+                "best": mean(|r| r.best),
+                "worst": mean(|r| r.worst),
+            })
+        })
+        .collect()
+}
+
 /// `GET /api/signals/stats`: the record — the latest replay of the history,
 /// the live patterns since the screener began, and the latest of those.
 pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
@@ -659,6 +801,37 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
         }
         None => Value::Null,
     };
+    let reached = |r: &tokio_postgres::Row| Reached { side: r.get(0), became: r.get(1), outcome: r.get(2), ret: r.get(3), best: r.get(4), worst: r.get(5) };
+    let touches_replayed = match backtest["at"].as_i64() {
+        Some(run) => summarize_touches(&client.query("SELECT side, became, outcome, ret, best, worst FROM signal_touch_backtest WHERE run = $1", &[&run]).await?.iter().map(reached).collect::<Vec<_>>()),
+        None => Vec::new(),
+    };
+    let touches_live = client.query("SELECT side, became, outcome, ret, best, worst FROM signal_setup WHERE outcome IS NOT NULL", &[]).await?;
+    let touches_since = client.query_one("SELECT min(touched_at), count(*) FILTER (WHERE outcome IS NULL) FROM signal_setup WHERE touched_at IS NOT NULL", &[]).await?;
+    let touches_recent = client
+        .query(
+            "SELECT market, side, drives, touched_at, touch_price, target, became, outcome, ret, best, worst FROM signal_setup
+             WHERE touched_at IS NOT NULL ORDER BY touched_at DESC LIMIT 40",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| {
+            json!({
+                "market": r.get::<_, String>(0),
+                "side": r.get::<_, String>(1),
+                "drives": r.get::<_, Value>(2),
+                "touchedAt": r.get::<_, i64>(3),
+                "touchPrice": r.get::<_, f64>(4),
+                "target": r.get::<_, Option<f64>>(5),
+                "became": r.get::<_, Option<String>>(6),
+                "outcome": r.get::<_, Option<String>>(7),
+                "ret": r.get::<_, Option<f64>>(8),
+                "best": r.get::<_, Option<f64>>(9),
+                "worst": r.get::<_, Option<f64>>(10),
+            })
+        })
+        .collect::<Vec<_>>();
     let decided = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal WHERE outcome IS NOT NULL", &[]).await?;
     let since = client.query_one("SELECT min(entry_at), count(*) FILTER (WHERE outcome IS NULL) FROM signal WHERE entry_at IS NOT NULL", &[]).await?;
     let recent = client
@@ -699,6 +872,15 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
             "groups": summarize(&decided.iter().map(played).collect::<Vec<_>>()),
         },
         "recent": recent,
+        "touches": {
+            "replayed": touches_replayed,
+            "live": {
+                "since": touches_since.get::<_, Option<i64>>(0),
+                "open": touches_since.get::<_, i64>(1),
+                "groups": summarize_touches(&touches_live.iter().map(reached).collect::<Vec<_>>()),
+            },
+            "recent": touches_recent,
+        },
     })))
 }
 
@@ -751,6 +933,17 @@ mod tests {
         assert_eq!(find("bear", "div")["target"].as_u64(), Some(1));
         assert_eq!(find("bull", "50")["n"].as_u64(), Some(1));
         assert_eq!(find("bull", "70")["n"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn the_touches_count_what_they_became_and_how_they_went() {
+        let r = |side: &str, became: &str, outcome: &str, ret: f64| Reached { side: side.into(), became: became.into(), outcome: outcome.into(), ret, best: 0.0, worst: 0.0 };
+        let groups = summarize_touches(&[r("bear", "turned", "target", 5.0), r("bear", "pattern", "stop", -3.0), r("bear", "none", "expired", 1.0), r("bear", "none", "passed", 0.0), r("bull", "none", "stop", -2.0)]);
+        let bear = &groups[0];
+        assert_eq!((bear["n"].as_u64(), bear["pattern"].as_u64(), bear["turned"].as_u64()), (Some(3), Some(2), Some(1)));
+        assert_eq!((bear["target"].as_u64(), bear["stop"].as_u64(), bear["expired"].as_u64()), (Some(1), Some(1), Some(1)));
+        assert!((bear["ret"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert_eq!(groups[1]["n"].as_u64(), Some(1));
     }
 
     #[test]

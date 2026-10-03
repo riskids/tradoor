@@ -13,7 +13,7 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats, type SignalTouch } from '../lib/api';
+import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice } from '../lib/format';
@@ -52,7 +52,7 @@ interface Openable {
   stage?: 'line';
 }
 /** A touch as a pattern to draw: its two drives, and the third where price reached the line, on that bar. */
-const touchPattern = (t: SignalTouch): Openable => ({
+const touchPattern = (t: { market: string; side: 'bear' | 'bull'; drives: SignalPoint[]; touchedAt: number; touchPrice: number }): Openable => ({
   market: t.market,
   side: t.side,
   drives: [...t.drives, { at: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS, price: t.touchPrice }],
@@ -68,6 +68,7 @@ const isShown = (s: Openable) => {
 const moved = (s: { outcome: SignalOutcome | null; best: number | null; worst: number | null }) => s.outcome !== null || (s.best ?? 0) !== 0 || (s.worst ?? 0) !== 0;
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
 const share = (part: number, n: number) => (n === 0 ? '—' : `${Math.round((part / n) * 100)}%`);
+const BECAME: Record<string, string> = { turned: 'became three drives, turned', pattern: 'became three drives', none: 'no third drive' };
 const GROUP_LABEL: Record<SignalGroup['group'], string> = { all: 'All', '70': 'Score 70+', '50': 'Score 50–69', '0': 'Score under 50', div: 'RSI divergence' };
 const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
   target: ['✓', 'Target', 'Reached the pullback before the third drive first'],
@@ -324,6 +325,42 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
               <Table groups={st().live.groups} sides={props.sides} />
             </Show>
             <div class="sig-cap">
+              <b>At the line · replayed</b>
+              <span class="dim">price reaching the line of two drives, entered there</span>
+            </div>
+            <Show when={st().touches.replayed.length > 0} fallback={<div class="sig-note dim">Replayed with the patterns a few minutes after the server starts.</div>}>
+              <TouchTable groups={st().touches.replayed} sides={props.sides} />
+            </Show>
+            <div class="sig-cap">
+              <b>At the line · live</b>
+              <span class="dim">
+                {st().touches.live.since ? `since ${day(st().touches.live.since!)}` : 'from the first touch'}
+                {st().touches.live.open ? ` · ${st().touches.live.open} still open` : ''}
+              </span>
+            </div>
+            <Show when={st().touches.live.groups.some((g) => g.n > 0)} fallback={<div class="sig-note dim">None has played out yet.</div>}>
+              <TouchTable groups={st().touches.live.groups} sides={props.sides} />
+            </Show>
+            <For each={st().touches.recent.filter((t) => props.sides.includes(t.side))}>
+              {(t) => (
+                <button class="sig-row played" classList={{ shown: isShown(touchPattern(t)) }} data-tip={`${t.became ? BECAME[t.became] : 'not yet known'} — open it on the chart`} onClick={() => props.onOpen(touchPattern(t))}>
+                  <span class={`sig-out ${t.outcome ?? 'open'}`} data-tip={t.outcome ? TOUCH_OUTCOME[t.outcome] : 'Still open'}>
+                    {t.outcome ? `${OUTCOME[t.outcome][0]} ${t.outcome === 'stop' ? 'Breakout' : OUTCOME[t.outcome][1]}` : '… Open'}
+                  </span>
+                  <span class="sig-coin">
+                    <span class={t.side}>{t.side === 'bear' ? '▼' : '▲'}</span>
+                    <b>{symbolOf(t.market)}</b>
+                    <VenueTag market={t.market} />
+                  </span>
+                  <span class="sig-drives dim">{t.became ? BECAME[t.became] : '—'}</span>
+                  <span class="sig-score num" classList={{ bull: (t.ret ?? 0) > 0, bear: (t.ret ?? 0) < 0 }}>
+                    {t.outcome ? pct(t.ret) : '—'}
+                  </span>
+                  <span class="sig-age num dim">{day(t.touchedAt).slice(5)}</span>
+                </button>
+              )}
+            </For>
+            <div class="sig-cap">
               <b>Latest</b>
               <span class="dim">entered at the close the scan read when it turned</span>
             </div>
@@ -352,6 +389,50 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
         )}
       </Show>
     </div>
+  );
+}
+
+const TOUCH_OUTCOME: Record<SignalOutcome, string> = {
+  target: 'Reached the pullback after the second drive first',
+  stop: 'Closed an ATR through the line first: a breakout',
+  expired: 'Neither in four days',
+  passed: 'Already past its target',
+};
+
+function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull')[] }) {
+  return (
+    <table class="grid sig-table">
+      <thead>
+        <tr>
+          <th />
+          <th class="num" data-tip="Times price reached a line">Touches</th>
+          <th class="num" data-tip="The two drives became three within four days">3 drives</th>
+          <th class="num" data-tip="And Stochastic RSI turned">Turned</th>
+          <th class="num" data-tip="Reached the pullback after the second drive first">Target</th>
+          <th class="num" data-tip="Closed an ATR through the line first">Breakout</th>
+          <th class="num" data-tip="The average move from the touch to the exit, the pattern's way">Avg</th>
+        </tr>
+      </thead>
+      <tbody>
+        <For each={props.groups.filter((g) => props.sides.includes(g.side))}>
+          {(g) => (
+            <tr class="head">
+              <td>
+                <span class={g.side}>{g.side === 'bear' ? '▼ Bearish' : '▲ Bullish'}</span>
+              </td>
+              <td class="num">{g.n}</td>
+              <td class="num">{share(g.pattern, g.n)}</td>
+              <td class="num">{share(g.turned, g.n)}</td>
+              <td class="num bull">{share(g.target, g.n)}</td>
+              <td class="num bear" data-tip={`Neither in four days: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
+              <td class="num" classList={{ bull: g.ret > 0, bear: g.ret < 0 }} data-tip={`At best ${pct(g.best)}, at worst ${pct(g.worst)} on the way, on average`}>
+                {g.n ? pct(g.ret) : '—'}
+              </td>
+            </tr>
+          )}
+        </For>
+      </tbody>
+    </table>
   );
 }
 
