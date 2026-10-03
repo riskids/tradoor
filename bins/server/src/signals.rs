@@ -41,7 +41,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 1;
+const VERSION: i32 = 2;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;

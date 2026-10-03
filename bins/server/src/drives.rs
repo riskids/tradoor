@@ -81,7 +81,7 @@ pub struct Found {
     /// Where the pattern says price goes: back to the pullback before the
     /// third drive — its low for the bearish pattern, its high for the bullish.
     pub target: f64,
-    /// Where it is wrong: past the third drive.
+    /// Where it is wrong: a close past the third drive.
     pub stop: f64,
 }
 
@@ -96,20 +96,9 @@ pub fn find(candles: &[Candle], side: Side) -> Option<Found> {
 /// Nothing after that bar is looked at to find it.
 pub fn history(candles: &[Candle], side: Side) -> Vec<(usize, Found)> {
     let Some(p) = Prepared::new(candles, side) else { return Vec::new() };
-    let last = candles.len() - 1;
-    let mut out = Vec::new();
-    for (zi, third) in p.pivots.iter().enumerate() {
-        let Some(shape) = p.shape(zi) else { continue };
-        for at in third.confirmed_at..=(third.confirmed_at + WAIT_BARS).min(last) {
-            // A newer drive, a break, or the wait run out: it never turned.
-            let Some(found) = p.judge(&shape, at) else { break };
-            if found.turn.is_some() {
-                out.push((at, found));
-                break;
-            }
-        }
-    }
-    out
+    let mut told = std::collections::HashSet::new();
+    // A scan at every bar, as the live ones run, each pattern taken the first time one sees it turned.
+    (0..candles.len()).filter_map(|at| p.at(at).filter(|f| f.turn.is_some() && told.insert(f.drives[2].index)).map(|f| (at, f))).collect()
 }
 
 /// How a pattern played out after it was reported at `entry`: target or stop
@@ -164,14 +153,16 @@ pub fn outcome(side: Side, entry: f64, target: f64, stop: f64, after: &[Candle])
     for (i, k) in after.iter().take(OUTCOME_BARS).enumerate() {
         let (with, against) = if bear { (k.low, k.high) } else { (k.high, k.low) };
         out.bars = i + 1;
-        // Both in one bar: which came first is not known, so the stop is taken.
-        if (bear && against >= stop) || (!bear && against <= stop) {
-            out.worst = out.worst.min(pct(stop));
-            (out.result, out.ret) = (Hit::Stop, pct(stop));
+        out.worst = out.worst.min(pct(against));
+        // Stopped by a close past the third drive — a wick through it is a
+        // retest, not the end — and out at that close. A bar that closes past
+        // it after touching the target counts as the stop: which came first
+        // is not known.
+        if (bear && k.close > stop) || (!bear && k.close < stop) {
+            (out.result, out.ret) = (Hit::Stop, pct(k.close));
             return out;
         }
         out.best = out.best.max(pct(with));
-        out.worst = out.worst.min(pct(against));
         if (bear && with <= target) || (!bear && with >= target) {
             (out.result, out.ret) = (Hit::Target, pct(target));
             return out;
@@ -191,6 +182,7 @@ fn mirror(c: &Candle) -> Candle {
 
 /// The geometry of three drives ending at one pivot: which earlier pivots are
 /// the first two, how well the third sits on their line, and its pullback.
+#[derive(Clone, Copy)]
 struct Shape {
     a: usize,
     b: usize,
@@ -211,6 +203,8 @@ struct Prepared {
     k: Vec<Option<f64>>,
     d: Vec<Option<f64>>,
     pivots: Vec<tradoor_core::indicators::Pivot>,
+    /// Each pivot's shape, worked out the first time it is asked for.
+    shapes: Vec<std::cell::OnceCell<Option<Shape>>>,
 }
 
 impl Prepared {
@@ -225,23 +219,24 @@ impl Prepared {
         let high: Vec<Option<f64>> = c.iter().map(|k| Some(k.high)).collect();
         let close: Vec<Option<f64>> = c.iter().map(|k| Some(k.close)).collect();
         let stoch = stoch_rsi(&close, 14, 14, 3, 3);
-        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots: pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT), c })
+        let pivots = pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT);
+        let shapes = (0..pivots.len()).map(|_| std::cell::OnceCell::new()).collect();
+        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots, shapes, c })
     }
 
     fn atr_at(&self, i: usize) -> Option<f64> {
         self.atr[i].filter(|a| *a > 0.0)
     }
 
-    /// The pattern as a scan reading up to `last` would see it: the newest
-    /// drive known by then that ends one. A smaller high since — a pause in
-    /// the pullback, or a quiet weekend's wobble — does not hide one standing.
+    /// The pattern as a scan reading up to `last` would see it: the oldest one
+    /// still standing among the drives recent enough to end one. A high since —
+    /// a bounce in the pullback, a wick past the third drive, a quiet weekend's
+    /// wobble — does not take its place while it stands.
     fn at(&self, last: usize) -> Option<Found> {
         let horizon = last.saturating_sub(WAIT_BARS + KEEP_BARS + PIVOT_RIGHT);
         (0..self.pivots.len())
-            .rev()
-            .filter(|&zi| self.pivots[zi].confirmed_at <= last)
-            .take_while(|&zi| self.pivots[zi].index >= horizon)
-            .find_map(|zi| self.judge(&self.shape(zi)?, last))
+            .filter(|&zi| self.pivots[zi].index >= horizon && self.pivots[zi].confirmed_at <= last)
+            .find_map(|zi| self.judge(self.shapes[zi].get_or_init(|| self.shape(zi)).as_ref()?, last))
     }
 
     /// Three drives ending at pivot `zi`, if its earlier pivots make them. Only
@@ -304,8 +299,8 @@ impl Prepared {
         let c = &self.c;
         let Shape { a, b, z, fit, target } = *shape;
         let top = c[z].high;
-        // Outdone since: the newer high is the pattern now, if any is.
-        if c[z + 1..=last].iter().any(|k| k.high >= top) {
+        // Outdone: a close past the third drive. A wick past it is a retest.
+        if c[z + 1..=last].iter().any(|k| k.close > top) {
             return None;
         }
         let atr_z = self.atr_at(z)?;
@@ -430,7 +425,12 @@ mod tests {
         let won = outcome(Side::Bear, 116.0, 104.5, 120.5, &[bar(118.0, 112.0), bar(113.0, 104.0)]);
         assert_eq!((won.result, won.bars), (Hit::Target, 2));
         assert!((won.ret - (116.0 - 104.5) / 116.0 * 100.0).abs() < 1e-9);
-        assert_eq!(outcome(Side::Bear, 116.0, 104.5, 120.5, &[bar(121.0, 104.0)]).result, Hit::Stop, "both in one bar: the stop, not knowing which came first");
+        let closing = |high: f64, low: f64, close: f64| Candle { close, ..bar(high, low) };
+        assert_eq!(outcome(Side::Bear, 116.0, 104.5, 120.5, &[closing(122.0, 104.0, 121.0)]).result, Hit::Stop, "the target touched, then a close past the stop: not knowing which came first, the stop");
+        let retest = outcome(Side::Bear, 116.0, 104.5, 120.5, &[closing(121.5, 115.0, 117.0), bar(113.0, 104.0)]);
+        assert_eq!(retest.result, Hit::Target, "a wick past the third drive is a retest, not the stop");
+        let stopped = outcome(Side::Bear, 116.0, 104.5, 120.5, &[closing(123.0, 117.0, 122.0)]);
+        assert!((stopped.ret - (116.0 - 122.0) / 116.0 * 100.0).abs() < 1e-9, "out at the close that stopped it");
         let flat = vec![bar(117.0, 115.0); OUTCOME_BARS];
         let expired = outcome(Side::Bear, 116.0, 104.5, 120.5, &flat);
         assert_eq!((expired.result, expired.ret), (Hit::Expired, 0.0));
@@ -474,6 +474,17 @@ mod tests {
         assert!(Prepared::new(&bars, Side::Bear).unwrap().pivots.iter().any(|p| p.index == 129), "the bounce is a high of its own");
         let found = find(&bars, Side::Bear).expect("still three drives");
         assert_eq!(found.drives[2].index, 120);
+    }
+
+    #[test]
+    fn a_wick_past_the_third_drive_leaves_it_standing() {
+        let mut bars = three_up(&[(126, 114.0)]);
+        bars[123].high = 122.0;
+        let found = find(&bars, Side::Bear).expect("a wick is a retest");
+        assert_eq!(found.drives[2].index, 120);
+        // A close past it, well off the line: not a drive on it either.
+        (bars[123].high, bars[123].close) = (125.0, 124.0);
+        assert!(find(&bars, Side::Bear).is_none(), "a close past it ends it");
     }
 
     #[test]

@@ -165,8 +165,9 @@ the line through the first two, nothing between them poking more than half an
 ATR through it, and a real pullback between each — two ATRs, and at least 38%
 of the push before. It turns when Stochastic RSI (14 14 3 3, the chart's own)
 crosses down having been over 80 in the three bars before; a pattern waits two
-days for that and stays news two days after, and a close an ATR through the
-line ends it. The bullish search is the same run on the bars mirrored. The
+days for that and stays news two days after, and a close past the third drive
+ends it — a wick past it is a retest. A scan takes the oldest pattern still
+standing among the recent drives, so a later high does not take its place. The bullish search is the same run on the bars mirrored. The
 score adds how well the third drive sits on the line, RSI weaker at it than at
 the second, even spacing, volume fading and the turn. A row opens its market at
 four hours with the line and the drives' numbered circles drawn — locked, and
@@ -176,12 +177,11 @@ turn it on, hears once per scan of the patterns that turned in it.
 
 The record says how they went. A pattern that turned is entered at the close
 the scan read; its target is the pullback before the third drive and its stop
-the third drive itself, and each scan after weighs the bars since — target or
-stop first, a bar touching both counted as the stop, or neither within four
-days. The same rules are replayed weekly, and whenever `VERSION` in `signals`
+a close past the third drive, out at that close; each scan after weighs the
+bars since — target or stop first, a bar touching the target and closing past
+the stop counted as the stop, or neither within four days. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each
-bar, seeing nothing after it, which is why the detector keeps its shape (read
-up to the third drive) apart from its judgement as of a bar. The panel's Record
+bar, seeing nothing after it: the replay runs the live scan at every bar. The panel's Record
 shows both by side, score and divergence, with the latest live patterns.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
