@@ -397,36 +397,38 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     };
     let now = now_ms();
     let scan = client.query_opt("SELECT bar, at, markets FROM signal_scan ORDER BY bar DESC LIMIT 1", &[]).await?;
-    let signals = match &scan {
-        Some(scan) => client
-            .query(
-                "SELECT id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret FROM signal
-                 WHERE seen_bar = $1 ORDER BY turned_at IS NULL, score DESC, market",
-                &[&scan.get::<_, i64>(0)],
-            )
-            .await?
-            .iter()
-            .map(|r| {
-                json!({
-                    "id": r.get::<_, i64>(0),
-                    "market": r.get::<_, String>(1),
-                    "side": r.get::<_, String>(2),
-                    "drives": r.get::<_, Value>(3),
-                    "turnedAt": r.get::<_, Option<i64>>(4),
-                    "turnPrice": r.get::<_, Option<f64>>(5),
-                    "score": r.get::<_, i32>(6),
-                    "divergence": r.get::<_, bool>(7),
-                    "price": r.get::<_, f64>(8),
-                    "foundAt": r.get::<_, i64>(9),
-                    "target": r.get::<_, Option<f64>>(10),
-                    "stop": r.get::<_, Option<f64>>(11),
-                    "entry": r.get::<_, Option<f64>>(12),
-                    "outcome": r.get::<_, Option<String>>(13),
-                    "ret": r.get::<_, Option<f64>>(14),
-                })
-            })
-            .collect(),
-        None => Vec::new(),
+    let row = |r: &tokio_postgres::Row| {
+        json!({
+            "id": r.get::<_, i64>(0),
+            "market": r.get::<_, String>(1),
+            "side": r.get::<_, String>(2),
+            "drives": r.get::<_, Value>(3),
+            "turnedAt": r.get::<_, Option<i64>>(4),
+            "turnPrice": r.get::<_, Option<f64>>(5),
+            "score": r.get::<_, i32>(6),
+            "divergence": r.get::<_, bool>(7),
+            "price": r.get::<_, f64>(8),
+            "foundAt": r.get::<_, i64>(9),
+            "target": r.get::<_, Option<f64>>(10),
+            "stop": r.get::<_, Option<f64>>(11),
+            "entry": r.get::<_, Option<f64>>(12),
+            "outcome": r.get::<_, Option<String>>(13),
+            "ret": r.get::<_, Option<f64>>(14),
+            "lastSeen": r.get::<_, i64>(15),
+        })
+    };
+    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar";
+    let (signals, ended) = match &scan {
+        Some(scan) => {
+            let bar: i64 = scan.get(0);
+            let now = client.query(&format!("SELECT {COLUMNS} FROM signal WHERE seen_bar = $1 ORDER BY turned_at IS NULL, score DESC, market"), &[&bar]).await?;
+            // Turned, and gone from the list within the last day: the reader saw them, and should see why they went.
+            let gone = client
+                .query(&format!("SELECT {COLUMNS} FROM signal WHERE turned_at IS NOT NULL AND seen_bar < $1 AND seen_bar >= $1 - $2 ORDER BY seen_bar DESC, score DESC"), &[&bar, &(6 * STEP)])
+                .await?;
+            (now.iter().map(row).collect::<Vec<_>>(), gone.iter().map(row).collect::<Vec<_>>())
+        }
+        None => (Vec::new(), Vec::new()),
     };
     Ok(Json(json!({
         "scannedAt": scan.as_ref().map(|s| s.get::<_, i64>(1)),
@@ -438,6 +440,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         "telegram": state.telegram.is_some(),
         "linked": linked,
         "signals": signals,
+        "ended": ended,
     })))
 }
 

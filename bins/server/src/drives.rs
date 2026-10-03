@@ -232,11 +232,16 @@ impl Prepared {
         self.atr[i].filter(|a| *a > 0.0)
     }
 
-    /// The pattern as a scan reading up to `last` would see it.
+    /// The pattern as a scan reading up to `last` would see it: the newest
+    /// drive known by then that ends one. A smaller high since — a pause in
+    /// the pullback, or a quiet weekend's wobble — does not hide one standing.
     fn at(&self, last: usize) -> Option<Found> {
-        // The third drive is the newest drive known by then.
-        let zi = self.pivots.iter().rposition(|p| p.confirmed_at <= last)?;
-        self.judge(&self.shape(zi)?, last)
+        let horizon = last.saturating_sub(WAIT_BARS + KEEP_BARS + PIVOT_RIGHT);
+        (0..self.pivots.len())
+            .rev()
+            .filter(|&zi| self.pivots[zi].confirmed_at <= last)
+            .take_while(|&zi| self.pivots[zi].index >= horizon)
+            .find_map(|zi| self.judge(&self.shape(zi)?, last))
     }
 
     /// Three drives ending at pivot `zi`, if its earlier pivots make them. Only
@@ -460,6 +465,15 @@ mod tests {
         // Without the pullbacks there is a trend, not three drives.
         let shallow = [(0, 95.0), (60, 110.0), (75, 109.5), (90, 115.0), (105, 114.5), (120, 120.0), (126, 114.0)];
         assert!(find(&legs(&shallow), Side::Bear).is_none());
+    }
+
+    #[test]
+    fn a_smaller_high_after_the_third_drive_does_not_hide_it() {
+        // A bounce in the pullback makes a high of its own, under the third drive.
+        let bars = three_up(&[(126, 114.0), (129, 116.8), (131, 115.0)]);
+        assert!(Prepared::new(&bars, Side::Bear).unwrap().pivots.iter().any(|p| p.index == 129), "the bounce is a high of its own");
+        let found = find(&bars, Side::Bear).expect("still three drives");
+        assert_eq!(found.drives[2].index, 120);
     }
 
     #[test]

@@ -13,7 +13,7 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats } from '../lib/api';
+import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats } from '../lib/api';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice } from '../lib/format';
 import { Icon } from '../lib/icons';
@@ -81,6 +81,14 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
   onCleanup(() => clearInterval(timer));
 
   const signals = () => (state()?.signals ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
+  const ended = () => (state()?.ended ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
+  /** Why a pattern left the list: how it played out, or that it had been news for two days. */
+  const why = (s: Signal): string => {
+    if (s.outcome === 'stop') return 'went past the third drive';
+    if (s.outcome === 'target') return 'reached its target';
+    if (s.outcome === 'expired') return 'neither in four days';
+    return s.turnedAt !== null && s.lastSeen - s.turnedAt >= 44 * 3_600_000 ? 'two days since it turned' : 'no longer three drives';
+  };
   const sides = (): ('bear' | 'bull')[] => (props.panel.side === 'all' ? ['bear', 'bull'] : [props.panel.side]);
 
   // The record, read when it is looked at and again with the list.
@@ -201,6 +209,30 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
             );
           }}
         </For>
+        <Show when={ended().length > 0}>
+          <div class="sig-cap">
+            <b>Ended</b>
+            <span class="dim">left the list in the last day</span>
+          </div>
+          <For each={ended()}>
+            {(s) => (
+              <button class="sig-row ended" classList={{ shown: isShown(s) }} data-tip={`${why(s)}${s.ret !== null && s.outcome ? ` · ${pct(s.ret)}` : ''} — open it on the chart`} onClick={() => open(s)}>
+                <span class={`sig-out ${s.outcome ?? 'gone'}`}>
+                  {s.outcome ? OUTCOME[s.outcome][0] : '·'}
+                  <span class="word"> {s.outcome ? OUTCOME[s.outcome][1].toUpperCase() : 'ENDED'}</span>
+                </span>
+                <span class="sig-coin">
+                  <span class={s.side}>{s.side === 'bear' ? '▼' : '▲'}</span>
+                  <b>{symbolOf(s.market)}</b>
+                  <VenueTag market={s.market} />
+                </span>
+                <span class="sig-drives dim">{why(s)}</span>
+                <span class="sig-score num">{s.score}</span>
+                <span class="sig-age num dim">{since(s.lastSeen, now())}</span>
+              </button>
+            )}
+          </For>
+        </Show>
       </div>
       </Show>
     </div>

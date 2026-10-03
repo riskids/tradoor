@@ -263,6 +263,8 @@ export interface Signal {
   /** How it played out, once it has; and the move so far, the pattern's way. */
   outcome: SignalOutcome | null;
   ret: number | null;
+  /** The close of the newest bar of the last scan that saw it. */
+  lastSeen: number;
 }
 
 /** Target or stop first, neither within four days, or already past the target when it turned. */
@@ -324,6 +326,8 @@ export interface SignalsState {
   telegram: boolean;
   linked: boolean;
   signals: Signal[];
+  /** Patterns that had turned and left the list within the last day. */
+  ended: Signal[];
 }
 
 /** A Telegram chat an alert is sent to. */
