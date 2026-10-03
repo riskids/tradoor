@@ -108,7 +108,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
-| `signal_scan`, `signal`, `signal_watch`, `signal_backtest_run`, `signal_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
+| `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -174,6 +174,16 @@ four hours with the line and the drives' numbered circles drawn — locked, and
 gone when closed or the market changes, unless Keep drawings saves them as the
 chart's own (`circle` is a drawing kind for that). Telegram, for readers who
 turn it on, hears once per scan of the patterns that turned in it.
+
+Between scans the third drive is caught as it happens. Each scan also keeps,
+for every coin and side without a pattern, the newest two drives that wait for
+a third — the pullback after the second made, the line not yet reached
+(`drives::setup`, table `signal_setup`). Every fifteen seconds live prices —
+Binance's perpetuals all in one ask, Bybit's one by one — are weighed against
+those lines: price past the second drive by half an ATR and within an ATR of
+the line marks the setup AT LINE, shown at the top of the list and told at
+once to readers who turned that on (a second Telegram switch). The bars still
+have to close and Stochastic RSI to turn for it to be a pattern.
 
 The record says how they went. A pattern that turned is entered at the close
 the scan read; its target is the pullback before the third drive and its stop

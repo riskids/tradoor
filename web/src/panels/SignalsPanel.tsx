@@ -13,7 +13,8 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats } from '../lib/api';
+import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats, type SignalTouch } from '../lib/api';
+import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice } from '../lib/format';
 import { Icon } from '../lib/icons';
@@ -33,11 +34,14 @@ const SIDES = [
 
 /** A price to five figures: a pattern's levels carry no exchange's tick. */
 const price = (v: number) => formatPrice(v, Math.min(8, Math.max(2, 4 - Math.floor(Math.log10(Math.abs(v) || 1)))));
-/** `5h`, `2d`: how long since. */
+/** `12m`, `5h`, `2d`: how long since. */
 const since = (at: number, now: number) => {
-  const hours = Math.max(0, Math.floor((now - at) / 3_600_000));
+  const minutes = Math.max(0, Math.floor((now - at) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
   return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 };
+const FOUR_HOURS = 4 * 3_600_000;
 /** Any pattern a row can open: the list's, or the record's. */
 interface Openable {
   market: string;
@@ -45,7 +49,17 @@ interface Openable {
   drives: SignalPoint[];
   score: number;
   divergence: boolean;
+  stage?: 'line';
 }
+/** A touch as a pattern to draw: its two drives, and the third where price reached the line, on that bar. */
+const touchPattern = (t: SignalTouch): Openable => ({
+  market: t.market,
+  side: t.side,
+  drives: [...t.drives, { at: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS, price: t.touchPrice }],
+  score: 0,
+  divergence: false,
+  stage: 'line',
+});
 const isShown = (s: Openable) => {
   const p = shownPattern();
   return p !== null && p.market === s.market && p.drives[2]?.at === s.drives[2]?.at;
@@ -82,6 +96,9 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
 
   const signals = () => (state()?.signals ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
   const ended = () => (state()?.ended ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
+  const touches = () => (state()?.touches ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
+  const [telegramMenu, setTelegramMenu] = createSignal(false);
+  useDismiss(telegramMenu, () => setTelegramMenu(false));
   /** Why a pattern left the list: how it played out, or that it had been news for two days. */
   const why = (s: Signal): string => {
     if (s.outcome === 'stop') return 'went past the third drive';
@@ -113,17 +130,17 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
     const target = props.panel.link ? props.panel : targetChart();
     if (!target) return;
     batch(() => {
-      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence });
+      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage });
       setPanelMarket(target.id, s.market);
       setPanelTimeframe(target.id, '4h');
     });
   };
 
-  const setNotify = async (notify: boolean) => {
+  const setNotify = async (patch: { notify?: boolean; touch?: boolean }) => {
     try {
-      await api.signalsNotify(notify);
+      await api.signalsNotify(patch);
       await load();
-      if (notify && !state()?.linked) toast({ tone: 'warn', title: 'No Telegram chat linked', body: 'Link one in Settings → Telegram, and turned patterns will reach it.' });
+      if ((patch.notify || patch.touch) && !state()?.linked) toast({ tone: 'warn', title: 'No Telegram chat linked', body: 'Link one in Settings → Telegram, and these will reach it.' });
     } catch (e) {
       toast({ tone: 'warn', title: 'Not saved', body: errorText(e) });
     }
@@ -155,14 +172,27 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
         <Show when={state()?.telegram}>
           <button
             class="tb"
-            classList={{ on: state()?.notify }}
-            data-tip={state()?.notify ? 'Telling you on Telegram when a pattern turns — click to stop' : 'Tell me on Telegram when a pattern turns'}
-            onClick={() => void setNotify(!state()?.notify)}
+            classList={{ on: state()?.notify || state()?.notifyTouch }}
+            data-tip="What reaches you on Telegram"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setTelegramMenu((v) => !v)}
           >
-            <Icon name="alarm" size={12} /> Telegram {state()?.notify ? 'on' : 'off'}
+            <Icon name="alarm" size={12} /> Telegram
           </button>
         </Show>
       </div>
+      <Show when={telegramMenu()}>
+        <div class="menu sig-tg" onPointerDown={(e) => e.stopPropagation()}>
+          <button classList={{ cur: state()?.notify }} data-tip="Once per scan, the patterns whose Stochastic RSI turned" onClick={() => void setNotify({ notify: !state()?.notify })}>
+            <span>When a pattern turns</span>
+            <span class="num">{state()?.notify ? 'on' : 'off'}</span>
+          </button>
+          <button classList={{ cur: state()?.notifyTouch }} data-tip="At once, when live price reaches the line of two drives — before the bars confirm a third" onClick={() => void setNotify({ touch: !state()?.notifyTouch })}>
+            <span>When price reaches the line</span>
+            <span class="num">{state()?.notifyTouch ? 'on' : 'off'}</span>
+          </button>
+        </div>
+      </Show>
       <Show when={props.panel.view === 'record'}>
         <Record stats={stats()} sides={sides()} recent={recent()} error={error()} onOpen={open} />
       </Show>
@@ -178,6 +208,31 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
         <span class="dim">{signals().length} found</span>
       </div>
       <div class="scroll">
+        <For each={touches()}>
+          {(t) => {
+            const p = touchPattern(t);
+            return (
+              <button
+                class="sig-row"
+                classList={{ shown: isShown(p) }}
+                data-tip={`Price reached the line through two drives at ${price(t.touchPrice)} — a third drive as it happens, not yet confirmed by closed bars. The line is at ${price(t.lineNow)} now.`}
+                onClick={() => open(p)}
+              >
+                <span class={`sig-state ${t.side} line`}>
+                  {t.side === 'bear' ? '▼' : '▲'}
+                  <span class="word"> AT LINE</span>
+                </span>
+                <span class="sig-coin">
+                  <b>{symbolOf(t.market)}</b>
+                  <VenueTag market={t.market} />
+                </span>
+                <span class="sig-drives num">{p.drives.map((d) => price(d.price)).join(' → ')}</span>
+                <span class="sig-score num dim">—</span>
+                <span class="sig-age num dim">{since(t.touchedAt, now())}</span>
+              </button>
+            );
+          }}
+        </For>
         <For each={signals()} fallback={<Show when={state()?.scannedAt}>{<div class="empty">No three drives on four-hour bars right now.</div>}</Show>}>
           {(s) => {
             const turned = () => s.turnedAt !== null;

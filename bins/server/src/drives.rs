@@ -85,6 +85,44 @@ pub struct Found {
     pub stop: f64,
 }
 
+/// Two drives and the line through them, waiting for a third: what price
+/// reaching the line between scans would make a pattern of. Checked against
+/// live prices (`touched`) rather than closed bars, so the third drive is
+/// known as it happens instead of eight hours on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Setup {
+    pub side: Side,
+    pub drives: [Point; 2],
+    /// The ATR at the newest bar read: how near the line counts as at it.
+    pub atr: f64,
+    /// Where a third drive starts: past the second by half an ATR.
+    pub clear: f64,
+    /// The last moment a third drive keeps the three within forty days.
+    pub until: i64,
+}
+
+impl Setup {
+    /// The line's price at a moment.
+    pub fn line(&self, at: i64) -> f64 {
+        let [a, b] = self.drives;
+        a.price + (b.price - a.price) * (at - a.at) as f64 / (b.at - a.at) as f64
+    }
+
+    /// Price at the line: past the second drive, within an ATR of the line.
+    pub fn touched(&self, price: f64, at: i64) -> bool {
+        let past = match self.side {
+            Side::Bear => price >= self.clear,
+            Side::Bull => price <= self.clear,
+        };
+        past && at <= self.until && (price - self.line(at)).abs() <= ALIGN_ATR * self.atr
+    }
+}
+
+/// The newest two drives on `side` waiting for a third at their line, if any.
+pub fn setup(candles: &[Candle], side: Side) -> Option<Setup> {
+    Prepared::new(candles, side)?.setup()
+}
+
 /// The pattern on `side` whose third drive is the newest, if there is one now.
 pub fn find(candles: &[Candle], side: Side) -> Option<Found> {
     let prepared = Prepared::new(candles, side)?;
@@ -241,6 +279,61 @@ impl Prepared {
 
     /// Three drives ending at pivot `zi`, if its earlier pivots make them. Only
     /// bars up to the third drive are read.
+    /// Two drives as `shape` would take the first two, with the pullback
+    /// after the second already made and the line not yet reached: the newest
+    /// second drive first, then its newest first.
+    fn setup(&self) -> Option<Setup> {
+        let c = &self.c;
+        let last = c.len() - 1;
+        let atr_now = self.atr_at(last)?;
+        let known: Vec<usize> = (0..self.pivots.len()).filter(|&i| self.pivots[i].confirmed_at <= last).collect();
+        for (k, &bi) in known.iter().enumerate().rev().take(LOOK_BACK) {
+            let b = self.pivots[bi];
+            // A third drive in the bar now forming must be a day past the second.
+            if last + 1 < b.index + MIN_GAP {
+                continue;
+            }
+            if last + 1 - b.index > MAX_SPAN {
+                break;
+            }
+            let Some(atr_b) = self.atr_at(b.index) else { continue };
+            let low_since = c[b.index + 1..=last].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+            for &ai in known[..k].iter().rev().take(LOOK_BACK) {
+                let a = self.pivots[ai];
+                if a.index + MIN_GAP > b.index || last + 1 - a.index > MAX_SPAN || a.value >= b.value || b.value - a.value < CLEAR_ATR * atr_b {
+                    continue;
+                }
+                let before = &c[a.index.saturating_sub(b.index - a.index)..a.index];
+                if before.iter().any(|k| k.high >= a.value) {
+                    continue;
+                }
+                let line = |i: usize| a.value + (b.value - a.value) * (i as f64 - a.index as f64) / (b.index - a.index) as f64;
+                // The line holds up to now: a third drive has not come yet.
+                if (a.index + 1..=last).filter(|i| *i != b.index).any(|i| c[i].high > line(i) + LINE_ATR * self.atr_at(i).unwrap_or(atr_now)) {
+                    continue;
+                }
+                let low_before = before.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+                let low_ab = c[a.index + 1..b.index].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+                if a.value - low_ab < (PULLBACK_ATR * atr_b).max(RETRACE * (a.value - low_before))
+                    || b.value - low_since < (PULLBACK_ATR * atr_now).max(RETRACE * (b.value - low_ab))
+                {
+                    continue;
+                }
+                let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
+                let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
+                let step = c[b.index].open_time - c[b.index - 1].open_time;
+                return Some(Setup {
+                    side: self.side,
+                    drives: [point(a.index, a.value), point(b.index, b.value)],
+                    atr: atr_now,
+                    clear: sign * (b.value + CLEAR_ATR * atr_b),
+                    until: c[a.index].open_time + MAX_SPAN as i64 * step,
+                });
+            }
+        }
+        None
+    }
+
     fn shape(&self, zi: usize) -> Option<Shape> {
         let c = &self.c;
         let third = self.pivots[zi];
@@ -485,6 +578,25 @@ mod tests {
         // A close past it, well off the line: not a drive on it either.
         (bars[123].high, bars[123].close) = (125.0, 124.0);
         assert!(find(&bars, Side::Bear).is_none(), "a close past it ends it");
+    }
+
+    #[test]
+    fn two_drives_wait_for_the_third_at_their_line() {
+        // Drives at 110.5 and 115.5, the pullback to 105 made, price on its way back up.
+        let bars = three_up(&[])[..115].to_vec();
+        let setup = setup(&bars, Side::Bear).expect("two drives and a line");
+        assert_eq!(setup.drives.map(|d| d.index), [60, 90]);
+        let at = 120 * H4;
+        assert!((setup.line(at) - 120.5).abs() < 1e-9, "the line reaches 120.5 where the third drive came");
+        assert!(setup.touched(120.2, at), "at the line, past the second drive");
+        assert!(!setup.touched(118.0, at), "short of it");
+        assert!(!setup.touched(124.0, at), "well through it is a breakout, not a drive");
+        assert!(!setup.touched(115.7, 91 * H4), "near the line, but not past the second drive by half an ATR");
+        // Before the pullback after the second drive there is nothing to wait for.
+        assert!(super::setup(&three_up(&[])[..95], Side::Bear).is_none());
+        // Once the third drive is there and pulled back from, it is the second of the next two
+        // (the screener keeps a pattern found ahead of a setup on the same side).
+        assert_eq!(super::setup(&three_up(&[(126, 114.0)]), Side::Bear).map(|s| s.drives.map(|d| d.index)), Some([90, 120]));
     }
 
     #[test]

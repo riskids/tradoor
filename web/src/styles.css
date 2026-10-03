@@ -596,7 +596,11 @@ table.venues tr.off td { color: var(--dim); }
 }
 
 /* Signal: the screener's patterns, those that turned first. */
-.sig { container-type: inline-size; }
+.sig { position: relative; container-type: inline-size; }
+.sig-tg { right: 4px; top: 25px; min-width: 240px; }
+.sig-tg button .num { color: var(--dim); }
+.sig-tg button.cur .num { color: var(--primary); }
+.sig-state.line { color: var(--warn); }
 .sig-sub { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; }
 .sig-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto 62px 30px; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); text-align: left; font-size: 11px; color: var(--text); }
 .sig-row:hover { background: var(--surface-2); }

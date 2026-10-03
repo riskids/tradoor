@@ -78,6 +78,8 @@ export interface ShownPattern {
   drives: { at: number; price: number }[];
   score: number;
   divergence: boolean;
+  /** At the line: the third drive is price reaching it now, not yet a closed bar. */
+  stage?: 'line';
 }
 export const [shownPattern, setShownPattern] = createSignal<ShownPattern | null>(null);
 

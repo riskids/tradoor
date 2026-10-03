@@ -1116,8 +1116,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               <div class="pattern-bar" onPointerDown={(e) => e.stopPropagation()}>
                 <span class={p().side === 'bear' ? 'bear' : 'bull'}>{p().side === 'bear' ? '▼' : '▲'} Three drives</span>
                 <span class="dim">
-                  score {p().score}
-                  {p().divergence ? ' · RSI divergence' : ''}
+                  {p().stage === 'line' ? 'at the line · not confirmed yet' : `score ${p().score}${p().divergence ? ' · RSI divergence' : ''}`}
                 </span>
                 <button class="tb" data-tip="Save the line and the circles as drawings on this chart" onClick={() => keepPattern(p())}>
                   Keep drawings

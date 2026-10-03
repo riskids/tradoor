@@ -313,6 +313,19 @@ export interface SignalStats {
   recent: SignalPlayed[];
 }
 
+/** Price reaching the line of two drives between scans: a third drive as it happens. */
+export interface SignalTouch {
+  market: string;
+  side: 'bear' | 'bull';
+  /** The first two drives. */
+  drives: SignalPoint[];
+  touchedAt: number;
+  touchPrice: number;
+  /** The line's price when it was reached, and now. */
+  line: number;
+  lineNow: number;
+}
+
 export interface SignalsState {
   scannedAt: number | null;
   /** The close of the newest bar the latest scan read. */
@@ -320,14 +333,17 @@ export interface SignalsState {
   markets: number;
   nextAt: number;
   timeframe: string;
-  /** Whether this browser is told on Telegram when a pattern turns. */
+  /** Whether this browser is told on Telegram when a pattern turns, and when price reaches a line. */
   notify: boolean;
+  notifyTouch: boolean;
   /** Whether the server has a bot, and this browser a chat linked to it. */
   telegram: boolean;
   linked: boolean;
   signals: Signal[];
   /** Patterns that had turned and left the list within the last day. */
   ended: Signal[];
+  /** Setups whose line price has reached since the latest scan. */
+  touches: SignalTouch[];
 }
 
 /** A Telegram chat an alert is sent to. */
@@ -386,7 +402,7 @@ export const api = {
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   signals: () => json<SignalsState>('/api/signals'),
   signalStats: () => json<SignalStats>('/api/signals/stats'),
-  signalsNotify: (notify: boolean) => json<{ notify: boolean }>('/api/signals/notify', { method: 'PUT', body: { notify } }),
+  signalsNotify: (patch: { notify?: boolean; touch?: boolean }) => json<{ notify: boolean; touch: boolean }>('/api/signals/notify', { method: 'PUT', body: patch }),
   flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
   flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),
   flowUnfollow: (coin: string) => json<{ coin: string }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'DELETE' }),
