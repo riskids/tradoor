@@ -92,6 +92,9 @@ export interface ChartStatus {
   relayed: boolean;
   /** The oldest bar there is has been loaded. */
   exhausted: boolean;
+  /** What the status is of: the market and timeframe last asked for. */
+  market?: string;
+  timeframe?: string;
 }
 
 export interface ProfileLevels {

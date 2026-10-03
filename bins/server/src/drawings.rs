@@ -20,7 +20,7 @@ use tradoor_venues::MarketRef;
 
 use crate::api::{owner, ApiError, ApiResult, AppState};
 
-pub const KINDS: [&str; 12] = ["path", "trendline", "horizontal", "ray", "rect", "fib", "text", "measure", "long", "short", "brush", "channel"];
+pub const KINDS: [&str; 13] = ["path", "trendline", "horizontal", "ray", "rect", "fib", "text", "measure", "long", "short", "brush", "channel", "circle"];
 /// A style is a flat object of short settings; this bounds what one row may carry.
 pub const MAX_STYLE_BYTES: usize = 8 * 1024;
 pub const MAX_POINTS: usize = 2000;
@@ -31,7 +31,7 @@ pub const MAX_PER_OWNER: i64 = 20_000;
 /// than an exact count.
 pub fn arity(kind: &str) -> Option<(usize, bool)> {
     Some(match kind {
-        "horizontal" | "ray" | "text" => (1, false),
+        "horizontal" | "ray" | "text" | "circle" => (1, false),
         "trendline" | "rect" | "fib" | "measure" => (2, false),
         "long" | "short" | "channel" => (3, false),
         "path" | "brush" => (2, true),

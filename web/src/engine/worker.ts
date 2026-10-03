@@ -641,7 +641,7 @@ class Slot {
   }
 
   private setStatus(patch: Partial<ChartStatus>): void {
-    const next = { ...this.status, ...patch };
+    const next = { ...this.status, ...patch, market: this.market, timeframe: this.timeframe };
     const keys = Object.keys(next) as (keyof ChartStatus)[];
     if (keys.every((k) => next[k] === this.status[k])) return;
     this.status = next;

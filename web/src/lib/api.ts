@@ -236,6 +236,43 @@ export interface FlowState {
   events: FlowEvent[];
 }
 
+/** A drive's extreme, or where a pattern turned. */
+export interface SignalPoint {
+  at: number;
+  price: number;
+}
+
+/** A pattern the screener found, as its latest scan saw it. */
+export interface Signal {
+  id: number;
+  market: string;
+  side: 'bear' | 'bull';
+  drives: SignalPoint[];
+  /** The bar Stochastic RSI turned on; null while the pattern waits for it. */
+  turnedAt: number | null;
+  turnPrice: number | null;
+  score: number;
+  divergence: boolean;
+  /** The close of the newest bar the scan read. */
+  price: number;
+  foundAt: number;
+}
+
+export interface SignalsState {
+  scannedAt: number | null;
+  /** The close of the newest bar the latest scan read. */
+  bar: number | null;
+  markets: number;
+  nextAt: number;
+  timeframe: string;
+  /** Whether this browser is told on Telegram when a pattern turns. */
+  notify: boolean;
+  /** Whether the server has a bot, and this browser a chat linked to it. */
+  telegram: boolean;
+  linked: boolean;
+  signals: Signal[];
+}
+
 /** A Telegram chat an alert is sent to. */
 export interface TelegramChat {
   chatId: number;
@@ -290,6 +327,8 @@ export const api = {
   telegramTest: () => json<{ sent: number }>('/api/telegram/test', { method: 'POST' }),
   telegramUnlink: (chatId: number) => send(`/api/telegram/${chatId}`, { method: 'DELETE' }),
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
+  signals: () => json<SignalsState>('/api/signals'),
+  signalsNotify: (notify: boolean) => json<{ notify: boolean }>('/api/signals/notify', { method: 'PUT', body: { notify } }),
   flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
   flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),
   flowUnfollow: (coin: string) => json<{ coin: string }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'DELETE' }),

@@ -22,11 +22,14 @@ pub enum DrawingKind {
     Long,
     Short,
     Channel,
+    /// A ring around one point, its label inside: a swing marked, as the
+    /// Signal panel marks a pattern's drives.
+    Circle,
 }
 
 impl DrawingKind {
-    pub const ALL: [DrawingKind; 12] =
-        [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short, Self::Channel];
+    pub const ALL: [DrawingKind; 13] =
+        [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short, Self::Channel, Self::Circle];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -42,6 +45,7 @@ impl DrawingKind {
             Self::Long => "long",
             Self::Short => "short",
             Self::Channel => "channel",
+            Self::Circle => "circle",
         }
     }
 
@@ -52,7 +56,7 @@ impl DrawingKind {
     /// Anchors the kind takes — the minimum for a path or brush.
     pub fn arity(self) -> usize {
         match self {
-            Self::Horizontal | Self::Ray | Self::Text => 1,
+            Self::Horizontal | Self::Ray | Self::Text | Self::Circle => 1,
             Self::Long | Self::Short | Self::Channel => 3,
             _ => 2,
         }
@@ -69,6 +73,8 @@ impl DrawingKind {
 
 pub const FIB_LEVELS: [f64; 7] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
 pub const MAX_POINTS: usize = 2000;
+/// A circle's radius on screen, whatever the zoom: it marks a bar, not a range.
+const CIRCLE_PX: f32 = 11.0;
 /// The narrowest a position box is drawn, so a fresh one is never a sliver.
 const MIN_POSITION_WIDTH: f32 = 40.0;
 
@@ -157,6 +163,8 @@ pub struct DrawingStyle {
     pub compact: bool,
     /// A position's figures stay up; otherwise they show on hover or selection.
     pub always_stats: bool,
+    /// Shown but not picked up: the pointer passes through it.
+    pub locked: bool,
 }
 
 impl DrawingStyle {
@@ -204,6 +212,7 @@ impl DrawingStyle {
             "qtyDecimals" => self.qty_decimals = num().map(|v| v.clamp(0.0, 10.0) as usize),
             "compact" => self.compact = flag(),
             "alwaysStats" => self.always_stats = flag(),
+            "locked" => self.locked = flag(),
             _ => {}
         }
     }
@@ -444,6 +453,15 @@ pub fn paint(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme) {
             }
             if style.price_labels {
                 frame.text(a.0 + 6.0, a.1 + 2.0, format_price(prices[0], digits), text_color, Align::Left, Baseline::Top, font, None, Some(plot));
+            }
+        }
+        (DrawingKind::Circle, _, _) => {
+            if let Some(fill) = fill {
+                frame.circle(a.0, a.1, CIRCLE_PX, fill);
+            }
+            frame.ring(a.0, a.1, CIRCLE_PX, width, color);
+            if let Some(text) = &d.shape.label {
+                frame.text(a.0, a.1, text.clone(), text_color, Align::Center, Baseline::Middle, font, None, Some(plot));
             }
         }
         (DrawingKind::Text, _, _) => {
@@ -725,6 +743,7 @@ pub fn distance(d: &Placed<'_>, cursor: (f32, f32), plot: Rect) -> f32 {
             let (p, q) = extend(d.points[0], d.points[1], plot, ext_left, ext_right);
             distance_to_segment(cursor, p, q)
         }
+        DrawingKind::Circle => ((cursor.0 - d.points[0].0).hypot(cursor.1 - d.points[0].1) - CIRCLE_PX).max(0.0),
         _ => distance_to_drawing(kind.as_str(), &d.points, cursor, &FIB_LEVELS),
     }
 }

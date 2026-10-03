@@ -70,6 +70,17 @@ export function setMagnet(mode: MagnetMode): void {
 /** Off, weak, strong, off again. */
 export const cycleMagnet = (): void => setMagnet(MAGNETS[(MAGNETS.indexOf(magnet()) + 1) % MAGNETS.length]!);
 
+/** A pattern the Signal panel opened, drawn on the charts of its market until
+ *  it is closed or kept (ChartPanel). Shown, not saved. */
+export interface ShownPattern {
+  market: string;
+  side: 'bear' | 'bull';
+  drives: { at: number; price: number }[];
+  score: number;
+  divergence: boolean;
+}
+export const [shownPattern, setShownPattern] = createSignal<ShownPattern | null>(null);
+
 /** The panel whose tab is being dragged, while it is. */
 export const [dragging, setDragging] = createSignal<string | null>(null);
 

@@ -14,7 +14,7 @@
     {
       "name": "app js",
       "path": ["dist/assets/index-*.js", "dist/assets/web-*.js"],
-      "limit": "47.5 kB"
+      "limit": "48 kB"
     },
     {
       "name": "engine worker js",

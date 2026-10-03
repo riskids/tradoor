@@ -4,7 +4,7 @@
  * pointer input.
  */
 import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
-import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, TOOL_KEYS } from '../app/ui';
+import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
 import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
@@ -119,6 +119,26 @@ const splitList = (s: string): string[] =>
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
+
+/** A pattern's side in the colours the chart gives a short and a long. */
+const PATTERN_COLOR = { bear: '#f23645', bull: '#089981' } as const;
+const FOUR_HOURS = 4 * 3_600_000;
+
+/**
+ * A pattern from the Signal panel as drawings: the line through its first two
+ * drives carried a little past the third, and each drive ringed and numbered.
+ */
+function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; label: string | null; style: Style }[] {
+  const [first, second, third] = p.drives;
+  if (!first || !second || !third) return [];
+  const color = PATTERN_COLOR[p.side];
+  const slope = (second.price - first.price) / (second.at - first.at);
+  const end = third.at + Math.max(2, Math.round((third.at - first.at) * 0.12 / FOUR_HOURS)) * FOUR_HOURS;
+  return [
+    { kind: 'trendline', points: [{ time: first.at, price: first.price }, { time: end, price: first.price + slope * (end - first.at) }], label: null, style: { color: '#d1d4dc', width: 1.5 } },
+    ...p.drives.map((d, i) => ({ kind: 'circle', points: [{ time: d.at, price: d.price }], label: String(i + 1), style: { color, width: 2, textColor: color, fill: `${color}26` } })),
+  ];
+}
 
 export function ChartPanel(props: { panel: ChartPanelState }) {
   const id = props.panel.id;
@@ -416,17 +436,54 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   createEffect(() => send({ t: 'tool', id: sid, value: tool(), style: tool() ? defaultStyle(tool()) : {} }));
   createEffect(() => send({ t: 'magnet', id: sid, value: magnet() }));
   createEffect(() => send({ t: 'selected', id: sid, value: selected() }));
-  // Every timeframe shows the market's drawings, bar those hidden on this one.
+  // Every timeframe shows the market's drawings, bar those hidden on this one,
+  // and a pattern the Signal panel opened here, locked so the pointer passes through.
   createEffect(() => {
     const tf = timeframe();
+    const p = pattern();
     send({
       t: 'drawings',
       id: sid,
-      list: drawings()
-        .filter((d) => visibleOn(d.style, tf))
-        .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style })),
+      list: [
+        ...drawings()
+          .filter((d) => visibleOn(d.style, tf))
+          .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style })),
+        ...(p ? patternParts(p).map((d, i) => ({ id: -1_000_000 - i, ...d, style: { ...d.style, locked: true } })) : []),
+      ],
     });
   });
+
+  // ---------------------------------------------------------------- a pattern shown
+
+  /** The Signal panel's pattern, on this chart when it is on that market's candles. */
+  const pattern = () => {
+    const p = shownPattern();
+    return p && p.market === market() && chartKind() === 'candles' ? p : null;
+  };
+  // Brought into view once its market's four-hour bars are in: from a little
+  // before the first drive to now.
+  let framed: ShownPattern | null = null;
+  createEffect(() => {
+    const p = pattern();
+    const s = status();
+    if (!p || p === framed || s.loading || s.bars === 0 || s.market !== p.market || s.timeframe !== '4h') return;
+    framed = p;
+    showRange((Date.now() - p.drives[0]!.at) / 86_400_000 + 2);
+  });
+  // Leaving its market closes it: coming back later is not asking for it again.
+  createEffect(
+    on(market, (m, prev) => {
+      const p = untrack(shownPattern);
+      if (p && prev === p.market && m !== p.market) setShownPattern(null);
+    }, { defer: true }),
+  );
+  /** The pattern's line and circles saved as this chart's own drawings. */
+  const keepPattern = (p: ShownPattern) => {
+    setShownPattern(null);
+    void (async () => {
+      for (const part of patternParts(p)) await saveDrawing(part);
+    })();
+  };
 
   // ---------------------------------------------------------------- drawings
 
@@ -1053,6 +1110,23 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
               {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · double-click for settings · Delete removes it, esc deselects' : ''}
               <Show when={drawError()}>{(err) => <span class="warn"> ▲ {err()}</span>}</Show>
             </div>
+          </Show>
+          <Show when={pattern()}>
+            {(p) => (
+              <div class="pattern-bar" onPointerDown={(e) => e.stopPropagation()}>
+                <span class={p().side === 'bear' ? 'bear' : 'bull'}>{p().side === 'bear' ? '▼' : '▲'} Three drives</span>
+                <span class="dim">
+                  score {p().score}
+                  {p().divergence ? ' · RSI divergence' : ''}
+                </span>
+                <button class="tb" data-tip="Save the line and the circles as drawings on this chart" onClick={() => keepPattern(p())}>
+                  Keep drawings
+                </button>
+                <button class="iconbtn" aria-label="Close the pattern" data-tip="Close — nothing is saved" onClick={() => setShownPattern(null)}>
+                  <Icon name="close" size={11} />
+                </button>
+              </div>
+            )}
           </Show>
           <Show when={editing() === null && selectedDrawing()}>
             {(d) => <DrawingToolbar drawing={d()} onRestyle={(patch) => restyle(d(), patch)} onSettings={() => setEditing(d().id)} onDelete={() => void deleteDrawing(d().id)} />}

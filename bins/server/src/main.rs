@@ -12,6 +12,7 @@ mod alerts;
 mod api;
 mod catalog;
 mod dns;
+mod drives;
 mod drawings;
 mod flow;
 mod footprint;
@@ -20,6 +21,7 @@ mod limits;
 mod liquidations;
 mod open_interest;
 mod relay;
+mod signals;
 mod telegram;
 mod trades;
 mod workspaces;
@@ -137,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
             let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), admins));
             footprint::Footprint::start(pool.clone(), doh.clone(), catalog.clone());
+            signals::start(pool.clone(), &doh, catalog.clone(), telegram.clone());
             let state = api::AppState {
                 open_interest,
                 flow,

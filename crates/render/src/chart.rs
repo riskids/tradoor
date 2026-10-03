@@ -1906,6 +1906,9 @@ impl Chart {
         let plot = self.panes.first()?.plot;
         for d in &self.drawings {
             let Some(placed) = self.place(d, false) else { continue };
+            if placed.shape.style.locked {
+                continue;
+            }
             let distance = drawings::distance(&placed, (x, y), plot);
             // `<=`: later drawings are painted on top, so the visible one wins a tie.
             if distance <= best_distance {
@@ -2785,6 +2788,26 @@ mod tests {
         assert_eq!(c.take_events(), vec![Event::DeleteRequested(7)]);
         assert!(c.key("Escape"));
         assert!(!c.key("Escape"), "nothing left to cancel");
+    }
+
+    #[test]
+    fn a_circle_is_picked_by_its_ring_and_a_locked_drawing_not_at_all() {
+        let mut c = chart();
+        let price = c.panes[0].scale.price(180.0);
+        let mut circle = DrawingShape::new(Some(3), DrawingKind::Circle, vec![Anchor { time: c.times[400], price }]);
+        circle.label = Some("1".into());
+        c.set_drawings(vec![circle.clone()]);
+        c.render(1_800_000_000_000);
+        let (x, y) = c.place(&c.drawings[0], false).unwrap().points[0];
+        click(&mut c, x + 11.0, y);
+        assert_eq!(c.take_events(), vec![Event::SelectionChanged(Some(3))], "on its ring");
+        assert!(c.key("Escape"));
+        c.take_events();
+        circle.style.locked = true;
+        c.set_drawings(vec![circle]);
+        c.render(1_800_000_000_000);
+        click(&mut c, x + 11.0, y);
+        assert!(!c.take_events().iter().any(|e| matches!(e, Event::SelectionChanged(Some(_)))), "a locked one is only shown");
     }
 
     #[test]

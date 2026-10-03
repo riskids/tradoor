@@ -90,6 +90,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/flow?coin=` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | one coin's flow on every market it is followed on, the coins followed, and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
 | `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, or stop |
+| `GET /api/signals` · `PUT /api/signals/notify` | what the latest screener scan found, with when it ran and runs next; whether this reader is told on Telegram when a pattern turns |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
 | `GET PATCH /api/telegram` · `POST /api/telegram/link` · `POST /api/telegram/test` · `DELETE /api/telegram/{chat}` | the bot's state and this browser's chats; the reader's zone and how long messages stay; a link code; a test message; unlink |
@@ -107,6 +108,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `drawing` | hand-drawn markup per browser id (`x-tradoor-owner`) and market, shown on every timeframe; points as `[{time, price}]`, `style` a flat object of settings |
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
+| `signal_scan`, `signal`, `signal_watch` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days), and who is told when one turns |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -127,7 +129,7 @@ copy stamped for someone else is not opened with — it would show the wrong
 workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used.
 
-Panels: chart, watchlist, values, liquidations, flow and alerts.
+Panels: chart, watchlist, values, liquidations, flow, signal and alerts.
 
 Flow is the net taker volume of a market — what the buyers took across the
 spread less what the sellers did — kept minute by minute for two days
@@ -152,6 +154,25 @@ it lapses and its streams close. Its threshold until the reader sets one is
 three times its usual minute over the last day. Anyone can read the coins being
 followed, and drag the chips into the order they like (kept with the panel);
 only an admin chooses them, at most ten at once.
+
+Signal is the server's screener (`signals`, `drives`). A minute after each
+four-hour close it reads the last five hundred closed bars of the two hundred
+coins with the most turnover on Binance's and Bybit's USDT perpetuals and
+looks for three drives either way: three swing highs (a pivot of five bars
+before and two after), each clearing the last by half an ATR, the first a fresh
+high over as long a stretch as the drives are apart; the third within an ATR of
+the line through the first two, nothing between them poking more than half an
+ATR through it, and a real pullback between each — two ATRs, and at least 38%
+of the push before. It turns when Stochastic RSI (14 14 3 3, the chart's own)
+crosses down having been over 80 in the three bars before; a pattern waits two
+days for that and stays news two days after, and a close an ATR through the
+line ends it. The bullish search is the same run on the bars mirrored. The
+score adds how well the third drive sits on the line, RSI weaker at it than at
+the second, even spacing, volume fading and the turn. A row opens its market at
+four hours with the line and the drives' numbered circles drawn — locked, and
+gone when closed or the market changes, unless Keep drawings saves them as the
+chart's own (`circle` is a drawing kind for that). Telegram, for readers who
+turn it on, hears once per scan of the patterns that turned in it.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels

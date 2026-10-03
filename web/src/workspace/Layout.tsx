@@ -19,6 +19,7 @@ const ValuesPanel = lazy(() => import('../panels/ValuesPanel').then((m) => ({ de
 const AlertsPanel = lazy(() => import('../panels/AlertsPanel').then((m) => ({ default: m.AlertsPanel })));
 const LiquidationsPanel = lazy(() => import('../panels/LiquidationsPanel').then((m) => ({ default: m.LiquidationsPanel })));
 const FlowPanel = lazy(() => import('../panels/FlowPanel').then((m) => ({ default: m.FlowPanel })));
+const SignalsPanel = lazy(() => import('../panels/SignalsPanel').then((m) => ({ default: m.SignalsPanel })));
 
 /** Smallest a cell may be dragged to, in pixels. */
 const MIN_CELL = 90;
@@ -26,8 +27,9 @@ const MIN_CELL = 90;
 export function panelTitle(p: Panel): string {
   if (p.type === 'watchlist') return 'Watchlist';
   if (p.type === 'alerts') return 'Alerts';
-  // Flow lists the markets the server follows, whatever chart it is linked to.
+  // Flow and Signal list what the server follows, whatever chart they drive.
   if (p.type === 'flow') return 'Flow';
+  if (p.type === 'signals') return 'Signal';
   const label = `${symbolOf(marketOf(p))} ${tfLabel(timeframeOf(p))}`;
   if (p.type === 'chart') return p.tpo ? `TPO · ${label}` : label;
   return `${PANEL_TITLE[p.type]} · ${label}`;
@@ -446,6 +448,8 @@ function PanelView(props: { panel: Panel }) {
       return <LiquidationsPanel panel={p} />;
     case 'flow':
       return <FlowPanel panel={p} />;
+    case 'signals':
+      return <SignalsPanel panel={p} />;
     case 'alerts':
       return <AlertsPanel panel={p} />;
   }

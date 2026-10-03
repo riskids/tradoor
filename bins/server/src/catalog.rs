@@ -157,6 +157,34 @@ impl Catalog {
         markets.iter().filter(|m| cached.by_venue.iter().flat_map(|(_, p)| p).any(|p| p.market == **m)).cloned().collect()
     }
 
+    /// The `n` coins with the most turnover over a day on Binance's and Bybit's
+    /// USDT perpetuals, one market each: Binance's where it lists the coin, else
+    /// Bybit's. Stablecoins are left out; they have nothing to chart.
+    pub async fn perp_leaders(&self, n: usize) -> Vec<String> {
+        const STABLE: [&str; 12] = ["USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDE", "USD1", "RLUSD", "PYUSD", "USDS", "XUSD"];
+        self.get().await;
+        let state = self.state.lock().await;
+        let Some(cached) = state.as_ref() else { return Vec::new() };
+        let mut coins: HashMap<&str, (f64, Option<&str>, Option<&str>)> = HashMap::new();
+        for (venue, products) in &cached.by_venue {
+            if !matches!(venue, Venue::BinancePerp | Venue::BybitPerp) {
+                continue;
+            }
+            for p in products.iter().filter(|p| p.kind == "perp" && p.quote == "USDT" && !STABLE.contains(&p.base.as_str())) {
+                let coin = coins.entry(p.base.as_str()).or_default();
+                coin.0 += p.quote_volume_24h.unwrap_or(0.0);
+                if *venue == Venue::BinancePerp {
+                    coin.1 = Some(&p.market);
+                } else {
+                    coin.2 = Some(&p.market);
+                }
+            }
+        }
+        let mut ranked: Vec<_> = coins.into_values().filter(|(turnover, _, _)| *turnover > 0.0).collect();
+        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ranked.into_iter().filter_map(|(_, binance, bybit)| binance.or(bybit).map(str::to_string)).take(n).collect()
+    }
+
     /// Whether any exchange lists a perpetual on `coin` — the coin as a chart
     /// names it, its symbol less the quote: `BTC`, `1000PEPE`.
     pub async fn lists_perp(&self, coin: &str) -> bool {
