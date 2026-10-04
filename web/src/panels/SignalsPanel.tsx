@@ -275,7 +275,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                 <span class="sig-score num">
                   <Show when={s.outcome}>{(o) => <span class={`sig-out ${o()}`} data-tip={`${OUTCOME[o()][2]} · ${pct(s.ret)}`}>{OUTCOME[o()][0]}</span>}</Show>
                   <Show when={s.deltaDivergence}>
-                    <span class="div" data-tip={`Delta divergence: takers bought less of the volume on the push into the third drive than into the second${s.deltaAgainst ? ', and the third drive\'s own bar was sold more than bought' : ''}`}>
+                    <span class="div delta" data-tip={`Delta divergence: takers bought less of the volume on the push into the third drive than into the second${s.deltaAgainst ? ', and the third drive\'s own bar was sold more than bought' : ''}`}>
                       ΔDIV
                     </span>
                   </Show>

@@ -602,7 +602,7 @@ table.venues tr.off td { color: var(--dim); }
 .sig-tg button.cur .num { color: var(--primary); }
 .sig-state.line { color: var(--warn); }
 .sig-sub { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; }
-.sig-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto 62px 30px; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); text-align: left; font-size: 11px; color: var(--text); }
+.sig-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto minmax(74px, auto) 30px; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-bottom: 1px solid color-mix(in oklab, var(--border) 50%, transparent); text-align: left; font-size: 11px; color: var(--text); }
 .sig-row:hover { background: var(--surface-2); }
 .sig-row.shown { background: color-mix(in oklab, var(--primary) 7%, transparent); box-shadow: inset 2px 0 0 var(--primary); }
 .sig-state { font-size: 10px; letter-spacing: 0.04em; color: var(--dim); white-space: nowrap; }
@@ -613,9 +613,10 @@ table.venues tr.off td { color: var(--dim); }
 .sig-drives { color: var(--muted); white-space: nowrap; }
 .sig-score { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .sig-score .div { padding: 0 3px; border: 1px solid var(--border); color: var(--muted); font-size: 9px; }
+.sig-score .div.delta { border-color: color-mix(in oklab, var(--info) 45%, transparent); color: var(--info); background: color-mix(in oklab, var(--info) 10%, transparent); }
 .sig-age { text-align: right; }
 @container (max-width: 440px) {
-  .sig-row { grid-template-columns: 84px minmax(0, 1fr) 56px 28px; gap: 6px; }
+  .sig-row { grid-template-columns: 84px minmax(0, 1fr) minmax(74px, auto) 28px; gap: 6px; }
   .sig-drives { display: none; }
   .sig-row.played { grid-template-columns: 72px minmax(0, 1fr) 52px 40px; }
 }
