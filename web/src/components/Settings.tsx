@@ -200,7 +200,6 @@ function AccountSection() {
                     <b>{a().name ?? 'Telegram account'}</b>
                     <span class="dim">Signed in with Telegram · since {formatDateTime(a().since).slice(0, 10)}</span>
                   </div>
-                  <span class="spacer" />
                   <button class="btn" onClick={signOut}>
                     Sign out of this browser
                   </button>
@@ -432,7 +431,7 @@ function AdvancedSection(props: { onClose(): void }) {
       </div>
       <div class="set-card">
         <h3>Exchanges</h3>
-        <div class="swatches">
+        <div class="swatches one">
           <For each={ALL_EXCHANGES}>
             {(x) => (
               <span class="swatch">
