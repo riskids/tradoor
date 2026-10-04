@@ -274,6 +274,27 @@ export interface Signal {
   deltaAgainst: boolean | null;
   /** The push into each drive, where the exchange says who took each trade. */
   deltas: SignalPush[] | null;
+  /** The limit entry the scan that first saw it set, once weighed. */
+  limit: SignalLimit | null;
+  /** Why it left the list, once it has. */
+  endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'gone' | null;
+}
+
+/** A limit entry: half way back from the furthest price since the third drive
+ *  toward it, set when a scan first saw the pattern and waiting two days. */
+export interface SignalLimit {
+  price: number;
+  /** The bar the scan that set it read up to, and the end of its two days. */
+  setAt: number;
+  until: number | null;
+  /** The trade at its entry. */
+  levels: SignalLevels | null;
+  /** Where it filled — at the limit, or better where price opened past it. */
+  filledAt: number | null;
+  entry: number | null;
+  /** How the trade went, or `missed` when price never came back or reached TP1 first. */
+  outcome: SignalOutcome | 'missed' | null;
+  ret: number | null;
 }
 
 /** What takers did on the push into a drive: bought less sold, in dollars and
@@ -294,11 +315,19 @@ export interface SignalLevels {
   sl: number;
 }
 
+/** A cut of the record: by score band — a limit's fifteen lower, set before
+ *  the turn adds them — divergence, or both. */
+export type SignalCut = 'all' | '70' | '50' | '0' | '55' | '40' | 'u40' | 'div' | 'ddiv' | '70ddiv' | '55ddiv' | 'dagainst';
+
 /** One line of the record: a side, and a cut of it by score or divergence. */
 export interface SignalGroup {
   side: 'bear' | 'bull';
-  group: 'all' | '70' | '50' | '0' | 'div' | 'ddiv' | '70ddiv' | 'dagainst';
+  group: SignalCut;
+  /** For limits: every one set, filled or not; `n` are those filled. */
+  seen: number;
   n: number;
+  /** Closed in profit. */
+  win: number;
   /** How many reached each take-profit, each counting those that went further. */
   tp1: number;
   tp2: number;
@@ -334,6 +363,8 @@ export interface SignalPlayed {
 export interface SignalTouchGroup {
   side: 'bear' | 'bull';
   n: number;
+  /** Closed in profit. */
+  win: number;
   /** Became three drives within four days, and of those, turned. */
   pattern: number;
   turned: number;
@@ -365,10 +396,11 @@ export interface SignalTouchPlayed {
 /** One way of setting the take-profits and the stop, replayed: a kind, a side and a cut of it. */
 export interface SignalPlanRow {
   plan: 'fixed' | 'fib' | 'fib-atr' | 'from-entry';
-  kind: 'pattern' | 'touch';
+  kind: 'pattern' | 'touch' | 'limit';
   side: 'bear' | 'bull';
-  group: 'all' | '70' | '50' | '0' | 'div' | 'ddiv' | '70ddiv' | 'dagainst';
+  group: SignalCut;
   n: number;
+  win: number;
   tp1: number;
   tp2: number;
   tp3: number;
@@ -384,8 +416,10 @@ export interface SignalStats {
   /** Bars a pattern is given to reach its target. */
   windowBars: number;
   /** The rules replayed over the history, bar by bar. */
-  backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[]; variants: SignalPlanRow[] | null } | null;
+  backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[]; limits: SignalGroup[]; variants: SignalPlanRow[] | null } | null;
   live: { since: number | null; open: number; groups: SignalGroup[] };
+  /** Limit entries live: counted from the patterns first seen once they began. */
+  limits: { since: number; open: number; groups: SignalGroup[] };
   recent: SignalPlayed[];
   /** Price at the line between scans: replayed, live, and the latest. */
   touches: {
@@ -424,6 +458,7 @@ export interface SignalsState {
   /** Whether this browser is told on Telegram when a pattern turns, and when price reaches a line. */
   notify: boolean;
   notifyTouch: boolean;
+  notifyLimits: boolean;
   /** Whether the server has a bot, and this browser a chat linked to it. */
   telegram: boolean;
   linked: boolean;
@@ -490,7 +525,8 @@ export const api = {
   liquidations: (ticker: string) => json<LiquidationStats>(`/api/liquidations/${encodeURIComponent(ticker)}`),
   signals: () => json<SignalsState>('/api/signals'),
   signalStats: () => json<SignalStats>('/api/signals/stats'),
-  signalsNotify: (patch: { notify?: boolean; touch?: boolean }) => json<{ notify: boolean; touch: boolean }>('/api/signals/notify', { method: 'PUT', body: patch }),
+  signalsNotify: (patch: { notify?: boolean; touch?: boolean; limits?: boolean }) =>
+    json<{ notify: boolean; touch: boolean; limits: boolean }>('/api/signals/notify', { method: 'PUT', body: patch }),
   flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
   flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),
   flowUnfollow: (coin: string) => json<{ coin: string }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'DELETE' }),

@@ -146,6 +146,10 @@ function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; 
           style: { color: l.color, width: 1, dash: 'dashed', textColor: l.color, priceLabels: true },
         }))
       : []),
+    // The limit entry, across the two days it waits.
+    ...(p.limit
+      ? [{ kind: 'trendline', points: [{ time: p.limit.from, price: p.limit.price }, { time: p.limit.until, price: p.limit.price }], label: 'Limit', style: { color: '#ffc247', width: 1.5, textColor: '#ffc247', priceLabels: true } }]
+      : []),
   ];
 }
 
@@ -1126,6 +1130,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
                 <span class={p().side === 'bear' ? 'bear' : 'bull'}>{p().side === 'bear' ? '▼' : '▲'} Three drives</span>
                 <span class="dim">
                   {p().stage === 'line' ? 'at the line · not confirmed yet' : `score ${p().score}${p().divergence ? ' · RSI divergence' : ''}`}
+                  {p().limit ? ` · limit ${formatPrice(p().limit!.price, digitsFor(p().market, p().limit!.price))}` : ''}
                 </span>
                 <button class="tb" data-tip="Save the line and the circles as drawings on this chart" onClick={() => keepPattern(p())}>
                   Keep drawings

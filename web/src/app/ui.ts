@@ -83,6 +83,8 @@ export interface ShownPattern {
   /** The trade, from the bar it was entered on: take-profits and the stop. */
   levels?: { tp: number[]; sl: number };
   enteredAt?: number;
+  /** The limit entry, from the bar it was set on to the end of its two days. */
+  limit?: { price: number; from: number; until: number };
 }
 export const [shownPattern, setShownPattern] = createSignal<ShownPattern | null>(null);
 

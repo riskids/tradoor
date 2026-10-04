@@ -13,7 +13,7 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
+import { api, errorText, type Signal, type SignalCut, type SignalGroup, type SignalLimit, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice, formatTurnover } from '../lib/format';
@@ -52,6 +52,7 @@ interface Openable {
   stage?: 'line';
   levels?: { tp: number[]; sl: number } | null;
   enteredAt?: number;
+  limit?: SignalLimit | null;
 }
 /** A touch as a pattern to draw: its two drives, and the third where price reached the line, on that bar. */
 const touchPattern = (t: { market: string; side: 'bear' | 'bull'; drives: SignalPoint[]; touchedAt: number; touchPrice: number; levels?: { tp: number[]; sl: number } | null }): Openable => ({
@@ -73,22 +74,43 @@ const moved = (s: { outcome: SignalOutcome | null; best: number | null; worst: n
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
 const share = (part: number, n: number) => (n === 0 ? '—' : `${Math.round((part / n) * 100)}%`);
 const BECAME: Record<string, string> = { turned: 'became three drives, turned', pattern: 'became three drives', none: 'no third drive' };
-const GROUP_LABEL: Record<SignalGroup['group'], string> = {
+const GROUP_LABEL: Record<SignalCut, string> = {
   all: 'All',
   '70': 'Score 70+',
   '50': 'Score 50–69',
   '0': 'Score under 50',
+  '55': 'Score 55+',
+  '40': 'Score 40–54',
+  u40: 'Score under 40',
   div: 'RSI divergence',
   ddiv: 'Delta divergence',
   '70ddiv': 'Score 70+ & Δ div',
+  '55ddiv': 'Score 55+ & Δ div',
   dagainst: 'Third drive sold',
 };
 const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
   tp3: ['✓', 'TP3', 'All three take-profits'],
-  tp2: ['✓', 'TP2', 'Two take-profits, the rest out at the entry or after four days'],
+  tp2: ['✓', 'TP2', 'Up to the second take-profit, the rest out at the entry or after four days'],
   tp1: ['✓', 'TP1', 'The first take-profit, the rest out at the entry or after four days'],
   stop: ['✗', 'Stop', 'Went past the third drive first'],
-  expired: ['–', 'Neither', 'Neither in four days'],
+  expired: ['–', 'Neither', 'No take-profit reached after the entry and no loss: four days passed, or the stop had moved to the entry'],
+};
+/** Why a pattern left the list, as the scan that no longer saw it said. */
+const ENDED: Record<string, string> = {
+  outdone: 'closed past the third drive',
+  broken: 'closed through the line',
+  played: 'reached TP1 before the turn',
+  waited: 'no turn in two days',
+  lapsed: 'two days since it turned',
+};
+/** `10-06 04:00`: a day and time in this browser's zone. */
+const when = (ms: number) => formatDateTime(ms).slice(5, 16);
+/** A limit entry in a line: where it waits, or what became of it. */
+const limitText = (l: SignalLimit) => {
+  if (l.outcome === 'missed') return `${price(l.price)} · missed`;
+  if (l.filledAt === null) return `${price(l.price)} · until ${l.until ? when(l.until) : '—'}`;
+  const filled = `${price(l.entry ?? l.price)} · filled ${when(l.filledAt)}`;
+  return l.outcome ? `${filled} · ${OUTCOME[l.outcome][1]} ${pct(l.ret)}` : `${filled} · open`;
 };
 /** The trade's prices, for a tooltip. */
 const levelsText = (lv: { tp: number[]; sl: number } | null | undefined) =>
@@ -99,7 +121,9 @@ const usd = (v: number) => `${v < 0 ? '−' : '+'}$${formatTurnover(Math.abs(v))
 const pushesText = (deltas: SignalPush[] | null) =>
   deltas ? `Delta on the push into each drive: ${deltas.map((p) => `${usd(p.usd)} (${Math.round((1 + p.share) * 50)}% bought)`).join(', ')}` : 'No delta: Bybit does not say who took each trade';
 /** The trade the record counts, said once. */
-const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL an ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days';
+const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL an ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days · a take-profit counts only when price reaches it after the entry; Win is closed in profit';
+/** The limit entry, said once. */
+const LIMIT = 'A limit set when a scan first sees the pattern, half way back from the low since the third drive toward it (the high, for the bullish side), waiting two days; off if price reaches TP1 first. The same plan C once filled.';
 
 export function SignalsPanel(props: { panel: SignalsPanelState }) {
   const [state, setState] = createSignal<SignalsState | null>(null);
@@ -128,7 +152,9 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
   const why = (s: Signal): string => {
     if (s.outcome === 'stop') return 'hit the stop';
     if (s.outcome === 'tp3' || s.outcome === 'tp2' || s.outcome === 'tp1') return `reached ${s.outcome.toUpperCase()}`;
-    if (s.outcome === 'expired') return 'neither in four days';
+    if (s.outcome === 'expired') return 'neither take-profit nor stop';
+    const ended = s.endedWhy ? ENDED[s.endedWhy] : undefined;
+    if (ended) return ended;
     return s.turnedAt !== null && s.lastSeen - s.turnedAt >= 44 * 3_600_000 ? 'two days since it turned' : 'no longer three drives';
   };
   const sides = (): ('bear' | 'bull')[] => (props.panel.side === 'all' ? ['bear', 'bull'] : [props.panel.side]);
@@ -155,17 +181,18 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
     const target = props.panel.link ? props.panel : targetChart();
     if (!target) return;
     batch(() => {
-      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage, levels: s.levels ?? undefined, enteredAt: s.enteredAt });
+      const limit = s.limit ? { price: s.limit.price, from: s.limit.setAt, until: s.limit.until ?? s.limit.setAt } : undefined;
+      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage, levels: (s.levels ?? s.limit?.levels) ?? undefined, enteredAt: s.enteredAt ?? s.limit?.setAt, limit });
       setPanelMarket(target.id, s.market);
       setPanelTimeframe(target.id, '4h');
     });
   };
 
-  const setNotify = async (patch: { notify?: boolean; touch?: boolean }) => {
+  const setNotify = async (patch: { notify?: boolean; touch?: boolean; limits?: boolean }) => {
     try {
       await api.signalsNotify(patch);
       await load();
-      if ((patch.notify || patch.touch) && !state()?.linked) toast({ tone: 'warn', title: 'No Telegram chat linked', body: 'Link one in Settings → Telegram, and these will reach it.' });
+      if ((patch.notify || patch.touch || patch.limits) && !state()?.linked) toast({ tone: 'warn', title: 'No Telegram chat linked', body: 'Link one in Settings → Telegram, and these will reach it.' });
     } catch (e) {
       toast({ tone: 'warn', title: 'Not saved', body: errorText(e) });
     }
@@ -197,7 +224,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
         <Show when={state()?.telegram}>
           <button
             class="tb"
-            classList={{ on: state()?.notify || state()?.notifyTouch }}
+            classList={{ on: state()?.notify || state()?.notifyTouch || state()?.notifyLimits }}
             data-tip="What reaches you on Telegram"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setTelegramMenu((v) => !v)}
@@ -215,6 +242,14 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
           <button classList={{ cur: state()?.notifyTouch }} data-tip="At once, when live price reaches the line of two drives — before the bars confirm a third" onClick={() => void setNotify({ touch: !state()?.notifyTouch })}>
             <span>When price reaches the line</span>
             <span class="num">{state()?.notifyTouch ? 'on' : 'off'}</span>
+          </button>
+          <button
+            classList={{ cur: state()?.notifyLimits }}
+            data-tip="Once per scan, the limit entry for each bearish pattern first seen scoring 55 or more before the turn, with delta divergence — the entry the replay bore out best"
+            onClick={() => void setNotify({ limits: !state()?.notifyLimits })}
+          >
+            <span>Limit entry for a bearish 55+ with Δ div</span>
+            <span class="num">{state()?.notifyLimits ? 'on' : 'off'}</span>
           </button>
         </div>
       </Show>
@@ -296,6 +331,13 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   {s.score}
                 </span>
                 <span class="sig-age num dim">{since(s.turnedAt ?? s.drives[2]!.at, now())}</span>
+                <Show when={s.limit}>
+                  {(l) => (
+                    <span class="sig-limit num" classList={{ gone: l().outcome === 'missed' }} data-tip={`${LIMIT}${l().levels ? ` · ${levelsText(l().levels)}` : ''}`}>
+                      <span class="tag">LIMIT</span> {limitText(l())}
+                    </span>
+                  )}
+                </Show>
               </button>
             );
           }}
@@ -372,13 +414,16 @@ const CUTS = [
 /** Each plan replayed over the same patterns and touches, side by side, with both halves of the period. */
 function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
   const [cut, setCut] = createSignal<(typeof CUTS)[number]['value']>('all');
-  const table = (kind: 'pattern' | 'touch') => (
+  /** The same cut of the limits: their score bands are fifteen lower, set before the turn. */
+  const cutOf = (kind: 'pattern' | 'touch' | 'limit'): SignalCut => (kind === 'touch' ? 'all' : kind === 'limit' ? ({ '70': '55', '70ddiv': '55ddiv' } as const)[cut() as '70'] ?? cut() : cut());
+  const table = (kind: 'pattern' | 'touch' | 'limit') => (
     <table class="grid sig-table sig-compare">
       <thead>
         <tr>
           <th>Plan</th>
           <th />
           <th class="num">n</th>
+          <th class="num" data-tip="Closed in profit">Win</th>
           <th class="num">TP1</th>
           <th class="num">TP2</th>
           <th class="num">TP3</th>
@@ -388,7 +433,7 @@ function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
         </tr>
       </thead>
       <tbody>
-        <For each={props.rows.filter((r) => r.kind === kind && r.group === (kind === 'touch' ? 'all' : cut()) && props.sides.includes(r.side))}>
+        <For each={props.rows.filter((r) => r.kind === kind && r.group === cutOf(kind) && props.sides.includes(r.side))}>
           {(r) => (
             <tr classList={{ head: r.side === props.sides[0] }}>
               <td data-tip={`${PLANS[r.plan][1]} · ${PLANS[r.plan][2]}`}>
@@ -401,6 +446,7 @@ function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
                 <span class={r.side}>{r.side === 'bear' ? '▼' : '▲'}</span>
               </td>
               <td class="num">{r.n}</td>
+              <td class="num">{share(r.win, r.n)}</td>
               <td class="num bull">{share(r.tp1, r.n)}</td>
               <td class="num bull">{share(r.tp2, r.n)}</td>
               <td class="num bull">{share(r.tp3, r.n)}</td>
@@ -430,6 +476,11 @@ function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
         </For>
       </div>
       {table('pattern')}
+      <div class="sig-cap">
+        <b>Plans compared · limit entry</b>
+        <span class="dim">filled limits; their score bands fifteen lower, set before the turn</span>
+      </div>
+      {table('limit')}
       <div class="sig-cap">
         <b>Plans compared · at the line</b>
         <span class="dim">entered at the touch; A and D are the same there</span>
@@ -468,6 +519,24 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
             </div>
             <Show when={st().live.groups.some((g) => g.n > 0)} fallback={<div class="sig-note dim">None has played out yet: a pattern is given {st().windowBars / 6} days.</div>}>
               <Table groups={st().live.groups} sides={props.sides} />
+            </Show>
+            <div class="sig-cap">
+              <b>Limit entry · replayed</b>
+              <span class="dim">the same patterns, entered at a limit instead of at the turn</span>
+            </div>
+            <div class="sig-note dim">{LIMIT}</div>
+            <Show when={st().backtest?.limits.some((g) => g.seen > 0)} fallback={<div class="sig-note dim">Replayed with the patterns a few minutes after the server starts.</div>}>
+              <Table groups={st().backtest!.limits} sides={props.sides} limits />
+            </Show>
+            <div class="sig-cap">
+              <b>Limit entry · live</b>
+              <span class="dim">
+                patterns first seen since {day(st().limits.since)}
+                {st().limits.open ? ` · ${st().limits.open} still open` : ''}
+              </span>
+            </div>
+            <Show when={st().limits.groups.some((g) => g.seen > 0)} fallback={<div class="sig-note dim">None has played out yet.</div>}>
+              <Table groups={st().limits.groups} sides={props.sides} limits />
             </Show>
             <div class="sig-cap">
               <b>At the line · replayed</b>
@@ -553,6 +622,7 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
           <th />
           <th class="num" data-tip="Times price reached a line">Touches</th>
           <th class="num" data-tip="The two drives became three within four days">3 drives</th>
+          <th class="num" data-tip="Closed in profit">Win</th>
           <th class="num" data-tip="Reached the first take-profit">TP1</th>
           <th class="num" data-tip="Reached the second">TP2</th>
           <th class="num" data-tip="Reached the third">TP3</th>
@@ -569,6 +639,7 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
               </td>
               <td class="num">{g.n}</td>
               <td class="num" data-tip={`Of them, Stochastic RSI turned: ${share(g.turned, g.n)}`}>{share(g.pattern, g.n)}</td>
+              <td class="num">{share(g.win, g.n)}</td>
               <td class="num bull">{share(g.tp1, g.n)}</td>
               <td class="num bull">{share(g.tp2, g.n)}</td>
               <td class="num bull">{share(g.tp3, g.n)}</td>
@@ -584,14 +655,18 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
   );
 }
 
-function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[] }) {
+function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[]; limits?: boolean }) {
   return (
     <table class="grid sig-table">
       <thead>
         <tr>
           <th />
-          <th class="num" data-tip="Patterns that turned">Patterns</th>
-          <th class="num" data-tip="Reached the first take-profit">TP1</th>
+          <Show when={props.limits} fallback={<th class="num" data-tip="Patterns that turned">Patterns</th>}>
+            <th class="num" data-tip="Limits set, one per pattern">Set</th>
+            <th class="num" data-tip="Price came back to the limit within two days, before reaching TP1">Filled</th>
+          </Show>
+          <th class="num" data-tip="Closed in profit, of those entered">Win</th>
+          <th class="num" data-tip="Reached the first take-profit after the entry">TP1</th>
           <th class="num" data-tip="Reached the second">TP2</th>
           <th class="num" data-tip="Reached the third">TP3</th>
           <th class="num" data-tip="The stop, before the first take-profit">SL</th>
@@ -607,11 +682,15 @@ function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[] }) {
                   <span class={g.side}>{g.side === 'bear' ? '▼ Bearish' : '▲ Bullish'}</span>
                 </Show>
               </td>
-              <td class="num">{g.n}</td>
+              <Show when={props.limits} fallback={<td class="num">{g.n}</td>}>
+                <td class="num">{g.seen}</td>
+                <td class="num" data-tip={`${g.n} of ${g.seen}`}>{share(g.n, g.seen)}</td>
+              </Show>
+              <td class="num">{share(g.win, g.n)}</td>
               <td class="num bull">{share(g.tp1, g.n)}</td>
               <td class="num bull">{share(g.tp2, g.n)}</td>
               <td class="num bull">{share(g.tp3, g.n)}</td>
-              <td class="num bear" data-tip={`Nothing in four days: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
+              <td class="num bear" data-tip={`Neither take-profit nor stop: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
               <td class="num" classList={{ bull: g.ret > 0, bear: g.ret < 0 }} data-tip={`At best ${pct(g.best)}, at worst ${pct(g.worst)} on the way, on average`}>
                 {g.n ? pct(g.ret) : '—'}
               </td>

@@ -179,6 +179,49 @@ pub fn history(candles: &[Candle], taker: Taker, side: Side) -> Vec<(usize, Foun
     (0..candles.len()).filter_map(|at| p.at(at).filter(|f| f.turn.is_some() && told.insert(f.drives[2].index)).map(|f| (at, f))).collect()
 }
 
+/// Why three drives are no longer listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// A close past the third drive.
+    Outdone,
+    /// A close well through the line.
+    Broken,
+    /// Price reached the first take-profit before Stochastic RSI turned.
+    Played,
+    /// No turn within two days of the third drive.
+    Waited,
+    /// Two days since the turn.
+    Lapsed,
+}
+
+impl Ended {
+    pub fn id(self) -> &'static str {
+        match self {
+            Ended::Outdone => "outdone",
+            Ended::Broken => "broken",
+            Ended::Played => "played",
+            Ended::Waited => "waited",
+            Ended::Lapsed => "lapsed",
+        }
+    }
+}
+
+/// Why the pattern whose third drive is the bar opening at `third_at` is no
+/// longer one as of the newest bar; None if it still stands, or is not there.
+pub fn ended(candles: &[Candle], side: Side, third_at: i64) -> Option<Ended> {
+    let p = Prepared::new(candles, None, side)?;
+    let zi = p.pivots.iter().position(|pivot| candles[pivot.index].open_time == third_at)?;
+    p.judge(p.shape(zi).as_ref()?, candles.len() - 1).err()
+}
+
+/// Every pattern the bars held, each as the scan that first saw it did —
+/// turned or still waiting for the turn — and the bar that scan read up to.
+pub fn sightings(candles: &[Candle], taker: Taker, side: Side) -> Vec<(usize, Found)> {
+    let Some(p) = Prepared::new(candles, taker, side) else { return Vec::new() };
+    let mut seen = std::collections::HashSet::new();
+    (0..candles.len()).filter_map(|at| p.at(at).filter(|f| seen.insert(f.drives[2].index)).map(|f| (at, f))).collect()
+}
+
 /// The trade a signal is recorded as: take-profits a drop of 3, 6 and 9% from
 /// the entry (a rise, for the bullish side), and a stop 3.5% past the third
 /// drive's extreme. Half the position is closed at the first, and the stop
@@ -320,11 +363,14 @@ pub fn play(side: Side, entry: f64, lv: Levels, after: &[Candle], from_touch: bo
         taken += 1;
         stop = entry;
     }
+    let passed = taken;
+    // The furthest take-profit price reached after the entry — one already
+    // past at the entry was not reached — else the stop, or neither when the
+    // stop had been moved to the entry.
     let closed = |taken: usize| match taken {
-        0 => Hit::Stop,
-        1 => Hit::Tp1,
-        2 => Hit::Tp2,
-        _ => Hit::Tp3,
+        t if t > passed => [Hit::Tp1, Hit::Tp2, Hit::Tp3][t - 1],
+        _ if passed > 0 => Hit::Expired,
+        _ => Hit::Stop,
     };
     for (i, k) in after.iter().take(OUTCOME_BARS).enumerate() {
         let (with, against) = if bear { (k.low, k.high) } else { (k.high, k.low) };
@@ -346,15 +392,69 @@ pub fn play(side: Side, entry: f64, lv: Levels, after: &[Candle], from_touch: bo
             stop = entry;
         }
         if taken == 3 {
-            (out.result, out.ret) = (Hit::Tp3, banked);
+            (out.result, out.ret) = (closed(taken), banked);
             return out;
         }
     }
     if out.bars >= OUTCOME_BARS {
         out.ret = banked + TAKE_SHARES[taken..].iter().sum::<f64>() * pct(after[OUTCOME_BARS - 1].close);
-        out.result = if taken == 0 { Hit::Expired } else { closed(taken) };
+        out.result = if taken > passed { closed(taken) } else { Hit::Expired };
     }
     out
+}
+
+/// How far back toward the third drive a limit entry waits for price: half
+/// the way from the furthest it has gone since.
+pub const BOUNCE: f64 = 0.5;
+/// Bars a limit entry waits to be filled: two days.
+pub const LIMIT_BARS: usize = 12;
+
+/// What became of a limit entry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fill {
+    /// Filled at `price`. The trade's bars start at `bar`; filled within that
+    /// bar, it takes no take-profit there (`within`), not knowing the order.
+    At { bar: usize, price: f64, within: bool },
+    /// Not reached in its two days, or the first take-profit came first.
+    Missed,
+    /// Neither yet.
+    Waiting,
+}
+
+/// A pattern's limit entry, set by the scan that first saw it, reading up to
+/// bar `seen`: half way back from the furthest price since the third drive
+/// (bar `third`, its extreme `extreme`) toward it — and what became of it. It
+/// fills at that close if price is already past it; else on the first of the
+/// next two days' bars to reach it, at its open if it opened past it. It is
+/// missed if price reaches the first take-profit (`tp1`) first. None if the
+/// scan read no bar after the third drive.
+pub fn limit_entry(candles: &[Candle], side: Side, third: usize, extreme: f64, tp1: f64, seen: usize) -> Option<(f64, Fill)> {
+    let bear = side == Side::Bear;
+    let since = candles.get(third + 1..=seen).filter(|s| !s.is_empty())?;
+    let far = if bear { since.iter().map(|k| k.low).fold(f64::INFINITY, f64::min) } else { since.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max) };
+    let limit = far + BOUNCE * (extreme - far);
+    // Back to a price, the pattern's wrong way; and on to the first take-profit, its right way.
+    let back = |p: f64| if bear { p >= limit } else { p <= limit };
+    let on = |p: f64| if bear { p <= tp1 } else { p >= tp1 };
+    if back(candles[seen].close) {
+        return Some((limit, Fill::At { bar: seen + 1, price: candles[seen].close, within: false }));
+    }
+    for (bar, k) in candles.iter().enumerate().skip(seen + 1).take(LIMIT_BARS) {
+        let (against, with) = if bear { (k.high, k.low) } else { (k.low, k.high) };
+        if on(k.open) {
+            return Some((limit, Fill::Missed));
+        }
+        if back(k.open) {
+            return Some((limit, Fill::At { bar, price: k.open, within: true }));
+        }
+        if back(against) {
+            return Some((limit, Fill::At { bar, price: limit, within: true }));
+        }
+        if on(with) {
+            return Some((limit, Fill::Missed));
+        }
+    }
+    Some((limit, if candles.len() > seen + LIMIT_BARS { Fill::Missed } else { Fill::Waiting }))
 }
 
 /// Highs and lows swapped and every price negated: lows become highs.
@@ -372,6 +472,8 @@ struct Shape {
     fit: f64,
     /// The extreme of the pullback before the third drive.
     pullback: f64,
+    /// The ATR at the third drive.
+    atr: f64,
 }
 
 /// Two drives that could start a pattern, and from which bar to which their
@@ -531,7 +633,7 @@ impl Prepared {
         let horizon = last.saturating_sub(WAIT_BARS + KEEP_BARS + PIVOT_RIGHT);
         (0..self.pivots.len())
             .filter(|&zi| self.pivots[zi].index >= horizon && self.pivots[zi].confirmed_at <= last)
-            .find_map(|zi| self.judge(self.shapes[zi].get_or_init(|| self.shape(zi)).as_ref()?, last))
+            .find_map(|zi| self.judge(self.shapes[zi].get_or_init(|| self.shape(zi)).as_ref()?, last).ok())
     }
 
     /// The setup a scan reading up to `last` keeps: two drives as `shape`
@@ -668,7 +770,7 @@ impl Prepared {
                 }
                 let fit = 1.0 - off.abs() / ALIGN_ATR;
                 if best.as_ref().is_none_or(|s| fit > s.fit) {
-                    best = Some(Shape { a: a.index, b: b.index, z, fit, pullback: low_bz });
+                    best = Some(Shape { a: a.index, b: b.index, z, fit, pullback: low_bz, atr: atr_z });
                 }
             }
         }
@@ -676,24 +778,31 @@ impl Prepared {
     }
 
     /// A shape as of `last`: still standing, turned or still waiting, scored.
-    fn judge(&self, shape: &Shape, last: usize) -> Option<Found> {
+    fn judge(&self, shape: &Shape, last: usize) -> Result<Found, Ended> {
         let c = &self.c;
-        let Shape { a, b, z, fit, pullback } = *shape;
+        let Shape { a, b, z, fit, pullback, atr: atr_z } = *shape;
         let top = c[z].high;
         // Outdone: a close past the third drive. A wick past it is a retest.
         if c[z + 1..=last].iter().any(|k| k.close > top) {
-            return None;
+            return Err(Ended::Outdone);
         }
-        let atr_z = self.atr_at(z)?;
         let line = |i: usize| c[a].high + (c[b].high - c[a].high) * (i as f64 - a as f64) / (b - a) as f64;
         // Broken: a close well through the line since the third drive.
         if (z + 1..=last).any(|i| c[i].close > line(i) + BREAK_ATR * self.atr_at(i).unwrap_or(atr_z)) {
-            return None;
+            return Err(Ended::Broken);
         }
         let turn = turn_down(&self.k[..=last], &self.d[..=last], z);
+        // Played out before the turn: price down to the first take-profit,
+        // 38.2% back down the third drive's leg, by the bar a scan first sees
+        // the turn on — the move made with nothing to enter it on.
+        let first_take = top - FIB_TAKES[0] * (top - pullback);
+        let entered = turn.map_or(last, |t| t.max(z + PIVOT_RIGHT)).min(last);
+        if c[z + 1..=entered].iter().any(|k| k.low <= first_take) {
+            return Err(Ended::Played);
+        }
         match turn {
-            Some(t) if last - t > KEEP_BARS => return None,
-            None if last - z > WAIT_BARS => return None,
+            Some(t) if last - t > KEEP_BARS => return Err(Ended::Lapsed),
+            None if last - z > WAIT_BARS => return Err(Ended::Waited),
             _ => {}
         }
 
@@ -731,7 +840,7 @@ impl Prepared {
 
         // Prices back the right way up for the bullish side.
         let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
-        Some(Found {
+        Ok(Found {
             side: self.side,
             drives: [point(a, c[a].high), point(b, c[b].high), point(z, top)],
             turn: turn.map(|t| point(t, c[t].close)),
@@ -949,8 +1058,11 @@ mod tests {
         // Entered at 107 under Fib take-profits at 107.4, 104.6 and 100: the first is already past.
         let lv = plan_levels(Plan::Fib, Side::Bear, 107.0, 112.0, 100.0, 2.0);
         let back = play(Side::Bear, 107.0, lv, &[bar(107.5, 106.0, 107.2)], false);
-        assert_eq!(back.result, Hit::Tp1, "half closed at the entry, the rest stopped there too");
+        assert_eq!(back.result, Hit::Expired, "half closed at the entry, the rest stopped there too: no take-profit reached, and no loss");
         assert!(back.ret.abs() < 1e-9);
+        let mut after = vec![bar(106.9, 104.0, 104.5)];
+        after.resize(OUTCOME_BARS, bar(105.0, 104.2, 104.5));
+        assert_eq!(play(Side::Bear, 107.0, lv, &after, false).result, Hit::Tp2, "the second reached after the entry, and the third not in four days");
     }
 
     #[test]
@@ -997,6 +1109,37 @@ mod tests {
         // The two drives a setup waits on are measured the same way.
         let setup = setup(&bars[..115], Some(&taker[..115]), Side::Bear).expect("two drives and a line");
         assert_eq!(setup.pushes.map(|p| p.map(|p| p.share)), Some([first.share, second.share]));
+    }
+
+    #[test]
+    fn a_fall_to_the_first_take_profit_before_the_turn_ends_it() {
+        // Past the first take-profit, 114.4, by the bar the turn is first seen on: nothing left to enter.
+        let bars = three_up(&[(121, 113.0), (130, 110.0)]);
+        assert!(find(&bars, None, Side::Bear).is_none());
+        assert_eq!(ended(&bars, Side::Bear, 120 * H4), Some(Ended::Played));
+        // Once it has turned, the fall is the trade at work.
+        assert_eq!(ended(&three_up(&[(126, 114.0)]), Side::Bear, 120 * H4), None);
+        assert_eq!(ended(&three_up(&[(124, 116.0), (128, 121.5)]), Side::Bear, 120 * H4), Some(Ended::Outdone), "a close past the third drive");
+    }
+
+    #[test]
+    fn a_limit_waits_for_half_the_drop_back() {
+        let first_seen = |bars: &[Candle]| sightings(bars, None, Side::Bear).into_iter().find(|(_, f)| f.drives[2].index == 120).expect("three drives");
+        let bars = three_up(&[(126, 116.0), (132, 119.5), (140, 108.0)]);
+        let (seen, f) = first_seen(&bars);
+        let tp1 = levels(Side::Bear, f.extreme, f.extreme, f.pullback, f.atr).tp[0];
+        let (limit, fill) = limit_entry(&bars, Side::Bear, 120, f.extreme, tp1, seen).unwrap();
+        let low = bars[121..=seen].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+        assert!((limit - (low + 0.5 * (f.extreme - low))).abs() < 1e-9, "half way back up from the low since the third drive");
+        let Fill::At { bar, price, within } = fill else { panic!("filled: {fill:?}") };
+        assert!(within && price >= limit, "within the bar, at the limit or better: {price} for {limit}");
+        assert!(bars[bar].high >= limit && bars[seen + 1..bar].iter().all(|k| k.high < limit), "on the first bar back up to it");
+        // Down to the first take-profit before coming back: missed.
+        let bars = three_up(&[(126, 112.0), (132, 119.5)]);
+        let (seen, f) = first_seen(&bars);
+        assert_eq!(limit_entry(&bars, Side::Bear, 120, f.extreme, tp1, seen).map(|(_, fill)| fill), Some(Fill::Missed));
+        // Not yet back, with bars of its two days still to come.
+        assert_eq!(limit_entry(&bars[..seen + 3], Side::Bear, 120, f.extreme, 100.0, seen).map(|(_, fill)| fill), Some(Fill::Waiting));
     }
 
     #[test]

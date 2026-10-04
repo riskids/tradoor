@@ -166,7 +166,11 @@ ATR through it, and a real pullback between each — two ATRs, and at least 38%
 of the push before. It turns when Stochastic RSI (14 14 3 3, the chart's own)
 crosses down having been over 80 in the three bars before; a pattern waits two
 days for that and stays news two days after, and a close past the third drive
-ends it — a wick past it is a retest. A scan takes the oldest pattern still
+ends it — a wick past it is a retest. So does price reaching the first
+take-profit (38.2% back down the third drive's leg) by the bar a scan first
+sees the turn on: the move is made, with nothing left to enter it on. Each scan
+says why the patterns it no longer sees went (`signal.ended_why`), for the
+list's Ended rows. A scan takes the oldest pattern still
 standing among the recent drives, so a later high does not take its place. The bullish search is the same run on the bars mirrored. The
 score adds how well the third drive sits on the line, RSI weaker at it than at
 the second, even spacing, volume fading and the turn. A row opens its market at
@@ -217,7 +221,21 @@ at each of the others, and what is still open after four days closed at that
 close. A trade's prices are kept with it when it is entered. A bar reaching the stop and a
 take-profit both counts as the stop. A pattern that turned is entered at the
 close the scan read; each scan after weighs the bars since. The list and the
-Telegram messages carry each trade's prices, and opening one draws them.
+Telegram messages carry each trade's prices, and opening one draws them. A
+take-profit counts only when price reaches it after the entry — one already
+past at the entry is closed there for nothing — and Win is a trade closed in
+profit.
+
+Each pattern also has a limit entry (`drives::limit_entry`): set by the scan
+that first sees it, half way back from the furthest price since the third
+drive toward it, waiting two days, and off if price reaches the first
+take-profit first. It fills at that scan's close if price is already past it;
+filled within a bar, that bar takes no take-profit, not knowing the order.
+Each scan works it out again from the bars until it is decided (`signal.limit_*`);
+the list shows it under the row and opening a pattern draws it, and Telegram,
+for readers who turn it on, hears of those set for bearish patterns scoring 55
+or more before the turn with delta divergence. The live record of limits
+counts the patterns first seen from the bar they began (`LIMIT_SINCE`).
 
 The replay also runs every signal under four plans side by side
 (`drives::Plan`) — A 3/6/9% with the stop 3.5% past the third drive; B take-profits at 38.2, 61.8 and 100% back
@@ -227,7 +245,10 @@ take-profits and the stop an ATR past the third drive, the live one; D 3/6/9% wi
 side and group and by half of the period, for the Record's comparison. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each
 bar, seeing nothing after it: the replay runs the live scan at every bar. The panel's Record
-shows both by side, score and divergence, with the latest live patterns.
+shows both by side, score and divergence, with the latest live patterns, and
+the limit entries replayed and live — their score bands fifteen lower, as they
+are set before the turn adds its fifteen. A restart under a new `VERSION` scans
+the bar again.
 
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels
