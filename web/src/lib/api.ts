@@ -487,6 +487,16 @@ export interface Clock {
   zone: string;
 }
 
+/** The account this browser's id belongs to, and whether signing in is on offer here. */
+export interface AccountStatus {
+  telegram: boolean;
+  bot: string | null;
+  account: { name: string | null; since: number } | null;
+}
+
+/** A sign-in waiting on the reader's yes in Telegram, done with the account's id, or gone. */
+export type SignIn = { state: 'waiting' } | { state: 'done'; owner: string; name: string | null } | { state: 'gone' };
+
 export interface TelegramStatus {
   /** Whether the server was given a bot token at all. */
   enabled: boolean;
@@ -516,6 +526,9 @@ export const api = {
   clearAlerts: (which: 'stopped' | 'active' | 'all') => json<{ deleted: number }>(`/api/alerts?which=${which}`, { method: 'DELETE' }),
   restartAlerts: () => json<{ restarted: number }>('/api/alerts/restart', { method: 'POST' }),
   clearAlertLog: () => send('/api/alerts/log', { method: 'DELETE' }),
+  account: () => json<AccountStatus>('/api/account'),
+  signIn: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/account/signin', { method: 'POST', body: clock }),
+  signedIn: (code: string) => json<SignIn>(`/api/account/signin/${encodeURIComponent(code)}`),
   telegram: () => json<TelegramStatus>('/api/telegram'),
   telegramLink: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST', body: clock }),
   telegramClock: (clock: Clock) => json<{ chats: number }>('/api/telegram', { method: 'PATCH', body: clock }),

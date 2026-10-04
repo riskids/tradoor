@@ -202,10 +202,13 @@ than copying it over.
 
 ## Drawings and layouts belong to a browser
 
-Each browser makes a random id on first visit (Settings → Browser id) and its
-drawings, layout, watchlists and indicators are kept on the server under it: a
-private window or another browser starts empty. To carry them to another
-device, paste the id there.
+Each browser makes a random id on first visit (Settings → Advanced) and its
+drawings, layout, watchlists, indicators and alerts are kept on the server
+under it: a private window or another browser starts empty. Sign in with
+Telegram (Settings → Account) and they follow you: on another device, or after
+clearing the browser's history, sign in again and the browser has the same id
+back. The tradoor bot asks you to confirm each sign-in in your Telegram chat.
+Without a bot the id can still be carried by hand, pasted under Advanced.
 
 Drawings and the layout saved before browsers had ids belong to nobody. Give
 them to your browser's id once:

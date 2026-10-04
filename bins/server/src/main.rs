@@ -7,6 +7,7 @@
 //! exception is the relay (`relay.rs`), which a browser falls back to only when
 //! its network blocks the exchanges' names.
 
+mod account;
 mod alert_watch;
 mod alerts;
 mod api;

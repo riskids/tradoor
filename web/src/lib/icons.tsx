@@ -44,6 +44,9 @@ const PATHS = {
   gift: 'M4 11h16v9H4zM3 7h18v4H3zM12 7v13M12 7C11 4.5 8.5 3 7.2 4.3S8.5 7 12 7zM12 7c1-2.5 3.5-4 4.8-2.7S15.5 7 12 7z',
   external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
   star: 'M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4.1-4 5.7-.8z',
+  user: 'M20 21v-1.5a4.5 4.5 0 0 0-4.5-4.5h-7A4.5 4.5 0 0 0 4 19.5V21M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  send: 'M21 3L10 14M21 3l-6.5 18-4.5-7-7-4.5z',
+  droplet: 'M12 3l5.5 5.5a7.8 7.8 0 1 1-11 0z',
 } as const;
 
 export type IconName = keyof typeof PATHS;

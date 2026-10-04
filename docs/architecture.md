@@ -111,6 +111,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest`, `signal_touch_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
+| `account`, `account_signin` | a Telegram user and the browser id their things are kept under, and the sign-ins waiting on their yes |
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
@@ -287,6 +288,18 @@ and Hyperliquid name their markets their own way, so the catalogue's `native`
 translates both the asking and the answering (`trades`). Both sides record a trigger through the same two statements and the
 alert must still be active for them to take, so it fires once however many
 watchers see it. The chart draws each active one as a level to drag or delete.
+
+Signing in with Telegram (`account`) is how a browser gets its id back —
+history cleared, another device — with every row still keyed by that id.
+Settings mints a one-use code and opens `t.me/<bot>?start=in_<code>`; the bot
+asks the Telegram user who opened it, in their private chat, whether it was
+them, with a Yes and a No button (so a link someone else sent cannot sign
+their browser in as you), and on yes the code holds the account's id until the
+browser that minted it collects it, once (`/api/account/signin/{code}`). A
+user's first sign-in makes the asking browser's id their account's, and their
+alerts then go to that chat. Chats linked before accounts existed became
+accounts, the linked id with the most drawings standing for each person.
+Signing out gives the browser a fresh id; the account keeps everything.
 
 An alert that fires is also sent to Telegram, where the reader has linked a
 chat (`telegram`, `TRADOOR_TELEGRAM_TOKEN`). A bot cannot open a conversation,

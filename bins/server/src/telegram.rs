@@ -1,5 +1,6 @@
 //! Alerts on Telegram: linking a chat to a browser id, and the bot that carries
-//! the messages.
+//! the messages — and signing in with Telegram (`account`), which the bot
+//! confirms with the reader in their chat.
 //!
 //! A bot cannot open a conversation, so the reader opens it: Settings follows
 //! `t.me/<bot>?start=<code>` with a one-use code minted here, Telegram sends the
@@ -24,6 +25,7 @@ use tradoor_core::time::iso_minute;
 use tradoor_store::now_ms;
 use tradoor_venues::MarketRef;
 
+use crate::account;
 use crate::api::{owner, short_owner, ApiError, ApiResult, AppState};
 use crate::dns::Doh;
 
@@ -163,7 +165,7 @@ fn strip_token(message: &str, token: &str) -> String {
     message.replace(token, "…")
 }
 
-fn fresh_code() -> String {
+pub fn fresh_code() -> String {
     const ALPHABET: &[u8] = b"abcdefghijkmnopqrstuvwxyz23456789";
     let mut bytes = [0u8; CODE_LEN];
     getrandom::fill(&mut bytes).expect("the system's randomness");
@@ -238,6 +240,10 @@ pub struct Incoming {
     pub chat_id: i64,
     pub name: Option<String>,
     pub text: String,
+    /// The Telegram user who sent it, and whether it came in a private chat
+    /// with the bot — where the chat's id is that user's.
+    pub user: Option<i64>,
+    pub private: bool,
 }
 
 pub fn read_updates(result: &Value) -> Vec<Incoming> {
@@ -248,12 +254,69 @@ pub fn read_updates(result: &Value) -> Vec<Incoming> {
                 .filter_map(|u| {
                     let message = u.get("message").or_else(|| u.get("edited_message"))?;
                     let chat = message.get("chat")?;
-                    let name = chat.get("username").or_else(|| chat.get("first_name")).and_then(Value::as_str).map(str::to_string);
-                    Some(Incoming { id: u["update_id"].as_i64()?, chat_id: chat["id"].as_i64()?, name, text: message["text"].as_str().unwrap_or_default().to_string() })
+                    Some(Incoming {
+                        id: u["update_id"].as_i64()?,
+                        chat_id: chat["id"].as_i64()?,
+                        name: name_of(chat),
+                        text: message["text"].as_str().unwrap_or_default().to_string(),
+                        user: message["from"]["id"].as_i64(),
+                        private: chat["type"] == "private",
+                    })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// How a chat or a user is named: their @handle, or their first name.
+fn name_of(who: &Value) -> Option<String> {
+    who["username"].as_str().map(|u| format!("@{u}")).or_else(|| who["first_name"].as_str().map(str::to_string))
+}
+
+/// A button pressed under one of the bot's messages.
+#[derive(Debug, PartialEq)]
+pub struct Pressed {
+    /// The press's own id, to answer it by.
+    pub id: String,
+    pub user: i64,
+    pub name: Option<String>,
+    pub chat_id: i64,
+    pub message_id: i64,
+    pub data: String,
+}
+
+pub fn read_presses(result: &Value) -> Vec<Pressed> {
+    result
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|u| {
+                    let press = u.get("callback_query")?;
+                    let message = press.get("message")?;
+                    Some(Pressed {
+                        id: press["id"].as_str()?.to_string(),
+                        user: press["from"]["id"].as_i64()?,
+                        name: name_of(&press["from"]),
+                        chat_id: message["chat"]["id"].as_i64()?,
+                        message_id: message["message_id"].as_i64()?,
+                        data: press["data"].as_str().unwrap_or_default().to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A sign-in button's data: `in:<code>:y` or `in:<code>:n`.
+pub fn sign_in_answer(data: &str) -> Option<(&str, bool)> {
+    let rest = data.strip_prefix("in:")?;
+    let (code, yes) = rest.rsplit_once(':')?;
+    Some((code, match yes {
+        "y" => true,
+        "n" => false,
+        _ => return None,
+    }))
+    .filter(|(code, _)| !code.is_empty() && code.len() <= 32)
 }
 
 /// The code in `/start <code>`, however the client spells the command.
@@ -287,13 +350,19 @@ async fn poll(telegram: Arc<Telegram>) {
                 }
             }
         }
-        match telegram.call("getUpdates", json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message"] })).await {
+        match telegram.call("getUpdates", json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message", "callback_query"] })).await {
             Ok(result) => {
                 quiet = false;
+                if let Some(last) = result.as_array().and_then(|l| l.iter().filter_map(|u| u["update_id"].as_i64()).max()) {
+                    offset = last + 1;
+                }
                 for update in read_updates(&result) {
-                    offset = update.id + 1;
-                    let reply = handle(&telegram, &update).await;
-                    let _ = telegram.out.try_send((update.chat_id, reply, None));
+                    if let Some(reply) = handle(&telegram, &update).await {
+                        let _ = telegram.out.try_send((update.chat_id, reply, None));
+                    }
+                }
+                for press in read_presses(&result) {
+                    pressed(&telegram, &press).await;
                 }
             }
             Err(e) => {
@@ -307,28 +376,86 @@ async fn poll(telegram: Arc<Telegram>) {
     }
 }
 
-/// What the bot says back. The only thing it takes is a link code.
-async fn handle(telegram: &Telegram, update: &Incoming) -> String {
+/// What the bot says back, if anything. It takes a link code, for alerts, or
+/// a sign-in code, which it asks the reader to confirm.
+async fn handle(telegram: &Telegram, update: &Incoming) -> Option<String> {
     if update.text.starts_with("/stop") {
-        return match forget(&telegram.pool, update.chat_id).await {
+        return Some(match forget(&telegram.pool, update.chat_id).await {
             Ok(0) => "This chat was not receiving alerts.".to_string(),
             Ok(_) => "Stopped. This chat will not receive alerts again until you link it from tradoor.".to_string(),
             Err(e) => {
                 tracing::warn!(error = %e, "unlinking a chat");
                 "Something went wrong here; try again in a moment.".to_string()
             }
-        };
+        });
     }
     let Some(code) = start_code(&update.text) else {
-        return "Open Settings in tradoor and press Connect Telegram; the link there brings the code that pairs us.".to_string();
+        return Some("Open Settings in tradoor: Sign in with Telegram keeps your drawings and layout with this account, and Connect Telegram sends your alerts here.".to_string());
     };
-    match claim(&telegram.pool, code, update).await {
+    if let Some(code) = code.strip_prefix(account::START_PREFIX) {
+        return ask_to_sign_in(telegram, update, code).await;
+    }
+    Some(match claim(&telegram.pool, code, update).await {
         Ok(true) => "Linked. Your tradoor alerts will arrive here. Send /stop to end it.".to_string(),
         Ok(false) => "That link has expired or was already used. Press Connect Telegram in tradoor again.".to_string(),
         Err(e) => {
             tracing::warn!(error = %e, "linking a chat");
             "Something went wrong here; try the link again in a moment.".to_string()
         }
+    })
+}
+
+/// A sign-in link opened: the reader is asked whether it was them, with a
+/// button each way. Only in a private chat, where the chat is the reader's.
+async fn ask_to_sign_in(telegram: &Telegram, update: &Incoming, code: &str) -> Option<String> {
+    let Some(user) = update.user.filter(|_| update.private) else {
+        return Some("Sign in from a private chat with the bot, not a group.".to_string());
+    };
+    match account::opened(&telegram.pool, code, user).await {
+        Ok(true) => {}
+        Ok(false) => return Some("That sign-in link has expired or was already used. Press Sign in with Telegram in tradoor again.".to_string()),
+        Err(e) => {
+            tracing::warn!(error = %e, "opening a sign-in");
+            return Some("Something went wrong here; try the link again in a moment.".to_string());
+        }
+    }
+    let body = json!({
+        "chat_id": update.chat_id,
+        "text": "A browser asked to sign in to tradoor as you. It will get your drawings, layout, watchlists and alerts.\n\nWas this you, just now?",
+        "reply_markup": { "inline_keyboard": [[
+            { "text": "Yes, sign in", "callback_data": format!("in:{code}:y") },
+            { "text": "No", "callback_data": format!("in:{code}:n") },
+        ]] },
+    });
+    if let Err(e) = telegram.call("sendMessage", body).await {
+        tracing::warn!(error = %e, "asking to sign in");
+    }
+    None
+}
+
+/// A button pressed: a sign-in said yes or no to. The answer replaces the
+/// question, so the buttons cannot be pressed twice.
+async fn pressed(telegram: &Telegram, press: &Pressed) {
+    let Some((code, yes)) = sign_in_answer(&press.data) else {
+        let _ = telegram.call("answerCallbackQuery", json!({ "callback_query_id": press.id })).await;
+        return;
+    };
+    let (toast, text) = if yes {
+        match account::confirm(&telegram.pool, code, press.user, press.chat_id, press.name.as_deref()).await {
+            Ok(Some(_)) => ("Signed in", "Signed in. Your drawings, layout and alerts are opening in that browser now, and your alerts come to this chat."),
+            Ok(None) => ("Expired", "That sign-in has expired. Press Sign in with Telegram in tradoor again."),
+            Err(e) => {
+                tracing::warn!(error = %e, "confirming a sign-in");
+                ("Try again", "Something went wrong here; press Sign in with Telegram in tradoor again.")
+            }
+        }
+    } else {
+        let _ = account::decline(&telegram.pool, code, press.user).await;
+        ("Not signed in", "Not signed in. Nothing changed. If you did not ask for this, someone may have sent you their link — ignore it.")
+    };
+    let _ = telegram.call("answerCallbackQuery", json!({ "callback_query_id": press.id, "text": toast })).await;
+    if let Err(e) = telegram.call("editMessageText", json!({ "chat_id": press.chat_id, "message_id": press.message_id, "text": text })).await {
+        tracing::debug!(error = %e, "answering a sign-in");
     }
 }
 
@@ -446,7 +573,7 @@ fn enabled(state: &AppState) -> ApiResult<&Arc<Telegram>> {
 }
 
 /// The clock a request carries: `{offsetMinutes, zone}`, both optional.
-fn clock(body: &Value) -> (i32, Option<&str>) {
+pub fn clock(body: &Value) -> (i32, Option<&str>) {
     let offset = body["offsetMinutes"].as_i64().unwrap_or(0).clamp(i64::from(-MAX_OFFSET), i64::from(MAX_OFFSET)) as i32;
     let zone = body["zone"].as_str().filter(|z| !z.is_empty() && z.len() <= 64);
     (offset, zone)
@@ -540,15 +667,29 @@ mod tests {
     #[test]
     fn updates_are_read_and_the_rest_ignored() {
         let result = json!([
-            { "update_id": 7, "message": { "chat": { "id": 42, "username": "ricky" }, "text": "/start abc" } },
-            { "update_id": 8, "message": { "chat": { "id": 43, "first_name": "Olivia" } } },
+            { "update_id": 7, "message": { "chat": { "id": 42, "type": "private", "username": "ricky" }, "from": { "id": 42 }, "text": "/start abc" } },
+            { "update_id": 8, "message": { "chat": { "id": -43, "type": "group", "first_name": "Olivia" } } },
             { "update_id": 9, "channel_post": { "chat": { "id": 44 }, "text": "hi" } },
+            { "update_id": 10, "callback_query": { "id": "77", "from": { "id": 42, "username": "ricky" }, "message": { "message_id": 5, "chat": { "id": 42 } }, "data": "in:abc:y" } },
         ]);
         let updates = read_updates(&result);
-        assert_eq!(updates.len(), 2, "a channel post is not a message to the bot");
-        assert_eq!(updates[0], Incoming { id: 7, chat_id: 42, name: Some("ricky".into()), text: "/start abc".into() });
-        assert_eq!(updates[1].text, "", "a message with no text still names its chat");
+        assert_eq!(updates.len(), 2, "a channel post or a press is not a message to the bot");
+        assert_eq!(updates[0], Incoming { id: 7, chat_id: 42, name: Some("@ricky".into()), text: "/start abc".into(), user: Some(42), private: true });
+        assert_eq!((updates[1].text.as_str(), updates[1].private), ("", false), "a message with no text still names its chat");
         assert_eq!(read_updates(&json!({})), vec![]);
+        let presses = read_presses(&result);
+        assert_eq!(presses, [Pressed { id: "77".into(), user: 42, name: Some("@ricky".into()), chat_id: 42, message_id: 5, data: "in:abc:y".into() }]);
+        assert_eq!(updates[1].name.as_deref(), Some("Olivia"), "a first name is a name, not a handle");
+    }
+
+    #[test]
+    fn a_sign_in_button_says_which_code_and_which_way() {
+        assert_eq!(sign_in_answer("in:ab23cd45:y"), Some(("ab23cd45", true)));
+        assert_eq!(sign_in_answer("in:ab23cd45:n"), Some(("ab23cd45", false)));
+        assert_eq!(sign_in_answer("in:ab23cd45:maybe"), None);
+        assert_eq!(sign_in_answer("in::y"), None);
+        assert_eq!(sign_in_answer("other"), None);
+        assert_eq!(start_code(&format!("/start {}ab23cd45", account::START_PREFIX)).and_then(|c| c.strip_prefix(account::START_PREFIX)), Some("ab23cd45"));
     }
 
     #[test]
@@ -574,7 +715,7 @@ mod tests {
         client.execute("DELETE FROM telegram_link WHERE owner = $1", &[&OWNER]).await.unwrap();
 
         let code = mint_code(&pool, OWNER, 8 * 60, Some("Asia/Singapore")).await.unwrap();
-        let update = Incoming { id: 1, chat_id: chat, name: Some("ricky".into()), text: format!("/start {code}") };
+        let update = Incoming { id: 1, chat_id: chat, name: Some("ricky".into()), text: format!("/start {code}"), user: None, private: false };
         assert!(claim(&pool, &code, &update).await.unwrap(), "the code links the chat");
         assert!(!claim(&pool, &code, &update).await.unwrap(), "and is spent");
         assert!(!claim(&pool, "neverminted", &update).await.unwrap());

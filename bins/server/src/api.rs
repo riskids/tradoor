@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{alerts, catalog::Catalog, drawings, flow, footprint, limits, liquidations, open_interest, relay, signals, telegram, workspaces};
+use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, limits, liquidations, open_interest, relay, signals, telegram, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -121,6 +121,9 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/flow/{market}", axum::routing::put(flow::watch))
         .route("/footprint", get(footprint::bars))
         .route("/footprint/markets", get(footprint::recorded))
+        .route("/account", get(account::status))
+        .route("/account/signin", axum::routing::post(account::sign_in))
+        .route("/account/signin/{code}", get(account::collected))
         .route("/telegram", get(telegram::status).patch(telegram::set_clock))
         .route("/telegram/link", axum::routing::post(telegram::link))
         .route("/telegram/test", axum::routing::post(telegram::test))
