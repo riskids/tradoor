@@ -21,6 +21,7 @@ import { decimalsOf, formatPrice, formatTurnover, MAX_PRICE_DECIMALS } from '../
 import type { LastPrice } from '../lib/last-price';
 import { Icon, type IconName } from '../lib/icons';
 import { VenueTag } from '../lib/exchanges';
+import { WatchlistToggle } from '../components/WatchlistToggle';
 import { liquidationVenues } from '../lib/liquidation-venues';
 import { formatClock, formatFileTime, zoneLabel } from '../lib/timezone';
 import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
@@ -791,6 +792,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           <Icon name="chevron" size={10} />
         </button>
         <VenueTag market={market()} name />
+        <WatchlistToggle market={market()} />
         <span class="sep" />
         <For each={FAVORITE_TIMEFRAMES}>
           {(tf) => (
