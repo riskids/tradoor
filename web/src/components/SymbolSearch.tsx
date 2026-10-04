@@ -3,7 +3,8 @@
  * catalogue response. Opened by clicking a symbol or simply by typing; the
  * keystroke that opened it is already in the box.
  */
-import { createEffect, createMemo, createResource, createSignal, For, on, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
+import { call } from '../engine/client';
 import { catalog, errorText, type Product } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { ExchangeLogo, exchangeOfVenue, LIVE_EXCHANGES, type ExchangeId } from '../lib/exchanges';
@@ -75,7 +76,19 @@ function ratio(products: readonly Product[], query: string): [Product, Product] 
 
 const lastRatio = ([a, b]: [Product, Product]): number | null => (a.lastPrice && b.lastPrice ? a.lastPrice / b.lastPrice : null);
 
-export function SymbolSearch(props: { initial: string; title?: string; current?: string; ratios?: boolean; onSelect(market: string): void; onClose(): void }) {
+/** How long a result stays highlighted before its candles are fetched. */
+const WARM_MS = 200;
+
+export function SymbolSearch(props: {
+  initial: string;
+  title?: string;
+  current?: string;
+  ratios?: boolean;
+  /** The chart's timeframe, whose candles a highlighted result has fetched before it is chosen. */
+  timeframe?: string;
+  onSelect(market: string): void;
+  onClose(): void;
+}) {
   const [query, setQuery] = createSignal(props.initial);
   const [kind, setKind] = createSignal<Kind>('all');
   const [exchange, setExchange] = createSignal<ExchangeId | null>(null);
@@ -108,6 +121,22 @@ export function SymbolSearch(props: { initial: string; title?: string; current?:
     cursor();
     list.querySelector('[data-cur]')?.scrollIntoView({ block: 'nearest' });
   });
+  // The highlighted result, once it has stayed a moment, is fetched before it
+  // is chosen — as a watchlist row under the pointer is — so Enter finds its
+  // candles waiting.
+  const warmed = new Set<string>();
+  let warmTimer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const market = pick(cursor());
+    const timeframe = props.timeframe;
+    clearTimeout(warmTimer);
+    if (!market || !timeframe || market === props.current || warmed.has(market)) return;
+    warmTimer = setTimeout(() => {
+      warmed.add(market);
+      void call('prefetch', { market, timeframe }).catch(() => warmed.delete(market));
+    }, WARM_MS);
+  });
+  onCleanup(() => clearTimeout(warmTimer));
 
   const onKeyDown = (e: KeyboardEvent) => {
     const n = rows().length + first();

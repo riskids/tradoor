@@ -335,6 +335,7 @@ function Overlays() {
                 title={panel?.type === 'watchlist' ? 'Add to watchlist' : 'Symbol'}
                 current={panel && panel.type !== 'watchlist' ? marketOf(panel) : undefined}
                 ratios={panel?.type !== 'watchlist'}
+                timeframe={panel && panel.type !== 'watchlist' ? timeframeOf(panel) : undefined}
                 onClose={closeOverlay}
                 onSelect={(market) => {
                   closeOverlay();

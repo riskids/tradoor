@@ -26,12 +26,21 @@ page never drops a frame of the chart.
    1d for everything longer) the series is `archive`; otherwise `exchange`.
 2. An archive series loads the newest partitions until it holds enough base bars
    for 1,500 chart bars, then asks the exchange for bars newer than the last
-   stored one. An exchange series pages back through the REST API instead.
+   stored one. An exchange series pages back through the REST API instead,
+   asking for no more than a screenful first (600 bars) and the rest behind it.
+   A market is fetched before it is chosen: a watchlist row under the pointer,
+   or the result highlighted in the symbol search.
 3. `fold_candles` builds the chart timeframe from the base bars — 4h from 1h, a
    Monday-aligned week from days — and drops a bucket that has not closed.
 4. The kline stream (plus aggregate trades on Binance) feeds `LiveFeedEngine`,
    which never lets a stale kline rewind trades already folded. When the bar
-   rolls over, the finished bar is kept as closed until REST confirms it.
+   rolls over, the finished bar is kept as closed until REST confirms it. The
+   stream is asked for beside the history rather than after it, and the forming
+   bar is first read from REST (`formingRows`) — a quiet market's stream can say
+   nothing for seconds, and the chart showed the last closed bar and its close
+   till then. That bar has no trade id, so the stream's first kline replaces it.
+   Both wait for the closed bars to be drawn, the chart on screen till then
+   being the last market's.
 5. Liquidations follow the ticker, not the venue: the page matches the chart's
    coin and quote against the catalogue on every perpetual exchange — Binance's
    `1000SHIBUSDT` is Bybit's `SHIB1000USDT` — and the worker subscribes to each.

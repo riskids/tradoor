@@ -9,7 +9,7 @@ import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
 import { MARK_ORDER, markIndex } from '../lib/mark-order';
 import { parseMarket, ratioLegs, type MarketRef } from '../lib/markets';
-import { concatCols, emptyCols, intervalMs, lowerBound, openSeries, sliceCols, type CandleSeries, type Cols, type Series } from './history';
+import { concatCols, emptyCols, formingRows, intervalMs, lowerBound, openSeries, sliceCols, type CandleSeries, type Cols, type Series } from './history';
 import type { RatioSeries } from './ratio';
 import { restInterval } from './intervals';
 import { nativeOf } from '../lib/native';
@@ -196,6 +196,9 @@ class Slot {
   private priceTimer: ReturnType<typeof setTimeout> | undefined;
   /** Waiting on the first candles of a market just chosen. */
   private fresh = false;
+  /** The closed bars of the market chosen are drawn: until they are, the
+   *  forming bar waits, for the chart on screen is still the last market's. */
+  private candlesIn = false;
   private demo: ReturnType<typeof setInterval> | undefined;
   /** Its tab is not shown: nothing is drawn, everything else carries on. */
   hidden = false;
@@ -398,19 +401,58 @@ class Slot {
       return;
     }
     this.engine.set_message('Loading…');
+    this.candlesIn = false;
     this.setStatus({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
     try {
       const series = await openChartSeries(market, tf);
       if (gen !== this.gen) return;
       this.series = series;
       this.cleanup.push(series.subscribe(() => this.refold()));
+      // The stream is asked for beside the history, and the forming bar from
+      // REST with them, so both are in hand when the closed bars are drawn.
+      const early = this.liveEarly(tf);
+      if (early) this.startLive(gen, tf);
+      this.seed(gen, tf);
       await series.ensure(baseBars(series, tf, bars));
       if (gen !== this.gen) return;
       this.refold();
-      this.startLive(gen, tf);
+      if (!early) this.startLive(gen, tf);
     } catch (e) {
       if (gen === this.gen) this.fail(message(e));
     }
+  }
+
+  /**
+   * Whether the stream can start before the history is in. A ratio's bar is
+   * its two markets' bars joined, and a bar the exchange does not stream at
+   * the chart's length is built from shorter ones — both read the history.
+   */
+  private liveEarly(tf: TfInfo): boolean {
+    const ref = parseMarket(this.market);
+    return !ratioLegs(this.market) && ref !== null && tf.live !== null && restInterval(ref.venue, tf.live) === tf.live;
+  }
+
+  /**
+   * The forming bar from REST, for the moment before the stream's first word —
+   * which for a quiet market can be seconds: without it the chart showed the
+   * last closed bar, its close as the price, hours old on a four-hour chart,
+   * and then jumped. The stream's bar takes over the moment it comes, for a
+   * kline with no trade id is older than any the stream sends.
+   */
+  private seed(gen: number, tf: TfInfo): void {
+    const ref = parseMarket(this.market);
+    if (!ref || !tf.live || ratioLegs(this.market)) return;
+    const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
+    const start = barStart(this.timeframe, Date.now());
+    void formingRows(this.market, restInterval(ref.venue, tf.live), start)
+      .then((rows) => {
+        if (gen !== this.gen || rows.length === 0 || feed.bar() !== null) return;
+        const high = Math.max(...rows.map((r) => r[2]!));
+        const low = Math.min(...rows.map((r) => r[3]!));
+        const volume = rows.reduce((sum, r) => sum + r[5]!, 0);
+        if (feed.apply_kline(start, rows[0]![1]!, high, low, rows[rows.length - 1]![4]!, volume, -1, false)) this.onLive(feed.bar() as Bar | null);
+      })
+      .catch(() => undefined);
   }
 
   private fail(error: string): void {
@@ -458,9 +500,11 @@ class Slot {
     const days = this.series?.interval === '1d' && info(this.timeframe).barMs > intervalMs('1d') ? this.series.cols : null;
     this.engine.set_days(days?.time ?? EMPTY, days?.open ?? EMPTY, days?.high ?? EMPTY, days?.low ?? EMPTY, days?.close ?? EMPTY);
     this.engine.set_message(k.time.length > 0 ? '' : 'No closed candles for this market and timeframe yet.');
+    this.candlesIn = true;
     this.pushLive();
     this.metaDirty = true;
-    if (!this.live && k.time.length > 0) this.setPrice(k.close[k.time.length - 1]!);
+    if (this.live) this.setPrice(this.live.close);
+    else if (k.time.length > 0) this.setPrice(k.close[k.time.length - 1]!);
   }
 
   private startLive(gen: number, tf: TfInfo): void {
@@ -479,8 +523,7 @@ class Slot {
       this.cleanup.push(() => clearInterval(timer));
       return;
     }
-    const feed = new LiveFeedEngine(this.timeframe);
-    this.feed = feed;
+    const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
     // An exchange without this length streams a shorter one, combined here into the chart's bar.
     const streamed = restInterval(ref.venue, tf.live);
     const combine = streamed !== tf.live ? combiner(this.timeframe, this.series?.cols ?? emptyCols()) : null;
@@ -563,11 +606,16 @@ class Slot {
       if (prev.time > this.lastClosedTime()) {
         const done = { ...prev, closed: true };
         this.extra.push(done);
-        this.closed = concatCols([this.closed, barCols([done])]);
-        this.pushCandles();
+        if (this.candlesIn) {
+          this.closed = concatCols([this.closed, barCols([done])]);
+          this.pushCandles();
+        }
       }
-      this.confirm(prev.time);
+      if (this.candlesIn) this.confirm(prev.time);
     }
+    // Before the closed bars are in, the chart drawn is the last market's: the
+    // bar and its price wait, to go out with them.
+    if (!this.candlesIn) return;
     this.pushLive();
     this.setPrice(bar.close);
   }

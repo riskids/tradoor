@@ -204,8 +204,30 @@ interface Page {
 }
 
 /** Klines opening inside the range, oldest first, closed bars only. */
-async function klines(ref: MarketRef, interval: string, range: Range): Promise<Page> {
-  const limit = pageLimit(ref);
+async function klines(ref: MarketRef, interval: string, range: Range, limit = pageLimit(ref)): Promise<Page> {
+  const rows = await rowsIn(ref, interval, range, limit);
+  const now = Date.now();
+  const closed = rows.filter((r) => Number.isFinite(r[4]) && intervalEnd(interval, r[0]!) <= now);
+  const cols = emptyCols();
+  for (const [i, key] of KEYS.entries()) cols[key] = Float64Array.from(closed, (r) => r[i]!);
+  return { cols, raw: rows.length };
+}
+
+/**
+ * The bars of `interval` from `start` until now, the forming one with them —
+ * what a chart draws its forming bar from until its stream's first word. Asked
+ * for as few rows as that takes: the exchanges weigh a request by its limit.
+ */
+export async function formingRows(market: string, interval: string, start: number): Promise<Row[]> {
+  const ref = parseMarket(market);
+  if (!ref) return [];
+  const wanted = Math.ceil((Date.now() - start) / intervalMs(interval)) + 1;
+  const rows = await rowsIn(ref, interval, { start }, Math.min(pageLimit(ref), Math.max(2, wanted)));
+  return rows.filter((r) => r[0]! >= start && r.slice(1, 5).every(Number.isFinite));
+}
+
+/** The exchange's klines opening inside the range, oldest first, the forming one included. */
+async function rowsIn(ref: MarketRef, interval: string, range: Range, limit: number): Promise<Row[]> {
   let rows: Row[];
   if (ref.venue.startsWith('binance')) {
     const path = ref.venue === 'binance-perp' ? '/fapi/v1/klines' : '/api/v3/klines';
@@ -229,11 +251,7 @@ async function klines(ref: MarketRef, interval: string, range: Range): Promise<P
     const { venueRows } = await import('./history-venues');
     rows = await venueRows(ref, await nativeOf(`${ref.venue}:${ref.symbol}`), interval, range, limit, getJson);
   }
-  const now = Date.now();
-  const closed = rows.filter((r) => Number.isFinite(r[4]) && intervalEnd(interval, r[0]!) <= now);
-  const cols = emptyCols();
-  for (const [i, key] of KEYS.entries()) cols[key] = Float64Array.from(closed, (r) => r[i]!);
-  return { cols, raw: rows.length };
+  return rows;
 }
 
 // ---------------------------------------------------------------- stored partitions
@@ -455,13 +473,16 @@ export class Series {
     let added = 0;
     let end = end0;
     while (added < want) {
-      const page = await klines(this.ref, this.interval, { end });
+      // No more than is wanted, and the forming bar: a chart's first page is
+      // a screenful, and a full page is several times the bytes to wait on.
+      const ask = Math.min(limit, want - added + 1);
+      const page = await klines(this.ref, this.interval, { end }, ask);
       if (page.cols.time.length > 0) {
         pages.unshift(page.cols);
         added += page.cols.time.length;
         end = page.cols.time[0]! - 1;
       }
-      if (page.raw < limit) {
+      if (page.raw < ask) {
         this.exhausted = true;
         break;
       }
