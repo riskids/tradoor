@@ -272,7 +272,7 @@ function Health() {
       <span class="health" classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }}>
         <Icon name="server" size={12} />
       </span>
-      {state() === 'down' ? 'OFFLINE' : state() === 'db' ? 'NO DB' : 'SERVER'}
+      <span>{state() === 'down' ? 'OFFLINE' : state() === 'db' ? 'NO DB' : 'SERVER'}</span>
     </span>
   );
 }
@@ -284,7 +284,7 @@ function Clock() {
   return (
     <span class="item num" data-tip={`Times are shown in ${timeZone() === LOCAL_ZONE ? `your local time (${deviceZone()})` : timeZone()} — change it in Settings`}>
       <span class="dim">{zoneLabel()}</span>
-      {formatClock(now())}
+      <span>{formatClock(now())}</span>
     </span>
   );
 }

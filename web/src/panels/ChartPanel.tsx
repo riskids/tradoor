@@ -788,7 +788,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           </button>
         </Show>
         <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
-          {symbolOf(market())}
+          <span>{symbolOf(market())}</span>
           <Icon name="chevron" size={10} />
         </button>
         <VenueTag market={market()} name />
@@ -820,7 +820,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         </button>
         <span class="sep" />
         <button class="tb" data-tip="Add an indicator" onClick={() => setOverlay({ kind: 'indicators', panelId: id })}>
-          <Icon name="indicators" size={13} /> Indicators
+          <Icon name="indicators" size={13} />
+          <span>Indicators</span>
           <Show when={studyCount() > 0}>
             <span class="dim">{studyCount()}</span>
           </Show>

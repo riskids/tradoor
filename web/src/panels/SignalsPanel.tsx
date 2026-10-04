@@ -231,7 +231,8 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setTelegramMenu((v) => !v)}
           >
-            <Icon name="alarm" size={12} /> Telegram
+            <Icon name="alarm" size={12} />
+            <span>Telegram</span>
           </button>
         </Show>
       </div>

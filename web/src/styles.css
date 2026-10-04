@@ -78,6 +78,8 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
    the space under them empty and the text reads a pixel or two high — plain to
    see beside a chip's border. A browser without `text-box` keeps today's look. */
 .brand span, .topbar .item span, .topbar .item kbd, .statusbar span, .tab span, .live .num, .live .state { text-box: trim-both cap alphabetic; }
+/* So does a label beside the icon it is centred with, and a chip's text in its border. */
+button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap alphabetic; }
 .banner { padding: 3px 8px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--bear) 12%, transparent); color: var(--bear); font-size: 11px; }
 .workspace { position: relative; flex: 1; min-height: 0; min-width: 0; padding: 3px; display: flex; }
 
@@ -617,7 +619,7 @@ table.venues tr.off td { color: var(--dim); }
 .sig-drives .bought { color: color-mix(in oklab, var(--bull) 80%, var(--muted)); }
 .sig-drives .sold { color: color-mix(in oklab, var(--bear) 80%, var(--muted)); }
 .sig-score { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
-.sig-score .div { padding: 0 3px; border: 1px solid var(--border); color: var(--muted); font-size: 9px; }
+.sig-score .div { padding: 3px 3px; border: 1px solid var(--border); color: var(--muted); font-size: 9px; }
 .sig-score .div.delta { border-color: color-mix(in oklab, var(--info) 45%, transparent); color: var(--info); background: color-mix(in oklab, var(--info) 10%, transparent); }
 .sig-age { text-align: right; }
 /* A pattern's limit entry, on a line of its own under the row. */

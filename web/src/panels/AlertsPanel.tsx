@@ -246,7 +246,8 @@ export function AlertsPanel(props: { panel: AlertsPanelState }) {
         <div class="al-bulk">
           <span>{alertState.log.length === 1 ? '1 entry' : `${alertState.log.length} entries`}</span>
           <button class="del" onClick={clearLog}>
-            <Icon name="trash" size={12} /> Clear log
+            <Icon name="trash" size={12} />
+            <span>Clear log</span>
           </button>
         </div>
       </Show>
