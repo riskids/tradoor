@@ -85,6 +85,12 @@ pub struct Found {
     pub pullback: f64,
     /// The ATR at the third drive.
     pub atr: f64,
+    /// Whether the push into the third drive bought less of the volume than
+    /// the push into the second — price further, buyers weaker — where the
+    /// exchange reports who took each trade; `None` where it does not.
+    pub delta_divergence: Option<bool>,
+    /// Whether more was sold than bought on the third drive's own bar.
+    pub delta_against: Option<bool>,
 }
 
 /// Two drives and the line through them, waiting for a third: what price
@@ -123,22 +129,26 @@ impl Setup {
     }
 }
 
+/// Taker buy volume per bar, beside the bars, where the exchange reports it —
+/// Binance does, Bybit does not — for the delta at the drives.
+pub type Taker<'a> = Option<&'a [f64]>;
+
 /// The newest two drives on `side` waiting for a third at their line, if any.
 pub fn setup(candles: &[Candle], side: Side) -> Option<Setup> {
-    Prepared::new(candles, side)?.setup()
+    Prepared::new(candles, None, side)?.setup()
 }
 
 /// The pattern on `side` whose third drive is the newest, if there is one now.
-pub fn find(candles: &[Candle], side: Side) -> Option<Found> {
-    let prepared = Prepared::new(candles, side)?;
+pub fn find(candles: &[Candle], taker: Taker, side: Side) -> Option<Found> {
+    let prepared = Prepared::new(candles, taker, side)?;
     prepared.at(candles.len() - 1)
 }
 
 /// Every pattern the bars held, each as a scan would have reported it the
 /// first time it had turned — the bar that scan read up to, and what it saw.
 /// Nothing after that bar is looked at to find it.
-pub fn history(candles: &[Candle], side: Side) -> Vec<(usize, Found)> {
-    let Some(p) = Prepared::new(candles, side) else { return Vec::new() };
+pub fn history(candles: &[Candle], taker: Taker, side: Side) -> Vec<(usize, Found)> {
+    let Some(p) = Prepared::new(candles, taker, side) else { return Vec::new() };
     let mut told = std::collections::HashSet::new();
     // A scan at every bar, as the live ones run, each pattern taken the first time one sees it turned.
     (0..candles.len()).filter_map(|at| p.at(at).filter(|f| f.turn.is_some() && told.insert(f.drives[2].index)).map(|f| (at, f))).collect()
@@ -389,7 +399,7 @@ pub struct Touch {
 /// getting into the line's reach — at the line's near edge, or at the open if
 /// it opened past that.
 pub fn touches(candles: &[Candle], side: Side) -> Vec<Touch> {
-    let Some(p) = Prepared::new(candles, side) else { return Vec::new() };
+    let Some(p) = Prepared::new(candles, None, side) else { return Vec::new() };
     let sign = if side == Side::Bull { -1.0 } else { 1.0 };
     let mut told = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -440,13 +450,18 @@ struct Prepared {
     shapes: Vec<std::cell::OnceCell<Option<Shape>>>,
     /// Each pivot's pairs as the second drive, its first drives newest first.
     pairs: Vec<std::cell::OnceCell<Vec<Pair>>>,
+    /// What takers bought less what they sold, per bar, the pattern's way: for
+    /// the bullish side, mirrored like the prices, sold less bought.
+    delta: Option<Vec<f64>>,
 }
 
 impl Prepared {
-    fn new(candles: &[Candle], side: Side) -> Option<Self> {
+    fn new(candles: &[Candle], taker: Taker, side: Side) -> Option<Self> {
         if candles.len() < 60 {
             return None;
         }
+        let sign = if side == Side::Bull { -1.0 } else { 1.0 };
+        let delta = taker.filter(|t| t.len() == candles.len()).map(|t| t.iter().zip(candles).map(|(bought, k)| sign * (2.0 * bought - k.volume)).collect());
         let c: Vec<Candle> = match side {
             Side::Bear => candles.to_vec(),
             Side::Bull => candles.iter().map(mirror).collect(),
@@ -457,7 +472,7 @@ impl Prepared {
         let pivots = pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT);
         let shapes = (0..pivots.len()).map(|_| std::cell::OnceCell::new()).collect();
         let pairs = (0..pivots.len()).map(|_| std::cell::OnceCell::new()).collect();
-        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots, shapes, pairs, c })
+        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots, shapes, pairs, delta, c })
     }
 
     fn atr_at(&self, i: usize) -> Option<f64> {
@@ -651,6 +666,21 @@ impl Prepared {
             score += 15.0;
         }
 
+        // The delta at the drives: how much of the volume buyers took on the
+        // push into each, from the low of the pullback before it.
+        let push = |from: usize, to: usize| (from + 1..to).min_by(|&i, &j| c[i].low.total_cmp(&c[j].low)).map_or(to, |low| low + 1);
+        let (delta_divergence, delta_against) = match &self.delta {
+            Some(delta) => {
+                let imbalance = |from: usize, to: usize| {
+                    let (bought, volume) = (from..=to).fold((0.0, 0.0), |(d, v), i| (d + delta[i], v + c[i].volume));
+                    (volume > 0.0).then(|| bought / volume)
+                };
+                let divergence = imbalance(push(a, b), b).zip(imbalance(push(b, z), z)).map(|(second, third)| third < second);
+                (divergence, Some(delta[z] < 0.0))
+            }
+            None => (None, None),
+        };
+
         // Prices back the right way up for the bullish side.
         let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
         let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
@@ -663,6 +693,8 @@ impl Prepared {
             extreme: sign * top,
             pullback: sign * pullback,
             atr: atr_z,
+            delta_divergence,
+            delta_against,
         })
     }
 }
@@ -716,7 +748,7 @@ mod tests {
     #[test]
     fn three_pushes_to_one_line_are_found() {
         let bars = three_up(&[(126, 114.0)]);
-        let found = find(&bars, Side::Bear).expect("three drives");
+        let found = find(&bars, None, Side::Bear).expect("three drives");
         assert_eq!(found.drives.map(|d| d.index), [60, 90, 120]);
         assert_eq!(found.drives.map(|d| d.price), [110.5, 115.5, 120.5]);
         assert_eq!(found.drives[2].at, 120 * H4);
@@ -729,11 +761,11 @@ mod tests {
     #[test]
     fn the_history_reports_a_pattern_as_a_scan_would_have_then() {
         let bars = three_up(&[(126, 114.0), (150, 104.0)]);
-        let reported = history(&bars, Side::Bear);
+        let reported = history(&bars, None, Side::Bear);
         assert_eq!(reported.len(), 1);
         let (at, found) = &reported[0];
         assert_eq!(*at, 122, "the first scan after the third drive is known, the turn already in");
-        assert_eq!(find(&bars[..=*at], Side::Bear).as_ref(), Some(found), "the same as that scan found, seeing nothing later");
+        assert_eq!(find(&bars[..=*at], None, Side::Bear).as_ref(), Some(found), "the same as that scan found, seeing nothing later");
         assert_eq!(found.extreme, 120.5, "the stop is measured from the third drive's high");
     }
 
@@ -774,34 +806,34 @@ mod tests {
             .iter()
             .map(|c| Candle { open: 300.0 - c.open, high: 300.0 - c.low, low: 300.0 - c.high, close: 300.0 - c.close, ..*c })
             .collect();
-        let found = find(&bars, Side::Bull).expect("three drives down");
+        let found = find(&bars, None, Side::Bull).expect("three drives down");
         assert_eq!(found.side, Side::Bull);
         assert_eq!(found.drives.map(|d| d.price), [189.5, 184.5, 179.5], "the lows, in prices as they are");
-        assert!(find(&bars, Side::Bear).is_none(), "and nothing bearish in it");
+        assert!(find(&bars, None, Side::Bear).is_none(), "and nothing bearish in it");
     }
 
     #[test]
     fn a_third_drive_off_the_line_is_not_one() {
         // The third push overshoots the line by five points: a breakout, not a drive.
         let corners = [(0, 95.0), (60, 110.0), (75, 100.0), (90, 115.0), (105, 105.0), (120, 125.0), (126, 118.0)];
-        assert!(find(&legs(&corners), Side::Bear).is_none());
+        assert!(find(&legs(&corners), None, Side::Bear).is_none());
     }
 
     #[test]
     fn a_new_high_or_a_close_through_the_line_ends_it() {
         // Back up past the third drive: a fourth push, and the three are history.
-        assert!(find(&three_up(&[(124, 116.0), (128, 121.5)]), Side::Bear).is_none());
+        assert!(find(&three_up(&[(124, 116.0), (128, 121.5)]), None, Side::Bear).is_none());
         // Without the pullbacks there is a trend, not three drives.
         let shallow = [(0, 95.0), (60, 110.0), (75, 109.5), (90, 115.0), (105, 114.5), (120, 120.0), (126, 114.0)];
-        assert!(find(&legs(&shallow), Side::Bear).is_none());
+        assert!(find(&legs(&shallow), None, Side::Bear).is_none());
     }
 
     #[test]
     fn a_smaller_high_after_the_third_drive_does_not_hide_it() {
         // A bounce in the pullback makes a high of its own, under the third drive.
         let bars = three_up(&[(126, 114.0), (129, 116.8), (131, 115.0)]);
-        assert!(Prepared::new(&bars, Side::Bear).unwrap().pivots.iter().any(|p| p.index == 129), "the bounce is a high of its own");
-        let found = find(&bars, Side::Bear).expect("still three drives");
+        assert!(Prepared::new(&bars, None, Side::Bear).unwrap().pivots.iter().any(|p| p.index == 129), "the bounce is a high of its own");
+        let found = find(&bars, None, Side::Bear).expect("still three drives");
         assert_eq!(found.drives[2].index, 120);
     }
 
@@ -809,11 +841,11 @@ mod tests {
     fn a_wick_past_the_third_drive_leaves_it_standing() {
         let mut bars = three_up(&[(126, 114.0)]);
         bars[123].high = 122.0;
-        let found = find(&bars, Side::Bear).expect("a wick is a retest");
+        let found = find(&bars, None, Side::Bear).expect("a wick is a retest");
         assert_eq!(found.drives[2].index, 120);
         // A close past it, well off the line: not a drive on it either.
         (bars[123].high, bars[123].close) = (125.0, 124.0);
-        assert!(find(&bars, Side::Bear).is_none(), "a close past it ends it");
+        assert!(find(&bars, None, Side::Bear).is_none(), "a close past it ends it");
     }
 
     #[test]
@@ -889,16 +921,35 @@ mod tests {
     }
 
     #[test]
+    fn the_delta_says_whether_buyers_weakened_into_the_third_drive() {
+        let bars = three_up(&[(126, 114.0)]);
+        assert_eq!(find(&bars, None, Side::Bear).unwrap().delta_divergence, None, "no taker volume, no delta");
+        // Buyers take 80% of the volume on the push into the second drive, 60% into the third.
+        let taker: Vec<f64> = bars.iter().enumerate().map(|(i, k)| k.volume * if (76..=90).contains(&i) { 0.8 } else { 0.6 }).collect();
+        let found = find(&bars, Some(&taker), Side::Bear).unwrap();
+        assert_eq!(found.delta_divergence, Some(true), "price further, buyers weaker");
+        assert_eq!(found.delta_against, Some(false), "and on the third drive's bar they still bought more");
+        let stronger: Vec<f64> = bars.iter().enumerate().map(|(i, k)| k.volume * if i == 120 { 0.3 } else if (106..=119).contains(&i) { 0.9 } else { 0.6 }).collect();
+        let found = find(&bars, Some(&stronger), Side::Bear).unwrap();
+        assert_eq!(found.delta_divergence, Some(false), "buyers stronger into the third");
+        assert_eq!(found.delta_against, Some(true), "though its own bar was sold");
+        // The bullish side reads sellers the same way: sold less bought.
+        let mirrored: Vec<Candle> = bars.iter().map(|c| Candle { open: 300.0 - c.open, high: 300.0 - c.low, low: 300.0 - c.high, close: 300.0 - c.close, ..*c }).collect();
+        let sold: Vec<f64> = taker.iter().zip(&bars).map(|(b, k)| k.volume - b).collect();
+        assert_eq!(find(&mirrored, Some(&sold), Side::Bull).unwrap().delta_divergence, Some(true));
+    }
+
+    #[test]
     fn the_first_drive_is_a_fresh_high() {
         // A higher high a week before the first drive: a range, not a run of drives.
         let corners = [(0, 95.0), (35, 112.0), (45, 100.0), (60, 110.0), (75, 100.0), (90, 115.0), (105, 105.0), (120, 120.0), (126, 114.0)];
-        assert!(find(&legs(&corners), Side::Bear).is_none());
+        assert!(find(&legs(&corners), None, Side::Bear).is_none());
     }
 
     #[test]
     fn a_pattern_waits_two_days_for_its_turn() {
         // Three weeks after the third drive it is no longer news.
-        assert!(find(&three_up(&[(126, 114.0), (246, 112.0)]), Side::Bear).is_none());
+        assert!(find(&three_up(&[(126, 114.0), (246, 112.0)]), None, Side::Bear).is_none());
     }
 
     #[test]

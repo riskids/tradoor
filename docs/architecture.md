@@ -176,6 +176,14 @@ chart's own (`circle` is a drawing kind for that). Telegram, for readers who
 turn it on, hears once per scan of the patterns scoring 70 or more that
 turned in it; the panel lists them all.
 
+Where the exchange says who took each trade — Binance's klines carry the
+taker buy volume, Bybit's do not — the delta at the drives is read too: the
+share of the volume buyers took on the push into the third drive (from the low
+of the pullback before it) against the push into the second, a smaller share
+being delta divergence (ΔDIV in the list), and whether the third drive's own
+bar was sold more than bought. Neither changes the score; the record counts
+them as cuts of its own, beside RSI divergence and the score bands.
+
 Between scans the third drive is caught as it happens. Each scan also keeps,
 for every coin and side without a pattern, the newest two drives that wait for
 a third — the pullback after the second made, the line not yet reached

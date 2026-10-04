@@ -267,6 +267,11 @@ export interface Signal {
   lastSeen: number;
   /** The trade, once it turned and was entered. */
   levels: SignalLevels | null;
+  /** Buyers weaker on the push into the third drive than into the second, and
+   *  the third drive's bar sold more than bought; null where the exchange does
+   *  not say who took each trade. */
+  deltaDivergence: boolean | null;
+  deltaAgainst: boolean | null;
 }
 
 /** How a trade closed: all three take-profits, two or one (the rest out at the
@@ -283,7 +288,7 @@ export interface SignalLevels {
 /** One line of the record: a side, and a cut of it by score or divergence. */
 export interface SignalGroup {
   side: 'bear' | 'bull';
-  group: 'all' | '70' | '50' | '0' | 'div';
+  group: 'all' | '70' | '50' | '0' | 'div' | 'ddiv' | '70ddiv' | 'dagainst';
   n: number;
   /** How many reached each take-profit, each counting those that went further. */
   tp1: number;
@@ -353,7 +358,7 @@ export interface SignalPlanRow {
   plan: 'fixed' | 'fib' | 'fib-atr' | 'from-entry';
   kind: 'pattern' | 'touch';
   side: 'bear' | 'bull';
-  group: 'all' | '70' | '50' | '0' | 'div';
+  group: 'all' | '70' | '50' | '0' | 'div' | 'ddiv' | '70ddiv' | 'dagainst';
   n: number;
   tp1: number;
   tp2: number;

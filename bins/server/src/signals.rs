@@ -48,7 +48,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 6;
+const VERSION: i32 = 7;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -117,18 +117,18 @@ impl Screener {
         if markets.is_empty() {
             bail!("the catalogue lists no perpetuals yet");
         }
-        let results: Vec<(String, anyhow::Result<Vec<Candle>>)> =
+        let results: Vec<(String, anyhow::Result<(Vec<Candle>, Option<Vec<f64>>)>)> =
             futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, BARS).await) }).buffer_unordered(AT_ONCE).collect().await;
         let mut held = HashMap::new();
         let mut found = Vec::new();
         let mut setups = Vec::new();
         for (market, bars) in results {
             match bars {
-                Ok(bars) => {
+                Ok((bars, taker)) => {
                     let price = bars.last().map_or(0.0, |c| c.close);
                     for side in [Side::Bear, Side::Bull] {
                         // A pattern found is ahead of a setup on the same side.
-                        if let Some(f) = drives::find(&bars, side) {
+                        if let Some(f) = drives::find(&bars, taker.as_deref(), side) {
                             found.push((market.clone(), f, price));
                         } else if let Some(setup) = drives::setup(&bars, side) {
                             setups.push((market.clone(), setup));
@@ -164,7 +164,7 @@ impl Screener {
             let bars = match held.get(&market) {
                 Some(bars) => bars,
                 None => match self.bars(&market, bar, BARS).await {
-                    Ok(bars) => {
+                    Ok((bars, _)) => {
                         fetched = bars;
                         &fetched
                     }
@@ -288,7 +288,7 @@ impl Screener {
             let bars = match held.get(&market) {
                 Some(bars) => bars,
                 None => match self.bars(&market, bar, BARS).await {
-                    Ok(bars) => {
+                    Ok((bars, _)) => {
                         fetched = bars;
                         &fetched
                     }
@@ -343,9 +343,9 @@ impl Screener {
         if markets.is_empty() {
             bail!("the catalogue lists no perpetuals yet");
         }
-        let results: Vec<(String, anyhow::Result<Vec<Candle>>)> =
+        let results: Vec<(String, anyhow::Result<(Vec<Candle>, Option<Vec<f64>>)>)> =
             futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, HISTORY_BARS).await) }).buffer_unordered(2).collect().await;
-        let from = results.iter().filter_map(|(_, bars)| bars.as_ref().ok()?.first().map(|c| c.open_time)).min().unwrap_or(bar);
+        let from = results.iter().filter_map(|(_, bars)| bars.as_ref().ok()?.0.first().map(|c| c.open_time)).min().unwrap_or(bar);
         // The record's two halves, to see whether a plan holds up in both.
         let middle = from + (bar - from) / 2;
         let mut read = 0;
@@ -353,7 +353,7 @@ impl Screener {
         let mut touches = TouchesReplayed::default();
         let mut plans = Plans::default();
         for (market, bars) in results {
-            let Ok(bars) = bars else { continue };
+            let Ok((bars, taker)) = bars else { continue };
             read += 1;
             for side in [Side::Bear, Side::Bull] {
                 for t in drives::touches(&bars, side) {
@@ -366,12 +366,12 @@ impl Screener {
                         plans.add(plan, "touch", side, None, bars[t.at].open_time >= middle, &o);
                     }
                 }
-                for (at, f) in drives::history(&bars, side) {
+                for (at, f) in drives::history(&bars, taker.as_deref(), side) {
                     let entry = bars[at].close;
                     for plan in Plan::ALL {
                         let lv = drives::plan_levels(plan, side, entry, f.extreme, f.pullback, f.atr);
                         let o = drives::play(side, entry, lv, &bars[at + 1..], false);
-                        plans.add(plan, "pattern", side, Some((f.score, f.divergence)), bars[at].open_time >= middle, &o);
+                        plans.add(plan, "pattern", side, Some(&f), bars[at].open_time >= middle, &o);
                     }
                     let o = drives::outcome(side, entry, drives::levels(side, entry, f.extreme, f.pullback, f.atr), &bars[at + 1..]);
                     if o.result == Hit::Open {
@@ -390,10 +390,10 @@ impl Screener {
         )
         .await?;
         tx.execute(
-            "INSERT INTO signal_backtest (run, market, side, entry_at, entry, target, stop, score, divergence, outcome, bars, ret, best, worst)
-             SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::int[], $9::bool[], $10::text[], $11::int[], $12::float8[], $13::float8[], $14::float8[])
+            "INSERT INTO signal_backtest (run, market, side, entry_at, entry, target, stop, score, divergence, outcome, bars, ret, best, worst, delta_divergence, delta_against)
+             SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::int[], $9::bool[], $10::text[], $11::int[], $12::float8[], $13::float8[], $14::float8[], $15::bool[], $16::bool[])
              ON CONFLICT DO NOTHING",
-            &[&at, &rows.market, &rows.side, &rows.entry_at, &rows.entry, &rows.target, &rows.stop, &rows.score, &rows.divergence, &rows.outcome, &rows.bars, &rows.ret, &rows.best, &rows.worst],
+            &[&at, &rows.market, &rows.side, &rows.entry_at, &rows.entry, &rows.target, &rows.stop, &rows.score, &rows.divergence, &rows.outcome, &rows.bars, &rows.ret, &rows.best, &rows.worst, &rows.delta_divergence, &rows.delta_against],
         )
         .await?;
         tx.execute(
@@ -409,8 +409,9 @@ impl Screener {
         Ok(())
     }
 
-    /// A market's last `count` closed four-hour bars up to `bar`, oldest first.
-    async fn bars(&self, market: &str, bar: i64, count: u32) -> anyhow::Result<Vec<Candle>> {
+    /// A market's last `count` closed four-hour bars up to `bar`, oldest first,
+    /// with each bar's taker buy volume where the exchange reports it.
+    async fn bars(&self, market: &str, bar: i64, count: u32) -> anyhow::Result<(Vec<Candle>, Option<Vec<f64>>)> {
         let m = MarketRef::parse(market).ok_or_else(|| anyhow!("{market} is not a market"))?;
         let exchange = m.venue.exchange();
         let url = match exchange {
@@ -424,10 +425,11 @@ impl Screener {
         if !status.is_success() {
             bail!("{status} from {url}");
         }
-        let klines = if exchange == Exchange::Binance { binance::parse_klines(&body)? } else { bybit::parse_klines(&body)? };
-        klines
+        let mut klines = if exchange == Exchange::Binance { binance::parse_klines(&body)? } else { bybit::parse_klines(&body)? };
+        klines.retain(|k| k.open_time + STEP <= bar);
+        let taker = klines.iter().map(|k| k.taker_buy_volume.as_deref()?.parse::<f64>().ok()).collect::<Option<Vec<f64>>>();
+        let candles = klines
             .iter()
-            .filter(|k| k.open_time + STEP <= bar)
             .map(|k| {
                 Ok(Candle {
                     open_time: k.open_time,
@@ -439,7 +441,8 @@ impl Screener {
                     quote_volume: None,
                 })
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<Candle>>>()?;
+        Ok((candles, taker))
     }
 
     /// The scan and what it found, a pattern seen before keeping the bar it first turned on.
@@ -459,15 +462,16 @@ impl Screener {
             let (entry_at, entry) = (f.turn.map(|_| bar), f.turn.map(|_| *price));
             let levels = f.turn.map(|_| levels_json(drives::levels(f.side, *price, f.extreme, f.pullback, f.atr)));
             tx.execute(
-                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry, levels)
-                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14)
+                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry, levels, delta_divergence, delta_against)
+                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15, $16)
                  ON CONFLICT (kind, market, side, timeframe, third_at) DO UPDATE SET
                      drives = EXCLUDED.drives, turned_at = COALESCE(signal.turned_at, EXCLUDED.turned_at),
                      turn_price = COALESCE(signal.turn_price, EXCLUDED.turn_price), score = EXCLUDED.score,
                      divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar,
                      entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry),
-                     levels = COALESCE(signal.levels, EXCLUDED.levels)",
-                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry, &levels],
+                     levels = COALESCE(signal.levels, EXCLUDED.levels),
+                     delta_divergence = EXCLUDED.delta_divergence, delta_against = EXCLUDED.delta_against",
+                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry, &levels, &f.delta_divergence, &f.delta_against],
             )
             .await?;
         }
@@ -498,7 +502,7 @@ impl Screener {
         let turned = client
             .query(
                 "UPDATE signal SET told_at = $2 WHERE seen_bar = $1 AND turned_at IS NOT NULL AND told_at IS NULL
-                 RETURNING market, side, drives, score, divergence, price, levels",
+                 RETURNING market, side, drives, score, divergence, price, levels, delta_divergence",
                 &[&bar, &now_ms()],
             )
             .await?;
@@ -513,6 +517,7 @@ impl Screener {
                 divergence: r.get(4),
                 price: r.get(5),
                 levels: levels_of(&r.get::<_, Option<Value>>(6)),
+                delta_divergence: r.get::<_, Option<bool>>(7) == Some(true),
             })
             // Telegram hears of the best of them: a score of 70 or more.
             .filter(|t| t.score >= TOLD_SCORE)
@@ -600,6 +605,8 @@ struct Replayed {
     ret: Vec<f64>,
     best: Vec<f64>,
     worst: Vec<f64>,
+    delta_divergence: Vec<Option<bool>>,
+    delta_against: Vec<Option<bool>>,
 }
 
 impl Replayed {
@@ -613,12 +620,34 @@ impl Replayed {
         self.stop.push(lv.sl);
         self.score.push(f.score as i32);
         self.divergence.push(f.divergence);
+        self.delta_divergence.push(f.delta_divergence);
+        self.delta_against.push(f.delta_against);
         self.outcome.push(o.result.id());
         self.bars.push(o.bars as i32);
         self.ret.push(o.ret);
         self.best.push(o.best);
         self.worst.push(o.worst);
     }
+}
+
+/// The cuts of the record a pattern counts in: all of them, its score band, and
+/// each sign it carries — RSI divergence, delta divergence, a sold third drive
+/// — with the best score band and delta divergence together.
+fn groups_of(score: i32, divergence: bool, delta_divergence: Option<bool>, delta_against: Option<bool>) -> Vec<&'static str> {
+    let mut groups = vec!["all", if score >= 70 { "70" } else if score >= 50 { "50" } else { "0" }];
+    if divergence {
+        groups.push("div");
+    }
+    if delta_divergence == Some(true) {
+        groups.push("ddiv");
+        if score >= 70 {
+            groups.push("70ddiv");
+        }
+    }
+    if delta_against == Some(true) {
+        groups.push("dagainst");
+    }
+    groups
 }
 
 /// One plan's record over the replay, in one cut of it.
@@ -640,23 +669,11 @@ struct Plans(std::collections::BTreeMap<(usize, &'static str, &'static str, &'st
 
 impl Plans {
     /// One trade under `plan`; a pattern's score and divergence put it in its groups too.
-    fn add(&mut self, plan: Plan, kind: &'static str, side: Side, pattern: Option<(u32, bool)>, late: bool, o: &drives::Outcome) {
+    fn add(&mut self, plan: Plan, kind: &'static str, side: Side, pattern: Option<&Found>, late: bool, o: &drives::Outcome) {
         if o.result == Hit::Open {
             return;
         }
-        let mut groups = vec!["all"];
-        if let Some((score, divergence)) = pattern {
-            groups.push(if score >= 70 {
-                "70"
-            } else if score >= 50 {
-                "50"
-            } else {
-                "0"
-            });
-            if divergence {
-                groups.push("div");
-            }
-        }
+        let groups = pattern.map_or_else(|| vec!["all"], |f| groups_of(f.score as i32, f.divergence, f.delta_divergence, f.delta_against));
         let order = Plan::ALL.iter().position(|p| *p == plan).unwrap_or(0);
         for group in groups {
             let t = self.0.entry((order, kind, side.id(), group)).or_default();
@@ -749,6 +766,7 @@ struct Told {
     divergence: bool,
     price: f64,
     levels: Option<drives::Levels>,
+    delta_divergence: bool,
 }
 
 /// A price to five figures, as a chart of it would read: 13.600, 1,580.00.
@@ -769,7 +787,12 @@ fn signal_text(turned: &[Told], bar: i64, offset: i32) -> String {
         let name = MarketRef::parse(&t.market).map_or_else(|| t.market.clone(), |m| format!("{} ({})", m.symbol, m.venue.label()));
         let drives = t.drives.iter().map(|p| price_text(*p)).collect::<Vec<_>>().join(" → ");
         let (dot, way) = if t.bull { ("🟢", "bullish") } else { ("🔴", "bearish") };
-        let divergence = if t.divergence { " · RSI divergence" } else { "" };
+        let divergence = match (t.divergence, t.delta_divergence) {
+            (true, true) => " · RSI and delta divergence",
+            (true, false) => " · RSI divergence",
+            (false, true) => " · delta divergence",
+            (false, false) => "",
+        };
         let levels = t.levels.map_or_else(String::new, |lv| format!("   {}\n", levels_text(lv)));
         text += &format!("\n{dot} {name} — {way}, score {}{divergence}\n   drives {drives} · now {}\n{levels}", t.score, price_text(t.price));
     }
@@ -797,6 +820,8 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     let row = |r: &tokio_postgres::Row| {
         json!({
             "levels": r.get::<_, Option<Value>>(16),
+            "deltaDivergence": r.get::<_, Option<bool>>(17),
+            "deltaAgainst": r.get::<_, Option<bool>>(18),
             "id": r.get::<_, i64>(0),
             "market": r.get::<_, String>(1),
             "side": r.get::<_, String>(2),
@@ -815,7 +840,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             "lastSeen": r.get::<_, i64>(15),
         })
     };
-    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar, levels";
+    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar, levels, delta_divergence, delta_against";
     let (signals, ended, touches) = match &scan {
         Some(scan) => {
             let bar: i64 = scan.get(0);
@@ -868,6 +893,8 @@ struct Played {
     side: String,
     score: i32,
     divergence: bool,
+    delta_divergence: Option<bool>,
+    delta_against: Option<bool>,
     outcome: String,
     ret: f64,
     best: f64,
@@ -889,17 +916,10 @@ fn takes(outcome: &str) -> usize {
 /// four days, and the average result over the whole position, with the
 /// furthest price went either way.
 fn summarize(played: &[Played]) -> Vec<Value> {
-    let groups: [(&str, fn(&Played) -> bool); 5] = [
-        ("all", |_| true),
-        ("70", |p| p.score >= 70),
-        ("50", |p| (50..70).contains(&p.score)),
-        ("0", |p| p.score < 50),
-        ("div", |p| p.divergence),
-    ];
     let mut out = Vec::new();
     for side in ["bear", "bull"] {
-        for (group, keep) in groups {
-            let rows: Vec<&Played> = played.iter().filter(|p| p.side == side && keep(p)).collect();
+        for group in ["all", "70", "50", "0", "div", "ddiv", "70ddiv", "dagainst"] {
+            let rows: Vec<&Played> = played.iter().filter(|p| p.side == side && groups_of(p.score, p.divergence, p.delta_divergence, p.delta_against).contains(&group)).collect();
             let n = rows.len();
             let count = |o: &str| rows.iter().filter(|p| p.outcome == o).count();
             let reached = |tp: usize| rows.iter().filter(|p| takes(&p.outcome) >= tp).count();
@@ -965,11 +985,21 @@ fn summarize_touches(reached: &[Reached]) -> Vec<Value> {
 pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     owner(&headers)?;
     let client = state.pool.get().await?;
-    let played = |r: &tokio_postgres::Row| Played { side: r.get(0), score: r.get(1), divergence: r.get(2), outcome: r.get(3), ret: r.get(4), best: r.get(5), worst: r.get(6) };
+    let played = |r: &tokio_postgres::Row| Played {
+        side: r.get(0),
+        score: r.get(1),
+        divergence: r.get(2),
+        outcome: r.get(3),
+        ret: r.get(4),
+        best: r.get(5),
+        worst: r.get(6),
+        delta_divergence: r.get(7),
+        delta_against: r.get(8),
+    };
     let backtest = match client.query_opt("SELECT at, version, markets, from_at, to_at, variants FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await? {
         Some(run) => {
             let at: i64 = run.get(0);
-            let rows = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal_backtest WHERE run = $1", &[&at]).await?;
+            let rows = client.query("SELECT side, score, divergence, outcome, ret, best, worst, delta_divergence, delta_against FROM signal_backtest WHERE run = $1", &[&at]).await?;
             json!({
                 "at": at,
                 "version": run.get::<_, i32>(1),
@@ -1013,7 +1043,7 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
             })
         })
         .collect::<Vec<_>>();
-    let decided = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal WHERE outcome IS NOT NULL", &[]).await?;
+    let decided = client.query("SELECT side, score, divergence, outcome, ret, best, worst, delta_divergence, delta_against FROM signal WHERE outcome IS NOT NULL", &[]).await?;
     let since = client.query_one("SELECT min(entry_at), count(*) FILTER (WHERE outcome IS NULL) FROM signal WHERE entry_at IS NOT NULL", &[]).await?;
     let recent = client
         .query(
@@ -1103,7 +1133,7 @@ mod tests {
 
     #[test]
     fn the_record_counts_each_side_by_score_and_divergence() {
-        let p = |side: &str, score: i32, divergence: bool, outcome: &str, ret: f64| Played { side: side.into(), score, divergence, outcome: outcome.into(), ret, best: ret.max(0.0), worst: ret.min(0.0) };
+        let p = |side: &str, score: i32, divergence: bool, outcome: &str, ret: f64| Played { side: side.into(), score, divergence, outcome: outcome.into(), ret, best: ret.max(0.0), worst: ret.min(0.0), delta_divergence: None, delta_against: None };
         let played = [p("bear", 80, true, "tp3", 5.25), p("bear", 75, false, "stop", -4.0), p("bear", 40, true, "expired", 1.0), p("bear", 60, false, "tp1", 1.5), p("bull", 55, false, "tp2", 3.0)];
         let groups = summarize(&played);
         let find = |side: &str, group: &str| groups.iter().find(|g| g["side"] == side && g["group"] == group).unwrap().clone();
@@ -1131,10 +1161,23 @@ mod tests {
     #[test]
     fn the_plans_are_tallied_by_kind_side_and_group_and_by_half() {
         let o = |result: Hit, ret: f64| drives::Outcome { result, bars: 1, ret, best: 0.0, worst: 0.0 };
+        let point = Point { index: 0, at: 0, price: 1.0 };
+        let found = |score: u32, divergence: bool, delta_divergence: Option<bool>| Found {
+            side: Side::Bear,
+            drives: [point; 3],
+            turn: None,
+            divergence,
+            score,
+            extreme: 1.0,
+            pullback: 1.0,
+            atr: 1.0,
+            delta_divergence,
+            delta_against: None,
+        };
         let mut plans = Plans::default();
-        plans.add(Plan::Fib, "pattern", Side::Bear, Some((80, true)), false, &o(Hit::Tp2, 3.0));
-        plans.add(Plan::Fib, "pattern", Side::Bear, Some((40, false)), true, &o(Hit::Stop, -4.0));
-        plans.add(Plan::Fib, "pattern", Side::Bear, Some((40, false)), true, &o(Hit::Open, 0.0));
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some(&found(80, true, Some(true))), false, &o(Hit::Tp2, 3.0));
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some(&found(40, false, None)), true, &o(Hit::Stop, -4.0));
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some(&found(40, false, Some(false))), true, &o(Hit::Open, 0.0));
         plans.add(Plan::Fixed, "touch", Side::Bull, None, false, &o(Hit::Tp3, 5.0));
         let rows = plans.json();
         let find = |plan: &str, kind: &str, side: &str, group: &str| rows.as_array().unwrap().iter().find(|r| r["plan"] == plan && r["kind"] == kind && r["side"] == side && r["group"] == group).cloned();
@@ -1143,6 +1186,8 @@ mod tests {
         assert_eq!(all["halves"], json!([3.0, -4.0]));
         assert_eq!(find("fib", "pattern", "bear", "70").unwrap()["n"].as_u64(), Some(1));
         assert_eq!(find("fib", "pattern", "bear", "div").unwrap()["n"].as_u64(), Some(1));
+        assert_eq!(find("fib", "pattern", "bear", "70ddiv").unwrap()["n"].as_u64(), Some(1), "score 70+ with delta divergence");
+        assert!(find("fib", "pattern", "bear", "dagainst").is_none());
         assert_eq!(find("fixed", "touch", "bull", "all").unwrap()["tp3"].as_u64(), Some(1));
         assert!(find("fixed", "touch", "bull", "70").is_none(), "a touch has no score");
         assert_eq!(rows[0]["plan"], "fixed", "in the plans' own order");
@@ -1171,13 +1216,13 @@ mod tests {
     #[test]
     fn a_turn_reads_as_a_message() {
         let turned = [
-            Told { market: "binance-perp:LINKUSDT".into(), bull: false, drives: vec![13.6, 14.4, 15.8], score: 86, divergence: true, price: 15.1, levels: Some(drives::Levels { tp: [14.647, 14.194, 13.741], sl: 16.353 }) },
-            Told { market: "bybit-perp:ZECUSDT".into(), bull: true, drives: vec![1580.0, 1520.0, 1490.0], score: 70, divergence: false, price: 1510.0, levels: None },
+            Told { market: "binance-perp:LINKUSDT".into(), bull: false, drives: vec![13.6, 14.4, 15.8], score: 86, divergence: true, price: 15.1, levels: Some(drives::Levels { tp: [14.647, 14.194, 13.741], sl: 16.353 }), delta_divergence: false },
+            Told { market: "bybit-perp:ZECUSDT".into(), bull: true, drives: vec![1580.0, 1520.0, 1490.0], score: 70, divergence: false, price: 1510.0, levels: None, delta_divergence: true },
         ];
         let text = signal_text(&turned, 1_790_928_000_000, 7 * 60);
         assert!(text.starts_with("🔔 Three drives · 4h — 2 turned\n"), "{text}");
         assert!(text.contains("🔴 LINKUSDT (Binance Perp) — bearish, score 86 · RSI divergence\n   drives 13.600 → 14.400 → 15.800 · now 15.100"), "{text}");
-        assert!(text.contains("🟢 ZECUSDT (Bybit Perp) — bullish, score 70\n   drives 1,580.00 → 1,520.00 → 1,490.00"), "{text}");
+        assert!(text.contains("🟢 ZECUSDT (Bybit Perp) — bullish, score 70 · delta divergence\n   drives 1,580.00 → 1,520.00 → 1,490.00"), "{text}");
         assert!(text.contains("   TP 14.647 / 14.194 / 13.741 · SL 16.353\n"), "the trade's own prices: {text}");
         assert!(text.ends_with("UTC+7"), "{text}");
     }

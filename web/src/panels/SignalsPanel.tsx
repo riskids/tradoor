@@ -73,7 +73,16 @@ const moved = (s: { outcome: SignalOutcome | null; best: number | null; worst: n
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
 const share = (part: number, n: number) => (n === 0 ? '—' : `${Math.round((part / n) * 100)}%`);
 const BECAME: Record<string, string> = { turned: 'became three drives, turned', pattern: 'became three drives', none: 'no third drive' };
-const GROUP_LABEL: Record<SignalGroup['group'], string> = { all: 'All', '70': 'Score 70+', '50': 'Score 50–69', '0': 'Score under 50', div: 'RSI divergence' };
+const GROUP_LABEL: Record<SignalGroup['group'], string> = {
+  all: 'All',
+  '70': 'Score 70+',
+  '50': 'Score 50–69',
+  '0': 'Score under 50',
+  div: 'RSI divergence',
+  ddiv: 'Delta divergence',
+  '70ddiv': 'Score 70+ & Δ div',
+  dagainst: 'Third drive sold',
+};
 const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
   tp3: ['✓', 'TP3', 'All three take-profits'],
   tp2: ['✓', 'TP2', 'Two take-profits, the rest out at the entry or after four days'],
@@ -265,6 +274,11 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                 <span class="sig-drives num">{s.drives.map((d) => price(d.price)).join(' → ')}</span>
                 <span class="sig-score num">
                   <Show when={s.outcome}>{(o) => <span class={`sig-out ${o()}`} data-tip={`${OUTCOME[o()][2]} · ${pct(s.ret)}`}>{OUTCOME[o()][0]}</span>}</Show>
+                  <Show when={s.deltaDivergence}>
+                    <span class="div" data-tip={`Delta divergence: takers bought less of the volume on the push into the third drive than into the second${s.deltaAgainst ? ', and the third drive\'s own bar was sold more than bought' : ''}`}>
+                      ΔDIV
+                    </span>
+                  </Show>
                   <Show when={s.divergence}>
                     <span class="div" data-tip="RSI weaker at the third drive than at the second">DIV</span>
                   </Show>
@@ -317,11 +331,13 @@ const CUTS = [
   { value: 'all', label: 'All' },
   { value: '70', label: 'Score 70+' },
   { value: 'div', label: 'RSI divergence' },
+  { value: 'ddiv', label: 'Δ divergence' },
+  { value: '70ddiv', label: '70+ & Δ div' },
 ] as const;
 
 /** Each plan replayed over the same patterns and touches, side by side, with both halves of the period. */
 function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
-  const [cut, setCut] = createSignal<'all' | '70' | 'div'>('all');
+  const [cut, setCut] = createSignal<(typeof CUTS)[number]['value']>('all');
   const table = (kind: 'pattern' | 'touch') => (
     <table class="grid sig-table sig-compare">
       <thead>
