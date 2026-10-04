@@ -348,12 +348,29 @@ export interface SignalTouchPlayed {
   worst: number | null;
 }
 
+/** One way of setting the take-profits and the stop, replayed: a kind, a side and a cut of it. */
+export interface SignalPlanRow {
+  plan: 'fixed' | 'fib' | 'fib-atr' | 'from-entry';
+  kind: 'pattern' | 'touch';
+  side: 'bear' | 'bull';
+  group: 'all' | '70' | '50' | '0' | 'div';
+  n: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  stop: number;
+  expired: number;
+  ret: number;
+  /** The average result in the first half of the replay, and in the second. */
+  halves: [number, number];
+}
+
 export interface SignalStats {
   version: number;
   /** Bars a pattern is given to reach its target. */
   windowBars: number;
   /** The rules replayed over the history, bar by bar. */
-  backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[] } | null;
+  backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[]; variants: SignalPlanRow[] | null } | null;
   live: { since: number | null; open: number; groups: SignalGroup[] };
   recent: SignalPlayed[];
   /** Price at the line between scans: replayed, live, and the latest. */

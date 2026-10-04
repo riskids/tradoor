@@ -36,7 +36,7 @@ use tradoor_venues::{binance, bybit, Exchange, MarketRef};
 use crate::api::{owner, ApiError, ApiResult, AppState};
 use crate::catalog::Catalog;
 use crate::dns::Doh;
-use crate::drives::{self, Found, Hit, Point, Setup, Side};
+use crate::drives::{self, Found, Hit, Plan, Point, Setup, Side};
 use crate::telegram::{self, Telegram};
 
 /// Coins screened, by a day's turnover.
@@ -47,7 +47,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 4;
+const VERSION: i32 = 5;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -335,21 +335,34 @@ impl Screener {
         }
         let results: Vec<(String, anyhow::Result<Vec<Candle>>)> =
             futures_util::stream::iter(markets).map(|market| async move { (market.clone(), self.bars(&market, bar, HISTORY_BARS).await) }).buffer_unordered(2).collect().await;
-        let (mut read, mut from) = (0, bar);
+        let from = results.iter().filter_map(|(_, bars)| bars.as_ref().ok()?.first().map(|c| c.open_time)).min().unwrap_or(bar);
+        // The record's two halves, to see whether a plan holds up in both.
+        let middle = from + (bar - from) / 2;
+        let mut read = 0;
         let mut rows = Replayed::default();
         let mut touches = TouchesReplayed::default();
+        let mut plans = Plans::default();
         for (market, bars) in results {
             let Ok(bars) = bars else { continue };
             read += 1;
-            from = from.min(bars.first().map_or(bar, |c| c.open_time));
             for side in [Side::Bear, Side::Bull] {
                 for t in drives::touches(&bars, side) {
                     if t.outcome.result != Hit::Open {
                         touches.push(&market, side, bars[t.at].open_time, &t);
                     }
+                    for plan in Plan::ALL {
+                        let lv = drives::plan_levels(plan, side, t.entry, t.entry, t.pullback, t.setup.atr);
+                        let o = drives::play(side, t.entry, lv, &bars[t.at..], true);
+                        plans.add(plan, "touch", side, None, bars[t.at].open_time >= middle, &o);
+                    }
                 }
                 for (at, f) in drives::history(&bars, side) {
                     let entry = bars[at].close;
+                    for plan in Plan::ALL {
+                        let lv = drives::plan_levels(plan, side, entry, f.extreme, f.pullback, f.atr);
+                        let o = drives::play(side, entry, lv, &bars[at + 1..], false);
+                        plans.add(plan, "pattern", side, Some((f.score, f.divergence)), bars[at].open_time >= middle, &o);
+                    }
                     let o = drives::outcome(side, entry, f.extreme, &bars[at + 1..]);
                     if o.result == Hit::Open {
                         continue;
@@ -361,7 +374,11 @@ impl Screener {
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         let at = now_ms();
-        tx.execute("INSERT INTO signal_backtest_run (at, version, markets, from_at, to_at) VALUES ($1, $2, $3, $4, $5)", &[&at, &VERSION, &(read as i32), &from, &bar]).await?;
+        tx.execute(
+            "INSERT INTO signal_backtest_run (at, version, markets, from_at, to_at, variants) VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&at, &VERSION, &(read as i32), &from, &bar, &plans.json()],
+        )
+        .await?;
         tx.execute(
             "INSERT INTO signal_backtest (run, market, side, entry_at, entry, target, stop, score, divergence, outcome, bars, ret, best, worst)
              SELECT $1, * FROM UNNEST($2::text[], $3::text[], $4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::int[], $9::bool[], $10::text[], $11::int[], $12::float8[], $13::float8[], $14::float8[])
@@ -551,6 +568,93 @@ impl Replayed {
         self.ret.push(o.ret);
         self.best.push(o.best);
         self.worst.push(o.worst);
+    }
+}
+
+/// One plan's record over the replay, in one cut of it.
+#[derive(Default)]
+struct Tally {
+    n: usize,
+    /// How many reached each take-profit, each counting those that went further.
+    tp: [usize; 3],
+    stop: usize,
+    expired: usize,
+    ret: f64,
+    /// Count and summed result in the first half of the replay and the second.
+    halves: [(usize, f64); 2],
+}
+
+/// Every plan's tallies, by plan, kind, side and group, in a steady order.
+#[derive(Default)]
+struct Plans(std::collections::BTreeMap<(usize, &'static str, &'static str, &'static str), Tally>);
+
+impl Plans {
+    /// One trade under `plan`; a pattern's score and divergence put it in its groups too.
+    fn add(&mut self, plan: Plan, kind: &'static str, side: Side, pattern: Option<(u32, bool)>, late: bool, o: &drives::Outcome) {
+        if o.result == Hit::Open {
+            return;
+        }
+        let mut groups = vec!["all"];
+        if let Some((score, divergence)) = pattern {
+            groups.push(if score >= 70 {
+                "70"
+            } else if score >= 50 {
+                "50"
+            } else {
+                "0"
+            });
+            if divergence {
+                groups.push("div");
+            }
+        }
+        let order = Plan::ALL.iter().position(|p| *p == plan).unwrap_or(0);
+        for group in groups {
+            let t = self.0.entry((order, kind, side.id(), group)).or_default();
+            t.n += 1;
+            let takes = match o.result {
+                Hit::Tp3 => 3,
+                Hit::Tp2 => 2,
+                Hit::Tp1 => 1,
+                _ => 0,
+            };
+            for reached in &mut t.tp[..takes] {
+                *reached += 1;
+            }
+            match o.result {
+                Hit::Stop => t.stop += 1,
+                Hit::Expired => t.expired += 1,
+                _ => {}
+            }
+            t.ret += o.ret;
+            let half = &mut t.halves[usize::from(late)];
+            half.0 += 1;
+            half.1 += o.ret;
+        }
+    }
+
+    fn json(&self) -> Value {
+        let mean = |sum: f64, n: usize| if n == 0 { 0.0 } else { sum / n as f64 };
+        Value::Array(
+            self.0
+                .iter()
+                .map(|((order, kind, side, group), t)| {
+                    json!({
+                        "plan": Plan::ALL[*order].id(),
+                        "kind": kind,
+                        "side": side,
+                        "group": group,
+                        "n": t.n,
+                        "tp1": t.tp[0],
+                        "tp2": t.tp[1],
+                        "tp3": t.tp[2],
+                        "stop": t.stop,
+                        "expired": t.expired,
+                        "ret": mean(t.ret, t.n),
+                        "halves": t.halves.map(|(n, sum)| mean(sum, n)),
+                    })
+                })
+                .collect(),
+        )
     }
 }
 
@@ -817,7 +921,7 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
     owner(&headers)?;
     let client = state.pool.get().await?;
     let played = |r: &tokio_postgres::Row| Played { side: r.get(0), score: r.get(1), divergence: r.get(2), outcome: r.get(3), ret: r.get(4), best: r.get(5), worst: r.get(6) };
-    let backtest = match client.query_opt("SELECT at, version, markets, from_at, to_at FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await? {
+    let backtest = match client.query_opt("SELECT at, version, markets, from_at, to_at, variants FROM signal_backtest_run ORDER BY at DESC LIMIT 1", &[]).await? {
         Some(run) => {
             let at: i64 = run.get(0);
             let rows = client.query("SELECT side, score, divergence, outcome, ret, best, worst FROM signal_backtest WHERE run = $1", &[&at]).await?;
@@ -827,6 +931,7 @@ pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
                 "markets": run.get::<_, i32>(2),
                 "from": run.get::<_, i64>(3),
                 "to": run.get::<_, i64>(4),
+                "variants": run.get::<_, Option<Value>>(5),
                 "groups": summarize(&rows.iter().map(played).collect::<Vec<_>>()),
             })
         }
@@ -976,6 +1081,26 @@ mod tests {
         assert_eq!((bear["tp1"].as_u64(), bear["tp2"].as_u64(), bear["tp3"].as_u64(), bear["stop"].as_u64()), (Some(1), Some(1), Some(0), Some(1)));
         assert!(bear["ret"].as_f64().unwrap().abs() < 1e-9);
         assert_eq!(groups[1]["n"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn the_plans_are_tallied_by_kind_side_and_group_and_by_half() {
+        let o = |result: Hit, ret: f64| drives::Outcome { result, bars: 1, ret, best: 0.0, worst: 0.0 };
+        let mut plans = Plans::default();
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some((80, true)), false, &o(Hit::Tp2, 3.0));
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some((40, false)), true, &o(Hit::Stop, -4.0));
+        plans.add(Plan::Fib, "pattern", Side::Bear, Some((40, false)), true, &o(Hit::Open, 0.0));
+        plans.add(Plan::Fixed, "touch", Side::Bull, None, false, &o(Hit::Tp3, 5.0));
+        let rows = plans.json();
+        let find = |plan: &str, kind: &str, side: &str, group: &str| rows.as_array().unwrap().iter().find(|r| r["plan"] == plan && r["kind"] == kind && r["side"] == side && r["group"] == group).cloned();
+        let all = find("fib", "pattern", "bear", "all").unwrap();
+        assert_eq!((all["n"].as_u64(), all["tp1"].as_u64(), all["tp2"].as_u64(), all["stop"].as_u64()), (Some(2), Some(1), Some(1), Some(1)), "an open trade is not counted");
+        assert_eq!(all["halves"], json!([3.0, -4.0]));
+        assert_eq!(find("fib", "pattern", "bear", "70").unwrap()["n"].as_u64(), Some(1));
+        assert_eq!(find("fib", "pattern", "bear", "div").unwrap()["n"].as_u64(), Some(1));
+        assert_eq!(find("fixed", "touch", "bull", "all").unwrap()["tp3"].as_u64(), Some(1));
+        assert!(find("fixed", "touch", "bull", "70").is_none(), "a touch has no score");
+        assert_eq!(rows[0]["plan"], "fixed", "in the plans' own order");
     }
 
     #[test]

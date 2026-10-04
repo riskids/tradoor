@@ -13,7 +13,7 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPoint, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
+import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice } from '../lib/format';
@@ -306,6 +306,89 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
 }
 
 /** The record: the history replayed, the live patterns since, and the latest one by one. */
+/** The plans the replay compares: a letter, the take-profits, the stop. */
+const PLANS: Record<SignalPlanRow['plan'], [string, string, string]> = {
+  fixed: ['A', 'TP 3/6/9%', 'SL HH+3.5%'],
+  fib: ['B', 'TP Fib .382/.618/1', 'SL Fib 1.272'],
+  'fib-atr': ['C', 'TP Fib .382/.618/1', 'SL HH+1 ATR'],
+  'from-entry': ['D', 'TP 3/6/9%', 'SL entry+3.5%'],
+};
+const CUTS = [
+  { value: 'all', label: 'All' },
+  { value: '70', label: 'Score 70+' },
+  { value: 'div', label: 'RSI divergence' },
+] as const;
+
+/** Each plan replayed over the same patterns and touches, side by side, with both halves of the period. */
+function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
+  const [cut, setCut] = createSignal<'all' | '70' | 'div'>('all');
+  const table = (kind: 'pattern' | 'touch') => (
+    <table class="grid sig-table sig-compare">
+      <thead>
+        <tr>
+          <th>Plan</th>
+          <th />
+          <th class="num">n</th>
+          <th class="num">TP1</th>
+          <th class="num">TP2</th>
+          <th class="num">TP3</th>
+          <th class="num">SL</th>
+          <th class="num" data-tip="The average result over the whole position">Avg</th>
+          <th class="num" data-tip="The average in the first half of the period, and in the second: a plan worth keeping holds up in both">Halves</th>
+        </tr>
+      </thead>
+      <tbody>
+        <For each={props.rows.filter((r) => r.kind === kind && r.group === (kind === 'touch' ? 'all' : cut()) && props.sides.includes(r.side))}>
+          {(r) => (
+            <tr classList={{ head: r.side === props.sides[0] }}>
+              <td data-tip={`${PLANS[r.plan][1]} · ${PLANS[r.plan][2]}`}>
+                <Show when={r.side === props.sides[0]}>
+                  <b>{PLANS[r.plan][0]}</b> <span class="dim">{PLANS[r.plan][1]} · {PLANS[r.plan][2]}</span>
+                  {r.plan === 'fixed' ? <span class="badge">live</span> : null}
+                </Show>
+              </td>
+              <td>
+                <span class={r.side}>{r.side === 'bear' ? '▼' : '▲'}</span>
+              </td>
+              <td class="num">{r.n}</td>
+              <td class="num bull">{share(r.tp1, r.n)}</td>
+              <td class="num bull">{share(r.tp2, r.n)}</td>
+              <td class="num bull">{share(r.tp3, r.n)}</td>
+              <td class="num bear">{share(r.stop, r.n)}</td>
+              <td class="num" classList={{ bull: r.ret > 0, bear: r.ret < 0 }}>{r.n ? pct(r.ret) : '—'}</td>
+              <td class="num dim">
+                <span classList={{ bull: r.halves[0] > 0, bear: r.halves[0] < 0 }}>{pct(r.halves[0])}</span> / <span classList={{ bull: r.halves[1] > 0, bear: r.halves[1] < 0 }}>{pct(r.halves[1])}</span>
+              </td>
+            </tr>
+          )}
+        </For>
+      </tbody>
+    </table>
+  );
+  return (
+    <>
+      <div class="sig-cap">
+        <b>Plans compared</b>
+        <span class="dim">the same patterns, each way of setting the take-profits and the stop</span>
+        <span class="spacer" />
+        <For each={CUTS}>
+          {(c) => (
+            <button class="tb" classList={{ on: cut() === c.value }} onClick={() => setCut(c.value)}>
+              {c.label}
+            </button>
+          )}
+        </For>
+      </div>
+      {table('pattern')}
+      <div class="sig-cap">
+        <b>Plans compared · at the line</b>
+        <span class="dim">entered at the touch; A and D are the same there</span>
+      </div>
+      {table('touch')}
+    </>
+  );
+}
+
 function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; recent: SignalStats['recent']; error: string | null; onOpen(s: Openable): void }) {
   const day = (ms: number) => formatDateTime(ms).slice(0, 10);
   return (
@@ -325,6 +408,7 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
             </div>
             <div class="sig-note dim">{TRADE}</div>
             <Show when={st().backtest}>{(b) => <Table groups={b().groups} sides={props.sides} />}</Show>
+            <Show when={st().backtest?.variants}>{(rows) => <Compare rows={rows()} sides={props.sides} />}</Show>
             <div class="sig-cap">
               <b>Live</b>
               <span class="dim">

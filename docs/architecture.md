@@ -200,7 +200,14 @@ the stop then moved to the entry, a quarter at each of the others, and what is
 still open after four days closed at that close. A bar reaching the stop and a
 take-profit both counts as the stop. A pattern that turned is entered at the
 close the scan read; each scan after weighs the bars since. The list and the
-Telegram messages carry each trade's prices, and opening one draws them. The same rules are replayed weekly, and whenever `VERSION` in `signals`
+Telegram messages carry each trade's prices, and opening one draws them.
+
+The replay also runs every signal under four plans side by side
+(`drives::Plan`) — A the live one; B take-profits at 38.2, 61.8 and 100% back
+down the third drive's leg and the stop at its 1.272 extension; C the same
+take-profits and the stop an ATR past the third drive; D 3/6/9% with the stop
+3.5% from the entry — and keeps each plan's tallies with the run, by kind,
+side and group and by half of the period, for the Record's comparison. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each
 bar, seeing nothing after it: the replay runs the live scan at every bar. The panel's Record
 shows both by side, score and divergence, with the latest live patterns.

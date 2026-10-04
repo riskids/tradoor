@@ -81,6 +81,10 @@ pub struct Found {
     /// The third drive's high, or its low for the bullish pattern: what the
     /// stop is measured from.
     pub extreme: f64,
+    /// Where the third drive's leg began: the extreme of the pullback before it.
+    pub pullback: f64,
+    /// The ATR at the third drive.
+    pub atr: f64,
 }
 
 /// Two drives and the line through them, waiting for a third: what price
@@ -155,11 +159,54 @@ pub struct Levels {
 }
 
 pub fn levels(side: Side, entry: f64, extreme: f64) -> Levels {
-    let (dir, sl) = match side {
-        Side::Bear => (-1.0, extreme * (1.0 + STOP_PAST)),
-        Side::Bull => (1.0, extreme * (1.0 - STOP_PAST)),
-    };
-    Levels { tp: TAKE_PROFITS.map(|p| entry * (1.0 + dir * p)), sl }
+    plan_levels(Plan::Fixed, side, entry, extreme, extreme, 0.0)
+}
+
+/// Ways to set a trade's take-profits and stop, replayed side by side to see
+/// which the record bears out. `Fixed` is the one the live record keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan {
+    /// 3, 6 and 9% from the entry; the stop 3.5% past the third drive.
+    Fixed,
+    /// 38.2, 61.8 and 100% back down the third drive's leg; the stop at its 1.272 extension.
+    Fib,
+    /// The same take-profits; the stop an ATR past the third drive.
+    FibAtr,
+    /// 3, 6 and 9% from the entry; the stop 3.5% from the entry.
+    FromEntry,
+}
+
+impl Plan {
+    pub const ALL: [Plan; 4] = [Plan::Fixed, Plan::Fib, Plan::FibAtr, Plan::FromEntry];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Plan::Fixed => "fixed",
+            Plan::Fib => "fib",
+            Plan::FibAtr => "fib-atr",
+            Plan::FromEntry => "from-entry",
+        }
+    }
+}
+
+/// Fib retracements of the third drive's leg the take-profits sit at.
+const FIB_TAKES: [f64; 3] = [0.382, 0.618, 1.0];
+/// The extension of the leg past which the third drive has failed.
+const FIB_STOP: f64 = 0.272;
+
+/// A trade's prices under `plan`: from the entry, the third drive's extreme,
+/// where its leg began, and the ATR there.
+pub fn plan_levels(plan: Plan, side: Side, entry: f64, extreme: f64, pullback: f64, atr: f64) -> Levels {
+    let dir = if side == Side::Bear { -1.0 } else { 1.0 };
+    let leg = (extreme - pullback).abs();
+    let fixed = TAKE_PROFITS.map(|p| entry * (1.0 + dir * p));
+    let fib = FIB_TAKES.map(|r| extreme + dir * r * leg);
+    match plan {
+        Plan::Fixed => Levels { tp: fixed, sl: extreme * (1.0 - dir * STOP_PAST) },
+        Plan::Fib => Levels { tp: fib, sl: extreme - dir * FIB_STOP * leg },
+        Plan::FibAtr => Levels { tp: fib, sl: extreme - dir * atr },
+        Plan::FromEntry => Levels { tp: fixed, sl: entry * (1.0 - dir * STOP_PAST) },
+    }
 }
 
 /// How a trade went.
@@ -220,11 +267,16 @@ pub fn touch_outcome(side: Side, entry: f64, after: &[Candle]) -> Outcome {
 
 /// The trade bar by bar. A bar that reaches the stop and a take-profit both
 /// counts as the stop: which came first is not known.
-fn play(side: Side, entry: f64, lv: Levels, after: &[Candle], from_touch: bool) -> Outcome {
+pub fn play(side: Side, entry: f64, lv: Levels, after: &[Candle], from_touch: bool) -> Outcome {
     let bear = side == Side::Bear;
     let pct = |p: f64| if bear { (entry - p) / entry * 100.0 } else { (p - entry) / entry * 100.0 };
     let mut out = Outcome { result: Hit::Open, bars: 0, ret: 0.0, best: 0.0, worst: 0.0 };
     let (mut taken, mut banked, mut stop) = (0usize, 0.0, lv.sl);
+    // A take-profit price is already past at the entry is closed there, for nothing, and the stop moves up.
+    while taken < 3 && ((bear && entry <= lv.tp[taken]) || (!bear && entry >= lv.tp[taken])) {
+        taken += 1;
+        stop = entry;
+    }
     let closed = |taken: usize| match taken {
         0 => Hit::Stop,
         1 => Hit::Tp1,
@@ -275,6 +327,8 @@ struct Shape {
     b: usize,
     z: usize,
     fit: f64,
+    /// The extreme of the pullback before the third drive.
+    pullback: f64,
 }
 
 /// Two drives that could start a pattern, and from which bar to which their
@@ -312,12 +366,12 @@ impl Became {
 
 /// Price reaching a setup's line in the history, and how it went.
 pub struct Touch {
-    /// The setup reached; the replay keeps only how it went.
-    #[allow(dead_code)]
     pub setup: Setup,
     /// The bar it got there on.
     pub at: usize,
     pub entry: f64,
+    /// Where the third drive's leg began: the extreme of the pullback after the second.
+    pub pullback: f64,
     pub became: Became,
     pub outcome: Outcome,
 }
@@ -347,6 +401,7 @@ pub fn touches(candles: &[Candle], side: Side) -> Vec<Touch> {
         }
         told.insert((pair.a, pair.b));
         let entry = sign * k.open.max(near);
+        let pullback = sign * p.c[b.index + 1..t].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
         // What the scans of the next four days made of it: these two drives with a third, turned or not.
         let seen: Vec<Found> = (t..candles.len().min(t + OUTCOME_BARS)).filter_map(|at| p.at(at)).filter(|f| f.drives[0].index == a.index && f.drives[1].index == b.index).collect();
         let became = if seen.iter().any(|f| f.turn.is_some()) {
@@ -357,7 +412,7 @@ pub fn touches(candles: &[Candle], side: Side) -> Vec<Touch> {
             Became::Pattern
         };
         let outcome = touch_outcome(side, entry, &candles[t..]);
-        out.push(Touch { setup, at: t, entry, became, outcome });
+        out.push(Touch { setup, at: t, entry, pullback, became, outcome });
     }
     out
 }
@@ -540,7 +595,7 @@ impl Prepared {
                 }
                 let fit = 1.0 - off.abs() / ALIGN_ATR;
                 if best.as_ref().is_none_or(|s| fit > s.fit) {
-                    best = Some(Shape { a: a.index, b: b.index, z, fit });
+                    best = Some(Shape { a: a.index, b: b.index, z, fit, pullback: low_bz });
                 }
             }
         }
@@ -550,7 +605,7 @@ impl Prepared {
     /// A shape as of `last`: still standing, turned or still waiting, scored.
     fn judge(&self, shape: &Shape, last: usize) -> Option<Found> {
         let c = &self.c;
-        let Shape { a, b, z, fit } = *shape;
+        let Shape { a, b, z, fit, pullback } = *shape;
         let top = c[z].high;
         // Outdone: a close past the third drive. A wick past it is a retest.
         if c[z + 1..=last].iter().any(|k| k.close > top) {
@@ -597,6 +652,8 @@ impl Prepared {
             divergence,
             score: score.round().clamp(0.0, 100.0) as u32,
             extreme: sign * top,
+            pullback: sign * pullback,
+            atr: atr_z,
         })
     }
 }
@@ -774,6 +831,30 @@ mod tests {
         assert!((touch.entry - line).abs() <= touch.setup.atr && touch.entry >= touch.setup.clear, "within an ATR of the line, past the second drive");
         assert_eq!(touch.became, Became::Turned, "and it became three drives that turned");
         assert_eq!(touch.outcome.result, Hit::Tp3, "all the way down from the line");
+    }
+
+    #[test]
+    fn each_plan_sets_its_own_levels() {
+        // Short at 108 under a third drive at 112, its leg up from 100, the ATR 2.
+        let at = |plan| plan_levels(plan, Side::Bear, 108.0, 112.0, 100.0, 2.0);
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        assert!(close(at(Plan::Fixed).tp, [104.76, 101.52, 98.28]) && (at(Plan::Fixed).sl - 115.92).abs() < 1e-9);
+        assert!(close(at(Plan::Fib).tp, [107.416, 104.584, 100.0]), "38.2, 61.8 and 100% back down the leg: {:?}", at(Plan::Fib).tp);
+        assert!((at(Plan::Fib).sl - 115.264).abs() < 1e-9, "the 1.272 extension of the leg");
+        assert!((at(Plan::FibAtr).sl - 114.0).abs() < 1e-9, "an ATR past the third drive");
+        assert!((at(Plan::FromEntry).sl - 111.78).abs() < 1e-9, "3.5% from the entry");
+        let up = plan_levels(Plan::Fib, Side::Bull, 92.0, 88.0, 100.0, 2.0);
+        assert!(close(up.tp, [92.584, 95.416, 100.0]) && (up.sl - 84.736).abs() < 1e-9, "the bullish way up: {up:?}");
+    }
+
+    #[test]
+    fn a_take_profit_already_past_at_the_entry_is_closed_there() {
+        let bar = |high: f64, low: f64, close: f64| Candle { open_time: 0, open: close, high, low, close, volume: 1.0, quote_volume: None };
+        // Entered at 107 under Fib take-profits at 107.4, 104.6 and 100: the first is already past.
+        let lv = plan_levels(Plan::Fib, Side::Bear, 107.0, 112.0, 100.0, 2.0);
+        let back = play(Side::Bear, 107.0, lv, &[bar(107.5, 106.0, 107.2)], false);
+        assert_eq!(back.result, Hit::Tp1, "half closed at the entry, the rest stopped there too");
+        assert!(back.ret.abs() < 1e-9);
     }
 
     #[test]
