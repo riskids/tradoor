@@ -85,7 +85,7 @@ const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
 const levelsText = (lv: { tp: number[]; sl: number } | null | undefined) =>
   lv ? `TP ${lv.tp.map(price).join(' / ')} · SL ${price(lv.sl)}` : '';
 /** The trade the record counts, said once. */
-const TRADE = 'TP 3 / 6 / 9% from the entry, SL 3.5% past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days';
+const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL an ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days';
 
 export function SignalsPanel(props: { panel: SignalsPanelState }) {
   const [state, setState] = createSignal<SignalsState | null>(null);
@@ -194,8 +194,8 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
       </div>
       <Show when={telegramMenu()}>
         <div class="menu sig-tg" onPointerDown={(e) => e.stopPropagation()}>
-          <button classList={{ cur: state()?.notify }} data-tip="Once per scan, the patterns whose Stochastic RSI turned" onClick={() => void setNotify({ notify: !state()?.notify })}>
-            <span>When a pattern turns</span>
+          <button classList={{ cur: state()?.notify }} data-tip="Once per scan, the patterns scoring 70 or more whose Stochastic RSI turned" onClick={() => void setNotify({ notify: !state()?.notify })}>
+            <span>When a pattern scoring 70+ turns</span>
             <span class="num">{state()?.notify ? 'on' : 'off'}</span>
           </button>
           <button classList={{ cur: state()?.notifyTouch }} data-tip="At once, when live price reaches the line of two drives — before the bars confirm a third" onClick={() => void setNotify({ touch: !state()?.notifyTouch })}>
@@ -344,7 +344,7 @@ function Compare(props: { rows: SignalPlanRow[]; sides: ('bear' | 'bull')[] }) {
               <td data-tip={`${PLANS[r.plan][1]} · ${PLANS[r.plan][2]}`}>
                 <Show when={r.side === props.sides[0]}>
                   <b>{PLANS[r.plan][0]}</b> <span class="dim">{PLANS[r.plan][1]} · {PLANS[r.plan][2]}</span>
-                  {r.plan === 'fixed' ? <span class="badge">live</span> : null}
+                  {r.plan === 'fib-atr' ? <span class="badge">live</span> : null}
                 </Show>
               </td>
               <td>
@@ -421,7 +421,7 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
             </Show>
             <div class="sig-cap">
               <b>At the line · replayed</b>
-              <span class="dim">price reaching the line of two drives, entered there: TP 3 / 6 / 9% and SL 3.5% from the touch</span>
+              <span class="dim">price reaching the line of two drives, entered there: the touch is the third drive so far</span>
             </div>
             <Show when={st().touches.replayed.length > 0} fallback={<div class="sig-note dim">Replayed with the patterns a few minutes after the server starts.</div>}>
               <TouchTable groups={st().touches.replayed} sides={props.sides} />
@@ -491,7 +491,7 @@ const TOUCH_OUTCOME: Record<SignalOutcome, string> = {
   tp3: 'All three take-profits',
   tp2: 'Two take-profits',
   tp1: 'The first take-profit',
-  stop: 'The stop, 3.5% past the touch, before the first take-profit',
+  stop: 'The stop, an ATR past the touch, before the first take-profit',
   expired: 'Nothing in four days',
 };
 
@@ -503,10 +503,10 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
           <th />
           <th class="num" data-tip="Times price reached a line">Touches</th>
           <th class="num" data-tip="The two drives became three within four days">3 drives</th>
-          <th class="num" data-tip="Reached the first take-profit, 3% from the touch">TP1</th>
-          <th class="num" data-tip="Reached the second, 6%">TP2</th>
-          <th class="num" data-tip="Reached the third, 9%">TP3</th>
-          <th class="num" data-tip="The stop, 3.5% past the touch, before the first take-profit">SL</th>
+          <th class="num" data-tip="Reached the first take-profit">TP1</th>
+          <th class="num" data-tip="Reached the second">TP2</th>
+          <th class="num" data-tip="Reached the third">TP3</th>
+          <th class="num" data-tip="The stop, before the first take-profit">SL</th>
           <th class="num" data-tip="The average result over the whole position">Avg</th>
         </tr>
       </thead>
@@ -541,10 +541,10 @@ function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[] }) {
         <tr>
           <th />
           <th class="num" data-tip="Patterns that turned">Patterns</th>
-          <th class="num" data-tip="Reached the first take-profit, 3% from the entry">TP1</th>
-          <th class="num" data-tip="Reached the second, 6%">TP2</th>
-          <th class="num" data-tip="Reached the third, 9%">TP3</th>
-          <th class="num" data-tip="The stop, 3.5% past the third drive, before the first take-profit">SL</th>
+          <th class="num" data-tip="Reached the first take-profit">TP1</th>
+          <th class="num" data-tip="Reached the second">TP2</th>
+          <th class="num" data-tip="Reached the third">TP3</th>
+          <th class="num" data-tip="The stop, before the first take-profit">SL</th>
           <th class="num" data-tip="The average result over the whole position: half at TP1, a quarter at each of the others, the rest at the entry, the stop, or the close four days on">Avg</th>
         </tr>
       </thead>

@@ -173,7 +173,8 @@ the second, even spacing, volume fading and the turn. A row opens its market at
 four hours with the line and the drives' numbered circles drawn — locked, and
 gone when closed or the market changes, unless Keep drawings saves them as the
 chart's own (`circle` is a drawing kind for that). Telegram, for readers who
-turn it on, hears once per scan of the patterns that turned in it.
+turn it on, hears once per scan of the patterns scoring 70 or more that
+turned in it; the panel lists them all.
 
 Between scans the third drive is caught as it happens. Each scan also keeps,
 for every coin and side without a pattern, the newest two drives that wait for
@@ -193,19 +194,20 @@ replay catches touches the way the live check does, the setup the scan before
 had kept and the bar after reaching the line's near edge, and the scan and
 the replay share the setup code (`Prepared::setup_at`).
 
-The record says how they went, each signal as a trade (`drives::levels`):
-take-profits a drop of 3, 6 and 9% from the entry (a rise, bullish), a stop
-3.5% past the third drive's extreme, half the position closed at the first and
-the stop then moved to the entry, a quarter at each of the others, and what is
-still open after four days closed at that close. A bar reaching the stop and a
+The record says how they went, each signal as a trade under the live plan
+(`drives::LIVE`, plan C below): take-profits 38.2, 61.8 and 100% back down the
+third drive's leg, a stop an ATR past the third drive's extreme, half the
+position closed at the first and the stop then moved to the entry, a quarter
+at each of the others, and what is still open after four days closed at that
+close. A trade's prices are kept with it when it is entered. A bar reaching the stop and a
 take-profit both counts as the stop. A pattern that turned is entered at the
 close the scan read; each scan after weighs the bars since. The list and the
 Telegram messages carry each trade's prices, and opening one draws them.
 
 The replay also runs every signal under four plans side by side
-(`drives::Plan`) — A the live one; B take-profits at 38.2, 61.8 and 100% back
+(`drives::Plan`) — A 3/6/9% with the stop 3.5% past the third drive; B take-profits at 38.2, 61.8 and 100% back
 down the third drive's leg and the stop at its 1.272 extension; C the same
-take-profits and the stop an ATR past the third drive; D 3/6/9% with the stop
+take-profits and the stop an ATR past the third drive, the live one; D 3/6/9% with the stop
 3.5% from the entry — and keeps each plan's tallies with the run, by kind,
 side and group and by half of the period, for the Record's comparison. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each

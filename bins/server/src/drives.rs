@@ -101,6 +101,9 @@ pub struct Setup {
     pub clear: f64,
     /// The last moment a third drive keeps the three within forty days.
     pub until: i64,
+    /// The extreme of the pullback after the second drive: where a third
+    /// drive's leg starts.
+    pub pullback: f64,
 }
 
 impl Setup {
@@ -158,12 +161,17 @@ pub struct Levels {
     pub sl: f64,
 }
 
-pub fn levels(side: Side, entry: f64, extreme: f64) -> Levels {
-    plan_levels(Plan::Fixed, side, entry, extreme, extreme, 0.0)
+/// The plan the live record keeps, the list shows and Telegram names: the one
+/// the replays bore out best (see `Plan`).
+pub const LIVE: Plan = Plan::FibAtr;
+
+/// A trade's prices under the live plan.
+pub fn levels(side: Side, entry: f64, extreme: f64, pullback: f64, atr: f64) -> Levels {
+    plan_levels(LIVE, side, entry, extreme, pullback, atr)
 }
 
 /// Ways to set a trade's take-profits and stop, replayed side by side to see
-/// which the record bears out. `Fixed` is the one the live record keeps.
+/// which the record bears out; `LIVE` is the one kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
     /// 3, 6 and 9% from the entry; the stop 3.5% past the third drive.
@@ -253,16 +261,16 @@ impl Hit {
 }
 
 /// A pattern that turned, entered at `entry`; `after` is the bars that followed.
-pub fn outcome(side: Side, entry: f64, extreme: f64, after: &[Candle]) -> Outcome {
-    play(side, entry, levels(side, entry, extreme), after, false)
+pub fn outcome(side: Side, entry: f64, lv: Levels, after: &[Candle]) -> Outcome {
+    play(side, entry, lv, after, false)
 }
 
 /// Price at a setup's line, entered there: the touch is the third drive's
-/// extreme so far, so the take-profits and the stop are both measured from it.
-/// `after` starts with the bar of the touch, whose low or high may have come
-/// before it, so no take-profit is taken in that bar.
-pub fn touch_outcome(side: Side, entry: f64, after: &[Candle]) -> Outcome {
-    play(side, entry, levels(side, entry, entry), after, true)
+/// extreme so far, so its levels are measured from it. `after` starts with
+/// the bar of the touch, whose low or high may have come before it, so no
+/// take-profit is taken in that bar.
+pub fn touch_outcome(side: Side, entry: f64, lv: Levels, after: &[Candle]) -> Outcome {
+    play(side, entry, lv, after, true)
 }
 
 /// The trade bar by bar. A bar that reaches the stop and a take-profit both
@@ -401,7 +409,7 @@ pub fn touches(candles: &[Candle], side: Side) -> Vec<Touch> {
         }
         told.insert((pair.a, pair.b));
         let entry = sign * k.open.max(near);
-        let pullback = sign * p.c[b.index + 1..t].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+        let pullback = setup.pullback;
         // What the scans of the next four days made of it: these two drives with a third, turned or not.
         let seen: Vec<Found> = (t..candles.len().min(t + OUTCOME_BARS)).filter_map(|at| p.at(at)).filter(|f| f.drives[0].index == a.index && f.drives[1].index == b.index).collect();
         let became = if seen.iter().any(|f| f.turn.is_some()) {
@@ -411,7 +419,7 @@ pub fn touches(candles: &[Candle], side: Side) -> Vec<Touch> {
         } else {
             Became::Pattern
         };
-        let outcome = touch_outcome(side, entry, &candles[t..]);
+        let outcome = touch_outcome(side, entry, levels(side, entry, entry, pullback, setup.atr), &candles[t..]);
         out.push(Touch { setup, at: t, entry, pullback, became, outcome });
     }
     out
@@ -497,6 +505,7 @@ impl Prepared {
                     atr: atr_now,
                     clear: sign * (b.value + CLEAR_ATR * atr_b),
                     until: c[a.index].open_time + MAX_SPAN as i64 * step,
+                    pullback: sign * c[b.index + 1..=last].iter().map(|k| k.low).fold(f64::INFINITY, f64::min),
                 },
                 *pair,
             ));
@@ -732,26 +741,31 @@ mod tests {
     fn a_trade_takes_half_at_the_first_profit_and_then_cannot_lose() {
         let bar = |high: f64, low: f64, close: f64| Candle { open_time: 0, open: close, high, low, close, volume: 1.0, quote_volume: None };
         // Short at 100 under a third drive at 104: profits at 97, 94 and 91, the stop at 107.64.
-        let lv = levels(Side::Bear, 100.0, 104.0);
+        let lv = plan_levels(Plan::Fixed, Side::Bear, 100.0, 104.0, 104.0, 0.0);
         assert!((lv.tp[0] - 97.0).abs() < 1e-9 && (lv.tp[2] - 91.0).abs() < 1e-9 && (lv.sl - 107.64).abs() < 1e-9);
-        let all = outcome(Side::Bear, 100.0, 104.0, &[bar(101.0, 96.0, 97.0), bar(97.0, 90.0, 91.0)]);
+        let outcome = |after: &[Candle]| outcome(Side::Bear, 100.0, lv, after);
+        let all = outcome(&[bar(101.0, 96.0, 97.0), bar(97.0, 90.0, 91.0)]);
         assert_eq!((all.result, all.bars), (Hit::Tp3, 2));
         assert!((all.ret - (0.5 * 3.0 + 0.25 * 6.0 + 0.25 * 9.0)).abs() < 1e-9, "half at 3%, a quarter each at 6 and 9: {}", all.ret);
-        let back = outcome(Side::Bear, 100.0, 104.0, &[bar(101.0, 96.5, 97.0), bar(100.5, 98.0, 100.0)]);
+        let back = outcome(&[bar(101.0, 96.5, 97.0), bar(100.5, 98.0, 100.0)]);
         assert_eq!(back.result, Hit::Tp1, "the first profit, then back to the entry");
         assert!((back.ret - 1.5).abs() < 1e-9, "half at 3%, half at nothing: {}", back.ret);
-        let stopped = outcome(Side::Bear, 100.0, 104.0, &[bar(108.0, 99.0, 106.0)]);
+        let stopped = outcome(&[bar(108.0, 99.0, 106.0)]);
         assert_eq!(stopped.result, Hit::Stop);
         assert!((stopped.ret + 7.64).abs() < 1e-9, "the whole of it at the stop: {}", stopped.ret);
-        assert_eq!(outcome(Side::Bear, 100.0, 104.0, &[bar(108.0, 96.0, 100.0)]).result, Hit::Stop, "both in one bar: the stop, not knowing which came first");
+        assert_eq!(outcome(&[bar(108.0, 96.0, 100.0)]).result, Hit::Stop, "both in one bar: the stop, not knowing which came first");
         let flat = vec![bar(101.0, 99.0, 99.0); OUTCOME_BARS];
-        let expired = outcome(Side::Bear, 100.0, 104.0, &flat);
+        let expired = outcome(&flat);
         assert_eq!(expired.result, Hit::Expired);
         assert!((expired.ret - 1.0).abs() < 1e-9, "closed after four days at that close");
-        assert_eq!(outcome(Side::Bear, 100.0, 104.0, &flat[..3]).result, Hit::Open, "too soon to say");
-        let up = outcome(Side::Bull, 100.0, 96.0, &[bar(103.5, 99.0, 103.0), bar(106.5, 102.0, 106.0)]);
+        assert_eq!(outcome(&flat[..3]).result, Hit::Open, "too soon to say");
+        let up_levels = plan_levels(Plan::Fixed, Side::Bull, 100.0, 96.0, 96.0, 0.0);
+        let up = super::outcome(Side::Bull, 100.0, up_levels, &[bar(103.5, 99.0, 103.0), bar(106.5, 102.0, 106.0)]);
         assert_eq!(up.result, Hit::Open, "the bullish way up: two taken, still running");
-        assert!(levels(Side::Bull, 100.0, 96.0).sl < 96.0);
+        assert!(up_levels.sl < 96.0);
+        // The live plan: take-profits back down the third drive's leg, the stop an ATR past its high.
+        let live = levels(Side::Bear, 108.0, 112.0, 100.0, 2.0);
+        assert_eq!(live, plan_levels(Plan::FibAtr, Side::Bear, 108.0, 112.0, 100.0, 2.0));
     }
 
     #[test]
@@ -830,7 +844,9 @@ mod tests {
         let line = touch.setup.line(bars[touch.at].open_time);
         assert!((touch.entry - line).abs() <= touch.setup.atr && touch.entry >= touch.setup.clear, "within an ATR of the line, past the second drive");
         assert_eq!(touch.became, Became::Turned, "and it became three drives that turned");
-        assert_eq!(touch.outcome.result, Hit::Tp3, "all the way down from the line");
+        assert_eq!(touch.outcome.result, Hit::Stop, "under the live plan the stop is an ATR over the touch, and the third drive went on past it");
+        let fixed = plan_levels(Plan::Fixed, Side::Bear, touch.entry, touch.entry, touch.pullback, touch.setup.atr);
+        assert_eq!(play(Side::Bear, touch.entry, fixed, &bars[touch.at..], true).result, Hit::Tp3, "with 3.5% of room it rode all the way down");
     }
 
     #[test]
@@ -861,13 +877,15 @@ mod tests {
     fn a_touch_is_its_own_third_drive_for_the_stop() {
         let bar = |high: f64, low: f64, close: f64| Candle { open_time: 0, open: close, high, low, close, volume: 1.0, quote_volume: None };
         // Price at the line at 120: the stop 3.5% above it, at 124.2.
-        let broke = touch_outcome(Side::Bear, 120.0, &[bar(121.0, 115.0, 118.0), bar(124.5, 119.0, 124.0)]);
+        let lv = plan_levels(Plan::Fixed, Side::Bear, 120.0, 120.0, 120.0, 0.0);
+        let touch_outcome = |after: &[Candle]| touch_outcome(Side::Bear, 120.0, lv, after);
+        let broke = touch_outcome(&[bar(121.0, 115.0, 118.0), bar(124.5, 119.0, 124.0)]);
         assert_eq!((broke.result, broke.bars), (Hit::Stop, 2));
         // The touch bar's low may have come before the touch: no profit is taken in it.
-        let early = touch_outcome(Side::Bear, 120.0, &[bar(121.0, 116.0, 118.0), bar(118.0, 116.2, 117.0)]);
+        let early = touch_outcome(&[bar(121.0, 116.0, 118.0), bar(118.0, 116.2, 117.0)]);
         assert_eq!((early.result, early.bars), (Hit::Open, 2), "116 in the touch bar does not count; 116.2 is short of 116.4");
-        assert_eq!(touch_outcome(Side::Bear, 120.0, &[bar(121.0, 116.0, 118.0), bar(118.0, 116.3, 117.0)]).result, Hit::Open);
-        assert_eq!(touch_outcome(Side::Bear, 120.0, &[bar(121.0, 116.0, 118.0), bar(118.0, 116.0, 117.0)]).bars, 2);
+        assert_eq!(touch_outcome(&[bar(121.0, 116.0, 118.0), bar(118.0, 116.3, 117.0)]).result, Hit::Open);
+        assert_eq!(touch_outcome(&[bar(121.0, 116.0, 118.0), bar(118.0, 116.0, 117.0)]).bars, 2);
     }
 
     #[test]

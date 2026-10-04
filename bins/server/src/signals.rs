@@ -11,7 +11,8 @@
 //! ask for it, on Telegram — hours before the bars that confirm it close.
 //!
 //! The record: a pattern that turned is entered at the close the scan read,
-//! as a trade with three take-profits and a stop (`drives::levels`), and each
+//! as a trade with three take-profits and a stop under the live plan
+//! (`drives::levels`), its prices kept with it; and each
 //! scan after weighs the bars since until it is closed or four days pass
 //! (`drives::outcome`). The same rules
 //! are replayed weekly — and whenever they change — over some 166 days of
@@ -47,7 +48,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 5;
+const VERSION: i32 = 6;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -60,6 +61,8 @@ const KEPT_MS: i64 = 90 * 24 * 3_600_000;
 const KIND: &str = "three-drives";
 /// How often live prices are weighed against the setups' lines.
 const TOUCH_EVERY: Duration = Duration::from_secs(15);
+/// The score a turned pattern needs for Telegram to hear of it; the panel lists them all.
+const TOLD_SCORE: i32 = 70;
 /// Patterns named in one Telegram message; the rest are in the panel.
 const TOLD_AT_MOST: usize = 12;
 
@@ -151,7 +154,7 @@ impl Screener {
     async fn settle(&self, bar: i64, held: &HashMap<String, Vec<Candle>>) -> anyhow::Result<()> {
         let client = self.pool.get().await?;
         let open = client
-            .query("SELECT id, market, side, entry_at, entry, drives FROM signal WHERE outcome IS NULL AND entry_at IS NOT NULL", &[])
+            .query("SELECT id, market, side, entry_at, entry, drives, levels FROM signal WHERE outcome IS NULL AND entry_at IS NOT NULL", &[])
             .await?;
         for row in open {
             let (id, market, entry_at): (i64, String, i64) = (row.get(0), row.get(1), row.get(3));
@@ -170,14 +173,14 @@ impl Screener {
             };
             let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= entry_at).cloned().collect();
             let entry: f64 = row.get(4);
-            let Some(extreme) = row.get::<_, Value>(5)[2]["price"].as_f64() else { continue };
-            let o = drives::outcome(side, entry, extreme, &after);
-            let lv = drives::levels(side, entry, extreme);
+            // A trade entered before its prices were kept has them worked out from its bars.
+            let Some(lv) = levels_of(&row.get::<_, Option<Value>>(6)).or_else(|| pattern_levels(side, entry, &row.get(5), bars)) else { continue };
+            let o = drives::outcome(side, entry, lv, &after);
             let decided = o.result != Hit::Open;
             client
                 .execute(
-                    "UPDATE signal SET outcome = $2, outcome_at = $3, ret = $4, best = $5, worst = $6, target = $7, stop = $8 WHERE id = $1",
-                    &[&id, &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst, &lv.tp[0], &lv.sl],
+                    "UPDATE signal SET outcome = $2, outcome_at = $3, ret = $4, best = $5, worst = $6, target = $7, stop = $8, levels = $9 WHERE id = $1",
+                    &[&id, &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst, &lv.tp[0], &lv.sl, &levels_json(lv)],
                 )
                 .await?;
         }
@@ -198,12 +201,12 @@ impl Screener {
         let client = self.pool.get().await?;
         let Some(latest) = client.query_one("SELECT max(bar) FROM signal_scan", &[]).await?.get::<_, Option<i64>>(0) else { return Ok(()) };
         let rows = client
-            .query("SELECT market, side, drives, atr, clear, until_at FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NULL", &[&latest])
+            .query("SELECT market, side, drives, atr, clear, until_at, pullback FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NULL", &[&latest])
             .await?;
         if rows.is_empty() {
             return Ok(());
         }
-        let setups: Vec<(String, Setup)> = rows.iter().filter_map(|r| Some((r.get(0), setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5))?))).collect();
+        let setups: Vec<(String, Setup)> = rows.iter().filter_map(|r| Some((r.get(0), setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5), r.get(6))?))).collect();
         let prices = self.prices(setups.iter().map(|(m, _)| m.as_str())).await;
         let now = now_ms();
         let mut reached = Vec::new();
@@ -212,15 +215,16 @@ impl Screener {
             if !setup.touched(price, now) {
                 continue;
             }
+            let lv = touch_levels(&setup, price);
             let marked = client
                 .execute(
-                    "UPDATE signal_setup SET touched_at = $5, touch_price = $6 WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4 AND touched_at IS NULL",
-                    &[&market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &now, &price],
+                    "UPDATE signal_setup SET touched_at = $5, touch_price = $6, levels = $7 WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4 AND touched_at IS NULL",
+                    &[&market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &now, &price, &lv.map(levels_json)],
                 )
                 .await?;
             if marked > 0 {
                 tracing::info!(%market, side = setup.side.id(), price, "a third drive at the line");
-                reached.push((market, setup, price));
+                reached.push((market, setup, price, lv));
             }
         }
         let Some(telegram) = self.telegram.as_ref().filter(|_| !reached.is_empty()) else { return Ok(()) };
@@ -270,7 +274,7 @@ impl Screener {
         let client = self.pool.get().await?;
         let open = client
             .query(
-                "SELECT market, side, first_at, second_at, drives, atr, clear, until_at, touched_at, touch_price FROM signal_setup
+                "SELECT market, side, first_at, second_at, drives, atr, clear, until_at, touched_at, touch_price, pullback, levels FROM signal_setup
                  WHERE touched_at IS NOT NULL AND outcome IS NULL",
                 &[],
             )
@@ -279,7 +283,7 @@ impl Screener {
             let market: String = row.get(0);
             let side: String = row.get(1);
             let (first_at, second_at, touched_at, entry): (i64, i64, i64, f64) = (row.get(2), row.get(3), row.get(8), row.get(9));
-            let Some(setup) = setup_of(&side, &row.get(4), row.get(5), row.get(6), row.get(7)) else { continue };
+            let Some(mut setup) = setup_of(&side, &row.get(4), row.get(5), row.get(6), row.get(7), row.get(10)) else { continue };
             let fetched;
             let bars = match held.get(&market) {
                 Some(bars) => bars,
@@ -292,9 +296,15 @@ impl Screener {
                 },
             };
             let touch_bar = touched_at.div_euclid(STEP) * STEP;
+            // A touch from before its pullback was kept has it read from the bars.
+            if !setup.pullback.is_finite() {
+                let pullback = bars.iter().filter(|k| k.open_time > second_at && k.open_time < touch_bar);
+                setup.pullback = if setup.side == Side::Bull { pullback.map(|k| k.high).fold(f64::NEG_INFINITY, f64::max) } else { pullback.map(|k| k.low).fold(f64::INFINITY, f64::min) };
+            }
+            let Some(lv) = levels_of(&row.get::<_, Option<Value>>(11)).or_else(|| touch_levels(&setup, entry)) else { continue };
             let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= touch_bar).cloned().collect();
-            let o = drives::touch_outcome(setup.side, entry, &after);
-            let target = drives::levels(setup.side, entry, entry).tp[0];
+            let o = drives::touch_outcome(setup.side, entry, lv, &after);
+            let target = lv.tp[0];
             // What the scans made of the two drives: a pattern, and whether it turned.
             let became = client
                 .query_opt(
@@ -307,9 +317,9 @@ impl Screener {
             let decided = o.result != Hit::Open;
             client
                 .execute(
-                    "UPDATE signal_setup SET target = $5, became = $6, outcome = $7, outcome_at = $8, ret = $9, best = $10, worst = $11
+                    "UPDATE signal_setup SET target = $5, became = $6, outcome = $7, outcome_at = $8, ret = $9, best = $10, worst = $11, levels = $12
                      WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4",
-                    &[&market, &side, &first_at, &second_at, &target, &became.id(), &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst],
+                    &[&market, &side, &first_at, &second_at, &target, &became.id(), &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst, &levels_json(lv)],
                 )
                 .await?;
         }
@@ -363,7 +373,7 @@ impl Screener {
                         let o = drives::play(side, entry, lv, &bars[at + 1..], false);
                         plans.add(plan, "pattern", side, Some((f.score, f.divergence)), bars[at].open_time >= middle, &o);
                     }
-                    let o = drives::outcome(side, entry, f.extreme, &bars[at + 1..]);
+                    let o = drives::outcome(side, entry, drives::levels(side, entry, f.extreme, f.pullback, f.atr), &bars[at + 1..]);
                     if o.result == Hit::Open {
                         continue;
                     }
@@ -445,28 +455,31 @@ impl Screener {
         for (market, f, price) in found {
             let drives = Value::Array(f.drives.iter().map(|d| json!({ "at": d.at, "price": d.price })).collect());
             let (turned_at, turn_price) = (f.turn.map(|t| t.at), f.turn.map(|t| t.price));
-            // Entered where the first scan to see it turned read up to.
+            // Entered where the first scan to see it turned read up to, at the live plan's prices.
             let (entry_at, entry) = (f.turn.map(|_| bar), f.turn.map(|_| *price));
+            let levels = f.turn.map(|_| levels_json(drives::levels(f.side, *price, f.extreme, f.pullback, f.atr)));
             tx.execute(
-                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry)
-                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)
+                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry, levels)
+                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14)
                  ON CONFLICT (kind, market, side, timeframe, third_at) DO UPDATE SET
                      drives = EXCLUDED.drives, turned_at = COALESCE(signal.turned_at, EXCLUDED.turned_at),
                      turn_price = COALESCE(signal.turn_price, EXCLUDED.turn_price), score = EXCLUDED.score,
                      divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar,
-                     entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry)",
-                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry],
+                     entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry),
+                     levels = COALESCE(signal.levels, EXCLUDED.levels)",
+                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry, &levels],
             )
             .await?;
         }
         for (market, setup) in setups {
             let drives = Value::Array(setup.drives.iter().map(|d| json!({ "at": d.at, "price": d.price })).collect());
             tx.execute(
-                "INSERT INTO signal_setup (market, side, first_at, second_at, drives, atr, clear, until_at, seen_bar)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO signal_setup (market, side, first_at, second_at, drives, atr, clear, until_at, seen_bar, pullback)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (market, side, first_at, second_at) DO UPDATE SET
-                     drives = EXCLUDED.drives, atr = EXCLUDED.atr, clear = EXCLUDED.clear, until_at = EXCLUDED.until_at, seen_bar = EXCLUDED.seen_bar",
-                &[market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &drives, &setup.atr, &setup.clear, &setup.until, &bar],
+                     drives = EXCLUDED.drives, atr = EXCLUDED.atr, clear = EXCLUDED.clear, until_at = EXCLUDED.until_at, seen_bar = EXCLUDED.seen_bar,
+                     pullback = EXCLUDED.pullback",
+                &[market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &drives, &setup.atr, &setup.clear, &setup.until, &bar, &setup.pullback],
             )
             .await?;
         }
@@ -485,7 +498,7 @@ impl Screener {
         let turned = client
             .query(
                 "UPDATE signal SET told_at = $2 WHERE seen_bar = $1 AND turned_at IS NOT NULL AND told_at IS NULL
-                 RETURNING market, side, drives, score, divergence, price",
+                 RETURNING market, side, drives, score, divergence, price, levels",
                 &[&bar, &now_ms()],
             )
             .await?;
@@ -499,8 +512,14 @@ impl Screener {
                 score: r.get(3),
                 divergence: r.get(4),
                 price: r.get(5),
+                levels: levels_of(&r.get::<_, Option<Value>>(6)),
             })
+            // Telegram hears of the best of them: a score of 70 or more.
+            .filter(|t| t.score >= TOLD_SCORE)
             .collect();
+        if lines.is_empty() {
+            return Ok(());
+        }
         lines.sort_by_key(|t| -t.score);
         for reader in client.query("SELECT owner FROM signal_watch WHERE notify", &[]).await? {
             let owner: String = reader.get(0);
@@ -510,25 +529,56 @@ impl Screener {
     }
 }
 
-/// A setup as the table keeps it.
-fn setup_of(side: &str, drives: &Value, atr: f64, clear: f64, until: i64) -> Option<Setup> {
+/// A setup as the table keeps it; one kept before its pullback was has none.
+fn setup_of(side: &str, drives: &Value, atr: f64, clear: f64, until: i64, pullback: Option<f64>) -> Option<Setup> {
     let point = |i: usize| Some(Point { index: 0, at: drives[i]["at"].as_i64()?, price: drives[i]["price"].as_f64()? });
-    Some(Setup { side: if side == "bull" { Side::Bull } else { Side::Bear }, drives: [point(0)?, point(1)?], atr, clear, until })
+    let side = if side == "bull" { Side::Bull } else { Side::Bear };
+    Some(Setup { side, drives: [point(0)?, point(1)?], atr, clear, until, pullback: pullback.unwrap_or(f64::NAN) })
+}
+
+/// A trade's prices as the tables keep them.
+fn levels_json(lv: drives::Levels) -> Value {
+    json!({ "tp": lv.tp, "sl": lv.sl })
+}
+
+fn levels_of(value: &Option<Value>) -> Option<drives::Levels> {
+    let v = value.as_ref()?;
+    let tp = |i: usize| v["tp"][i].as_f64();
+    Some(drives::Levels { tp: [tp(0)?, tp(1)?, tp(2)?], sl: v["sl"].as_f64()? })
+}
+
+/// The live plan's prices for price at a setup's line: the touch is the third
+/// drive's extreme so far, its leg begun at the pullback after the second.
+fn touch_levels(setup: &Setup, price: f64) -> Option<drives::Levels> {
+    setup.pullback.is_finite().then(|| drives::levels(setup.side, price, price, setup.pullback, setup.atr))
+}
+
+/// The live plan's prices for a pattern entered before they were kept, from
+/// its bars: the pullback between the second drive and the third, and the ATR
+/// at the third.
+fn pattern_levels(side: Side, entry: f64, drives: &Value, bars: &[Candle]) -> Option<drives::Levels> {
+    let at = |i: usize| drives[i]["at"].as_i64();
+    let (second, third, extreme) = (at(1)?, at(2)?, drives[2]["price"].as_f64()?);
+    let between = bars.iter().filter(|k| k.open_time > second && k.open_time < third);
+    let pullback = if side == Side::Bull { between.map(|k| k.high).fold(f64::NEG_INFINITY, f64::max) } else { between.map(|k| k.low).fold(f64::INFINITY, f64::min) };
+    let i = bars.iter().position(|k| k.open_time == third)?;
+    let atr = tradoor_core::indicators::atr(bars, 14)[i]?;
+    pullback.is_finite().then(|| drives::levels(side, entry, extreme, pullback, atr))
 }
 
 /// What the screener says when price reaches a setup's line, in the reader's own hours.
-fn touch_text(reached: &[(String, Setup, f64)], at: i64, offset: i32) -> String {
+fn touch_text(reached: &[(String, Setup, f64, Option<drives::Levels>)], at: i64, offset: i32) -> String {
     let mut text = format!("📐 Three drives · 4h — {} at the line\n", reached.len());
-    for (market, setup, price) in reached.iter().take(TOLD_AT_MOST) {
+    for (market, setup, price, levels) in reached.iter().take(TOLD_AT_MOST) {
         let name = MarketRef::parse(market).map_or_else(|| market.clone(), |m| format!("{} ({})", m.symbol, m.venue.label()));
         let (dot, way, what) = if setup.side == Side::Bull { ("🟢", "bullish", "a third low") } else { ("🔴", "bearish", "a third high") };
         text += &format!(
-            "\n{dot} {name} — {way}: {what} at the line\n   drives {} → {} · line {} · now {}\n   {}\n",
+            "\n{dot} {name} — {way}: {what} at the line\n   drives {} → {} · line {} · now {}\n{}",
             price_text(setup.drives[0].price),
             price_text(setup.drives[1].price),
             price_text(setup.line(at)),
             price_text(*price),
-            levels_text(setup.side, *price, *price),
+            levels.map_or_else(String::new, |lv| format!("   {}\n", levels_text(lv))),
         );
     }
     text + &format!("\nNot confirmed until the four-hour bars close · {}", telegram::stamp(at, offset))
@@ -558,7 +608,7 @@ impl Replayed {
         self.side.push(side.id());
         self.entry_at.push(entry_at);
         self.entry.push(entry);
-        let lv = drives::levels(side, entry, f.extreme);
+        let lv = drives::levels(side, entry, f.extreme, f.pullback, f.atr);
         self.target.push(lv.tp[0]);
         self.stop.push(lv.sl);
         self.score.push(f.score as i32);
@@ -680,7 +730,7 @@ impl TouchesReplayed {
         self.side.push(side.id());
         self.at.push(at);
         self.entry.push(t.entry);
-        self.target.push(drives::levels(side, t.entry, t.entry).tp[0]);
+        self.target.push(drives::levels(side, t.entry, t.entry, t.pullback, t.setup.atr).tp[0]);
         self.became.push(t.became.id());
         self.outcome.push(t.outcome.result.id());
         self.bars.push(t.outcome.bars as i32);
@@ -698,6 +748,7 @@ struct Told {
     score: i32,
     divergence: bool,
     price: f64,
+    levels: Option<drives::Levels>,
 }
 
 /// A price to five figures, as a chart of it would read: 13.600, 1,580.00.
@@ -707,8 +758,7 @@ fn price_text(price: f64) -> String {
 }
 
 /// A trade's prices, as a message names them.
-fn levels_text(side: Side, entry: f64, extreme: f64) -> String {
-    let lv = drives::levels(side, entry, extreme);
+fn levels_text(lv: drives::Levels) -> String {
     format!("TP {} / {} / {} · SL {}", price_text(lv.tp[0]), price_text(lv.tp[1]), price_text(lv.tp[2]), price_text(lv.sl))
 }
 
@@ -720,9 +770,8 @@ fn signal_text(turned: &[Told], bar: i64, offset: i32) -> String {
         let drives = t.drives.iter().map(|p| price_text(*p)).collect::<Vec<_>>().join(" → ");
         let (dot, way) = if t.bull { ("🟢", "bullish") } else { ("🔴", "bearish") };
         let divergence = if t.divergence { " · RSI divergence" } else { "" };
-        let side = if t.bull { Side::Bull } else { Side::Bear };
-        let extreme = t.drives.last().copied().unwrap_or(t.price);
-        text += &format!("\n{dot} {name} — {way}, score {}{divergence}\n   drives {drives} · now {}\n   {}\n", t.score, price_text(t.price), levels_text(side, t.price, extreme));
+        let levels = t.levels.map_or_else(String::new, |lv| format!("   {}\n", levels_text(lv)));
+        text += &format!("\n{dot} {name} — {way}, score {}{divergence}\n   drives {drives} · now {}\n{levels}", t.score, price_text(t.price));
     }
     if turned.len() > TOLD_AT_MOST {
         text += &format!("\n…and {} more in the Signal panel\n", turned.len() - TOLD_AT_MOST);
@@ -745,13 +794,9 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     };
     let now = now_ms();
     let scan = client.query_opt("SELECT bar, at, markets FROM signal_scan ORDER BY bar DESC LIMIT 1", &[]).await?;
-    let levels_json = |lv: drives::Levels| json!({ "tp": lv.tp, "sl": lv.sl });
     let row = |r: &tokio_postgres::Row| {
-        let side = if r.get::<_, String>(2) == "bull" { Side::Bull } else { Side::Bear };
-        let extreme = r.get::<_, Value>(3)[2]["price"].as_f64();
-        let levels = r.get::<_, Option<f64>>(12).zip(extreme).map(|(entry, extreme)| levels_json(drives::levels(side, entry, extreme)));
         json!({
-            "levels": levels,
+            "levels": r.get::<_, Option<Value>>(16),
             "id": r.get::<_, i64>(0),
             "market": r.get::<_, String>(1),
             "side": r.get::<_, String>(2),
@@ -770,16 +815,16 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             "lastSeen": r.get::<_, i64>(15),
         })
     };
-    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar";
+    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar, levels";
     let (signals, ended, touches) = match &scan {
         Some(scan) => {
             let bar: i64 = scan.get(0);
             let touches = client
-                .query("SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NOT NULL ORDER BY touched_at DESC", &[&bar])
+                .query("SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price, levels FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NOT NULL ORDER BY touched_at DESC", &[&bar])
                 .await?
                 .iter()
                 .filter_map(|r| {
-                    let setup = setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5))?;
+                    let setup = setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5), None)?;
                     let at: i64 = r.get(6);
                     Some(json!({
                         "market": r.get::<_, String>(0),
@@ -789,7 +834,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
                         "touchPrice": r.get::<_, f64>(7),
                         "line": setup.line(at),
                         "lineNow": setup.line(now),
-                        "levels": levels_json(drives::levels(setup.side, r.get(7), r.get(7))),
+                        "levels": r.get::<_, Option<Value>>(8),
                     }))
                 })
                 .collect::<Vec<_>>();
@@ -1111,25 +1156,29 @@ mod tests {
             atr: 0.0005,
             clear: 0.02895,
             until: 300 * STEP,
+            pullback: 0.027,
         };
-        let text = touch_text(&[("binance-perp:YGGUSDT".into(), setup, 0.02925)], 130 * STEP, 7 * 60);
+        let lv = touch_levels(&setup, 0.02925);
+        let text = touch_text(&[("binance-perp:YGGUSDT".into(), setup, 0.02925, lv)], 130 * STEP, 7 * 60);
         assert!(text.starts_with("📐 Three drives · 4h — 1 at the line\n"), "{text}");
         assert!(text.contains("🔴 YGGUSDT (Binance Perp) — bearish: a third high at the line\n   drives 0.026600 → 0.028700 · line 0.029330 · now 0.029250"), "{text}");
-        assert!(text.contains("· SL 0.030274\n"), "the stop 3.5% over the touch: {text}");
+        assert!(text.contains("· SL 0.029750\n"), "the stop an ATR over the touch: {text}");
+        let tp1 = lv.unwrap().tp[0];
+        assert!((tp1 - (0.02925 - 0.382 * 0.00225)).abs() < 1e-12, "the first take-profit 38.2% back down the leg from the pullback");
         assert!(text.contains("Not confirmed until the four-hour bars close"), "{text}");
     }
 
     #[test]
     fn a_turn_reads_as_a_message() {
         let turned = [
-            Told { market: "binance-perp:LINKUSDT".into(), bull: false, drives: vec![13.6, 14.4, 15.8], score: 86, divergence: true, price: 15.1 },
-            Told { market: "bybit-perp:ZECUSDT".into(), bull: true, drives: vec![1580.0, 1520.0, 1490.0], score: 70, divergence: false, price: 1510.0 },
+            Told { market: "binance-perp:LINKUSDT".into(), bull: false, drives: vec![13.6, 14.4, 15.8], score: 86, divergence: true, price: 15.1, levels: Some(drives::Levels { tp: [14.647, 14.194, 13.741], sl: 16.353 }) },
+            Told { market: "bybit-perp:ZECUSDT".into(), bull: true, drives: vec![1580.0, 1520.0, 1490.0], score: 70, divergence: false, price: 1510.0, levels: None },
         ];
         let text = signal_text(&turned, 1_790_928_000_000, 7 * 60);
         assert!(text.starts_with("🔔 Three drives · 4h — 2 turned\n"), "{text}");
         assert!(text.contains("🔴 LINKUSDT (Binance Perp) — bearish, score 86 · RSI divergence\n   drives 13.600 → 14.400 → 15.800 · now 15.100"), "{text}");
         assert!(text.contains("🟢 ZECUSDT (Bybit Perp) — bullish, score 70\n   drives 1,580.00 → 1,520.00 → 1,490.00"), "{text}");
-        assert!(text.contains("   TP 14.647 / 14.194 / 13.741 · SL 16.353\n"), "take-profits a drop of 3, 6 and 9% from now, the stop 3.5% over the third drive: {text}");
+        assert!(text.contains("   TP 14.647 / 14.194 / 13.741 · SL 16.353\n"), "the trade's own prices: {text}");
         assert!(text.ends_with("UTC+7"), "{text}");
     }
 }
