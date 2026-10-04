@@ -102,6 +102,8 @@ const ENDED: Record<string, string> = {
   played: 'reached TP1 before the turn',
   waited: 'no turn in two days',
   lapsed: 'two days since it turned',
+  unread: 'its coin left the 200 screened',
+  replaced: 'an older pattern on the coin listed instead',
 };
 /** `10-06 04:00`: a day and time in this browser's zone. */
 const when = (ms: number) => formatDateTime(ms).slice(5, 16);

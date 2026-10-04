@@ -182,8 +182,11 @@ impl Screener {
         for row in gone {
             let (id, market, third_at): (i64, String, i64) = (row.get(0), row.get(1), row.get(3));
             let side = if row.get::<_, String>(2) == "bull" { Side::Bull } else { Side::Bear };
-            // Still standing, or its coin no longer read: another pattern took its place, or the screen left it.
-            let why = held.get(&market).and_then(|bars| drives::ended(bars, side, third_at)).map_or("gone", |e| e.id());
+            // Its coin no longer among those screened; or still standing, an older pattern on the coin listed in its place.
+            let why = match held.get(&market) {
+                None => "unread",
+                Some(bars) => drives::ended(bars, side, third_at).map_or("replaced", |e| e.id()),
+            };
             client.execute("UPDATE signal SET ended_why = $2 WHERE id = $1", &[&id, &why]).await?;
         }
         Ok(())

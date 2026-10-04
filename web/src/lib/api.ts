@@ -277,7 +277,7 @@ export interface Signal {
   /** The limit entry the scan that first saw it set, once weighed. */
   limit: SignalLimit | null;
   /** Why it left the list, once it has. */
-  endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'gone' | null;
+  endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'unread' | 'replaced' | 'gone' | null;
 }
 
 /** A limit entry: half way back from the furthest price since the third drive
