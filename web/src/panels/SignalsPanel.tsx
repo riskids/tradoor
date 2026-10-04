@@ -13,10 +13,10 @@
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
+import { api, errorText, type Signal, type SignalGroup, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
-import { formatPrice } from '../lib/format';
+import { formatPrice, formatTurnover } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { symbolOf } from '../lib/markets';
 import { formatDateTime, formatHm } from '../lib/timezone';
@@ -93,6 +93,11 @@ const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
 /** The trade's prices, for a tooltip. */
 const levelsText = (lv: { tp: number[]; sl: number } | null | undefined) =>
   lv ? `TP ${lv.tp.map(price).join(' / ')} · SL ${price(lv.sl)}` : '';
+/** `+$1.2M`, `−$350K`: a push in dollars, buyers positive. */
+const usd = (v: number) => `${v < 0 ? '−' : '+'}$${formatTurnover(Math.abs(v))}`;
+/** The pushes for a tooltip: each in dollars, and how much of what traded takers bought. */
+const pushesText = (deltas: SignalPush[] | null) =>
+  deltas ? `Delta on the push into each drive: ${deltas.map((p) => `${usd(p.usd)} (${Math.round((1 + p.share) * 50)}% bought)`).join(', ')}` : 'No delta: Bybit does not say who took each trade';
 /** The trade the record counts, said once. */
 const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL an ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days';
 
@@ -235,7 +240,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
               <button
                 class="sig-row"
                 classList={{ shown: isShown(p) }}
-                data-tip={`Price reached the line through two drives at ${price(t.touchPrice)} — a third drive as it happens, not yet confirmed by closed bars. ${levelsText(t.levels)}`}
+                data-tip={`Price reached the line through two drives at ${price(t.touchPrice)} — a third drive as it happens, not yet confirmed by closed bars. Drives at ${t.drives.map((d) => price(d.price)).join(', ')} · ${pushesText(t.deltas)} · ${levelsText(t.levels)}`}
                 onClick={() => open(p)}
               >
                 <span class={`sig-state ${t.side} line`}>
@@ -246,8 +251,14 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   <b>{symbolOf(t.market)}</b>
                   <VenueTag market={t.market} />
                 </span>
-                <span class="sig-drives num">{p.drives.map((d) => price(d.price)).join(' → ')}</span>
-                <span class="sig-score num dim">—</span>
+                <Pushes deltas={t.deltas} />
+                <span class="sig-score num dim">
+                  <Show when={t.deltaDivergence} fallback="—">
+                    <span class="div delta" data-tip="Delta divergence: takers bought less of the volume on the push into the line so far than into the second drive">
+                      ΔDIV
+                    </span>
+                  </Show>
+                </span>
                 <span class="sig-age num dim">{since(t.touchedAt, now())}</span>
               </button>
             );
@@ -260,7 +271,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
               <button
                 class="sig-row"
                 classList={{ shown: isShown(s) }}
-                data-tip={`Drives at ${s.drives.map((d) => price(d.price)).join(', ')} · ${turned() ? `Stochastic RSI turned at ${price(s.turnPrice ?? s.price)}` : 'waiting for Stochastic RSI to turn'}${s.divergence ? ' · RSI weaker at the third drive' : ''}${s.levels ? ` · ${levelsText(s.levels)}` : ''} — open it on the chart`}
+                data-tip={`Drives at ${s.drives.map((d) => price(d.price)).join(', ')} · ${pushesText(s.deltas)} · ${turned() ? `Stochastic RSI turned at ${price(s.turnPrice ?? s.price)}` : 'waiting for Stochastic RSI to turn'}${s.divergence ? ' · RSI weaker at the third drive' : ''}${s.levels ? ` · ${levelsText(s.levels)}` : ''} — open it on the chart`}
                 onClick={() => open({ ...s, enteredAt: s.turnedAt ?? undefined })}
               >
                 <span class={`sig-state ${s.side}`} classList={{ turned: turned() }}>
@@ -271,7 +282,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   <b>{symbolOf(s.market)}</b>
                   <VenueTag market={s.market} />
                 </span>
-                <span class="sig-drives num">{s.drives.map((d) => price(d.price)).join(' → ')}</span>
+                <Pushes deltas={s.deltas} />
                 <span class="sig-score num">
                   <Show when={s.outcome}>{(o) => <span class={`sig-out ${o()}`} data-tip={`${OUTCOME[o()][2]} · ${pct(s.ret)}`}>{OUTCOME[o()][0]}</span>}</Show>
                   <Show when={s.deltaDivergence}>
@@ -316,6 +327,29 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
       </div>
       </Show>
     </div>
+  );
+}
+
+/** The delta on the push into each drive, in place of the drives' prices:
+ *  buyers' dollars green, sellers' red; a touch's third push is the one so far. */
+function Pushes(props: { deltas: SignalPush[] | null }) {
+  return (
+    <span class="sig-drives num">
+      <Show when={props.deltas} fallback="—">
+        {(deltas) => (
+          <For each={deltas()}>
+            {(p, i) => (
+              <>
+                <Show when={i() > 0}>
+                  <span class="dim"> → </span>
+                </Show>
+                <span class={p.usd < 0 ? 'sold' : 'bought'}>{usd(p.usd)}</span>
+              </>
+            )}
+          </For>
+        )}
+      </Show>
+    </span>
   );
 }
 

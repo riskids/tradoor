@@ -182,7 +182,14 @@ share of the volume buyers took on the push into the third drive (from the low
 of the pullback before it) against the push into the second, a smaller share
 being delta divergence (ΔDIV in the list), and whether the third drive's own
 bar was sold more than bought. Neither changes the score; the record counts
-them as cuts of its own, beside RSI divergence and the score bands.
+them as cuts of its own, beside RSI divergence and the score bands. The list
+shows, in place of the drives' prices, each push's delta in dollars — bought
+less sold, each bar's coins at its average price (quote volume over volume) —
+the first push from the low of as many bars before it as the first two drives
+are apart (`signal.deltas`, `signal_setup.deltas`). A setup keeps the pushes
+into its two drives, and on reaching the line one more read off the bars so
+far, the forming one with them. ΔDIV compares shares, not dollars: a push with
+more volume can carry more dollars and still a smaller share.
 
 Between scans the third drive is caught as it happens. Each scan also keeps,
 for every coin and side without a pattern, the newest two drives that wait for

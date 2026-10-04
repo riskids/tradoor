@@ -91,6 +91,18 @@ pub struct Found {
     pub delta_divergence: Option<bool>,
     /// Whether more was sold than bought on the third drive's own bar.
     pub delta_against: Option<bool>,
+    /// The push into each drive, where the exchange reports who took each trade.
+    pub pushes: Option<[Push; 3]>,
+}
+
+/// What takers did on the push into a drive, from the bar after the low of
+/// the pullback before it through the drive's own: bought less sold, in
+/// dollars, and that as a part of all that traded. Buyers are positive on
+/// either side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Push {
+    pub usd: f64,
+    pub share: f64,
 }
 
 /// Two drives and the line through them, waiting for a third: what price
@@ -110,6 +122,9 @@ pub struct Setup {
     /// The extreme of the pullback after the second drive: where a third
     /// drive's leg starts.
     pub pullback: f64,
+    /// The push into each of the two drives, where the exchange reports who
+    /// took each trade.
+    pub pushes: Option<[Push; 2]>,
 }
 
 impl Setup {
@@ -134,8 +149,18 @@ impl Setup {
 pub type Taker<'a> = Option<&'a [f64]>;
 
 /// The newest two drives on `side` waiting for a third at their line, if any.
-pub fn setup(candles: &[Candle], side: Side) -> Option<Setup> {
-    Prepared::new(candles, None, side)?.setup()
+pub fn setup(candles: &[Candle], taker: Taker, side: Side) -> Option<Setup> {
+    Prepared::new(candles, taker, side)?.setup()
+}
+
+/// The push into a third drive as it happens: from the bar after the low of
+/// the pullback since the second drive (the bar opening at `second`) through
+/// the newest bar, forming or not.
+pub fn push_since(candles: &[Candle], taker: &[f64], side: Side, second: i64) -> Option<Push> {
+    let p = Prepared::new(candles, Some(taker), side)?;
+    let b = candles.iter().position(|k| k.open_time == second)?;
+    let last = candles.len() - 1;
+    p.push(p.push_start(b + 1, last), last)
 }
 
 /// The pattern on `side` whose third drive is the newest, if there is one now.
@@ -479,6 +504,25 @@ impl Prepared {
         self.atr[i].filter(|a| *a > 0.0)
     }
 
+    /// The bar a push into the drive at `to` starts on: the one after the low
+    /// of the bars from `from` up to it, or the drive's own if there are none.
+    fn push_start(&self, from: usize, to: usize) -> usize {
+        (from..to).min_by(|&i, &j| self.c[i].low.total_cmp(&self.c[j].low)).map_or(to, |low| low + 1)
+    }
+
+    /// The push over bars `from` to `to`, both in; none without taker volume.
+    fn push(&self, from: usize, to: usize) -> Option<Push> {
+        let delta = self.delta.as_ref()?;
+        let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
+        let (mut net, mut usd, mut volume) = (0.0, 0.0, 0.0);
+        for (k, d) in self.c[from..=to].iter().zip(&delta[from..=to]) {
+            // Each bar's coins at its average price: what traded in dollars over what traded.
+            let price = k.quote_volume.filter(|q| *q > 0.0 && k.volume > 0.0).map_or((k.high + k.low + k.close).abs() / 3.0, |q| q / k.volume);
+            (net, usd, volume) = (net + d, usd + d * price, volume + k.volume);
+        }
+        (volume > 0.0).then(|| Push { usd: sign * usd, share: sign * net / volume })
+    }
+
     /// The pattern as a scan reading up to `last` would see it: the oldest one
     /// still standing among the drives recent enough to end one. A high since —
     /// a bounce in the pullback, a wick past the third drive, a quiet weekend's
@@ -513,6 +557,10 @@ impl Prepared {
             let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
             let step = c[b.index].open_time - c[b.index - 1].open_time;
             let atr_b = self.atr_at(b.index)?;
+            let pushes = self.delta.as_ref().and_then(|_| {
+                let first = self.push(self.push_start(a.index.saturating_sub(b.index - a.index), a.index), a.index)?;
+                Some([first, self.push(self.push_start(a.index + 1, b.index), b.index)?])
+            });
             return Some((
                 Setup {
                     side: self.side,
@@ -521,6 +569,7 @@ impl Prepared {
                     clear: sign * (b.value + CLEAR_ATR * atr_b),
                     until: c[a.index].open_time + MAX_SPAN as i64 * step,
                     pullback: sign * c[b.index + 1..=last].iter().map(|k| k.low).fold(f64::INFINITY, f64::min),
+                    pushes,
                 },
                 *pair,
             ));
@@ -667,22 +716,20 @@ impl Prepared {
         }
 
         // The delta at the drives: how much of the volume buyers took on the
-        // push into each, from the low of the pullback before it.
-        let push = |from: usize, to: usize| (from + 1..to).min_by(|&i, &j| c[i].low.total_cmp(&c[j].low)).map_or(to, |low| low + 1);
-        let (delta_divergence, delta_against) = match &self.delta {
-            Some(delta) => {
-                let imbalance = |from: usize, to: usize| {
-                    let (bought, volume) = (from..=to).fold((0.0, 0.0), |(d, v), i| (d + delta[i], v + c[i].volume));
-                    (volume > 0.0).then(|| bought / volume)
-                };
-                let divergence = imbalance(push(a, b), b).zip(imbalance(push(b, z), z)).map(|(second, third)| third < second);
-                (divergence, Some(delta[z] < 0.0))
-            }
+        // push into each, from the low of the pullback before it — the first
+        // from the low of as many bars before it as the first two are apart.
+        let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
+        let (second, third) = match &self.delta {
+            Some(_) => (self.push(self.push_start(a + 1, b), b), self.push(self.push_start(b + 1, z), z)),
             None => (None, None),
         };
+        // Buyers weaker into the third drive, or sellers for the bullish side.
+        let delta_divergence = second.zip(third).map(|(second, third)| sign * third.share < sign * second.share);
+        let delta_against = self.delta.as_ref().map(|delta| delta[z] < 0.0);
+        let first = second.and_then(|_| self.push(self.push_start(a.saturating_sub(b - a), a), a));
+        let pushes = first.zip(second).zip(third).map(|((first, second), third)| [first, second, third]);
 
         // Prices back the right way up for the bullish side.
-        let sign = if self.side == Side::Bull { -1.0 } else { 1.0 };
         let point = |i: usize, price: f64| Point { index: i, at: c[i].open_time, price: sign * price };
         Some(Found {
             side: self.side,
@@ -695,6 +742,7 @@ impl Prepared {
             atr: atr_z,
             delta_divergence,
             delta_against,
+            pushes,
         })
     }
 }
@@ -852,7 +900,7 @@ mod tests {
     fn two_drives_wait_for_the_third_at_their_line() {
         // Drives at 110.5 and 115.5, the pullback to 105 made, price on its way back up.
         let bars = three_up(&[])[..115].to_vec();
-        let setup = setup(&bars, Side::Bear).expect("two drives and a line");
+        let setup = setup(&bars, None, Side::Bear).expect("two drives and a line");
         assert_eq!(setup.drives.map(|d| d.index), [60, 90]);
         let at = 120 * H4;
         assert!((setup.line(at) - 120.5).abs() < 1e-9, "the line reaches 120.5 where the third drive came");
@@ -861,10 +909,10 @@ mod tests {
         assert!(!setup.touched(124.0, at), "well through it is a breakout, not a drive");
         assert!(!setup.touched(115.7, 91 * H4), "near the line, but not past the second drive by half an ATR");
         // Before the pullback after the second drive there is nothing to wait for.
-        assert!(super::setup(&three_up(&[])[..95], Side::Bear).is_none());
+        assert!(super::setup(&three_up(&[])[..95], None, Side::Bear).is_none());
         // Once the third drive is there and pulled back from, it is the second of the next two
         // (the screener keeps a pattern found ahead of a setup on the same side).
-        assert_eq!(super::setup(&three_up(&[(126, 114.0)]), Side::Bear).map(|s| s.drives.map(|d| d.index)), Some([90, 120]));
+        assert_eq!(super::setup(&three_up(&[(126, 114.0)]), None, Side::Bear).map(|s| s.drives.map(|d| d.index)), Some([90, 120]));
     }
 
     #[test]
@@ -929,6 +977,13 @@ mod tests {
         let found = find(&bars, Some(&taker), Side::Bear).unwrap();
         assert_eq!(found.delta_divergence, Some(true), "price further, buyers weaker");
         assert_eq!(found.delta_against, Some(false), "and on the third drive's bar they still bought more");
+        let [first, second, third] = found.pushes.expect("the push into each drive");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(first.share, 0.2) && near(second.share, 0.6) && near(third.share, 0.2), "bought less sold over all traded: {first:?} {second:?} {third:?}");
+        assert!(second.usd > third.usd && third.usd > 0.0, "and in dollars");
+        // As it happens: the push since the pullback after the second drive, two bars short of the third.
+        let now = push_since(&bars[..=118], &taker[..=118], Side::Bear, 90 * H4).expect("a push under way");
+        assert!(near(now.share, 0.2) && now.usd < third.usd, "{now:?}");
         let stronger: Vec<f64> = bars.iter().enumerate().map(|(i, k)| k.volume * if i == 120 { 0.3 } else if (106..=119).contains(&i) { 0.9 } else { 0.6 }).collect();
         let found = find(&bars, Some(&stronger), Side::Bear).unwrap();
         assert_eq!(found.delta_divergence, Some(false), "buyers stronger into the third");
@@ -936,7 +991,12 @@ mod tests {
         // The bullish side reads sellers the same way: sold less bought.
         let mirrored: Vec<Candle> = bars.iter().map(|c| Candle { open: 300.0 - c.open, high: 300.0 - c.low, low: 300.0 - c.high, close: 300.0 - c.close, ..*c }).collect();
         let sold: Vec<f64> = taker.iter().zip(&bars).map(|(b, k)| k.volume - b).collect();
-        assert_eq!(find(&mirrored, Some(&sold), Side::Bull).unwrap().delta_divergence, Some(true));
+        let down = find(&mirrored, Some(&sold), Side::Bull).unwrap();
+        assert_eq!(down.delta_divergence, Some(true));
+        assert!(near(down.pushes.unwrap()[1].share, -0.6), "sellers took 80% into the second low: buyers' share as the exchange has it");
+        // The two drives a setup waits on are measured the same way.
+        let setup = setup(&bars[..115], Some(&taker[..115]), Side::Bear).expect("two drives and a line");
+        assert_eq!(setup.pushes.map(|p| p.map(|p| p.share)), Some([first.share, second.share]));
     }
 
     #[test]

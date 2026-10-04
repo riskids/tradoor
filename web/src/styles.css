@@ -611,6 +611,8 @@ table.venues tr.off td { color: var(--dim); }
 .sig-coin { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .sig-coin b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sig-drives { color: var(--muted); white-space: nowrap; }
+.sig-drives .bought { color: color-mix(in oklab, var(--bull) 80%, var(--muted)); }
+.sig-drives .sold { color: color-mix(in oklab, var(--bear) 80%, var(--muted)); }
 .sig-score { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .sig-score .div { padding: 0 3px; border: 1px solid var(--border); color: var(--muted); font-size: 9px; }
 .sig-score .div.delta { border-color: color-mix(in oklab, var(--info) 45%, transparent); color: var(--info); background: color-mix(in oklab, var(--info) 10%, transparent); }

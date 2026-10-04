@@ -272,6 +272,15 @@ export interface Signal {
    *  not say who took each trade. */
   deltaDivergence: boolean | null;
   deltaAgainst: boolean | null;
+  /** The push into each drive, where the exchange says who took each trade. */
+  deltas: SignalPush[] | null;
+}
+
+/** What takers did on the push into a drive: bought less sold, in dollars and
+ *  as a part of all that traded. Positive is buyers, on either side. */
+export interface SignalPush {
+  usd: number;
+  share: number;
 }
 
 /** How a trade closed: all three take-profits, two or one (the rest out at the
@@ -399,6 +408,10 @@ export interface SignalTouch {
   lineNow: number;
   /** The trade entered at the touch. */
   levels: SignalLevels;
+  /** The pushes into the two drives, and into the line so far once reached;
+   *  and whether that last one is the weaker. Null without taker volume. */
+  deltas: SignalPush[] | null;
+  deltaDivergence: boolean | null;
 }
 
 export interface SignalsState {

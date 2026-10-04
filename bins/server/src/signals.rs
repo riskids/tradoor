@@ -91,12 +91,20 @@ impl Screener {
         tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
             let bar = settled(now_ms());
-            // A restart within the same four hours does not scan again.
-            let done = match self.pool.get().await {
-                Ok(client) => client.query_opt("SELECT max(bar) FROM signal_scan", &[]).await.ok().flatten().and_then(|r| r.get::<_, Option<i64>>(0)),
-                Err(_) => None,
+            // A restart within the same four hours does not scan again — unless
+            // that scan kept the delta at the drives but not the pushes into them.
+            let (done, unmeasured) = match self.pool.get().await {
+                Ok(client) => {
+                    let done = client.query_opt("SELECT max(bar) FROM signal_scan", &[]).await.ok().flatten().and_then(|r| r.get::<_, Option<i64>>(0));
+                    let unmeasured = client
+                        .query_one("SELECT EXISTS (SELECT 1 FROM signal WHERE seen_bar = $1 AND delta_divergence IS NOT NULL AND deltas IS NULL)", &[&bar])
+                        .await
+                        .is_ok_and(|r| r.get::<_, bool>(0));
+                    (done, unmeasured)
+                }
+                Err(_) => (None, false),
             };
-            if done.is_none_or(|d| d < bar) {
+            if unmeasured || done.is_none_or(|d| d < bar) {
                 if let Err(e) = self.scan(bar).await {
                     tracing::warn!(error = %e, "signal scan");
                 }
@@ -130,7 +138,7 @@ impl Screener {
                         // A pattern found is ahead of a setup on the same side.
                         if let Some(f) = drives::find(&bars, taker.as_deref(), side) {
                             found.push((market.clone(), f, price));
-                        } else if let Some(setup) = drives::setup(&bars, side) {
+                        } else if let Some(setup) = drives::setup(&bars, taker.as_deref(), side) {
                             setups.push((market.clone(), setup));
                         }
                     }
@@ -201,25 +209,29 @@ impl Screener {
         let client = self.pool.get().await?;
         let Some(latest) = client.query_one("SELECT max(bar) FROM signal_scan", &[]).await?.get::<_, Option<i64>>(0) else { return Ok(()) };
         let rows = client
-            .query("SELECT market, side, drives, atr, clear, until_at, pullback FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NULL", &[&latest])
+            .query("SELECT market, side, drives, atr, clear, until_at, pullback, deltas IS NOT NULL FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NULL", &[&latest])
             .await?;
         if rows.is_empty() {
             return Ok(());
         }
-        let setups: Vec<(String, Setup)> = rows.iter().filter_map(|r| Some((r.get(0), setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5), r.get(6))?))).collect();
-        let prices = self.prices(setups.iter().map(|(m, _)| m.as_str())).await;
+        let setups: Vec<(String, Setup, bool)> =
+            rows.iter().filter_map(|r| Some((r.get(0), setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5), r.get(6))?, r.get(7)))).collect();
+        let prices = self.prices(setups.iter().map(|(m, _, _)| m.as_str())).await;
         let now = now_ms();
         let mut reached = Vec::new();
-        for (market, setup) in setups {
+        for (market, setup, measured) in setups {
             let Some(&price) = prices.get(&market) else { continue };
             if !setup.touched(price, now) {
                 continue;
             }
             let lv = touch_levels(&setup, price);
+            // The push into the line so far, beside the pushes into the two drives.
+            let third = if measured { self.push_now(&market, &setup).await } else { None };
             let marked = client
                 .execute(
-                    "UPDATE signal_setup SET touched_at = $5, touch_price = $6, levels = $7 WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4 AND touched_at IS NULL",
-                    &[&market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &now, &price, &lv.map(levels_json)],
+                    "UPDATE signal_setup SET touched_at = $5, touch_price = $6, levels = $7, deltas = deltas || COALESCE($8, '[]'::jsonb)
+                     WHERE market = $1 AND side = $2 AND first_at = $3 AND second_at = $4 AND touched_at IS NULL",
+                    &[&market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &now, &price, &lv.map(levels_json), &third.map(|p| pushes_json(&[p]))],
                 )
                 .await?;
             if marked > 0 {
@@ -233,6 +245,13 @@ impl Screener {
             telegram.send_to_owner(&owner, |offset| touch_text(&reached, now, offset)).await;
         }
         Ok(())
+    }
+
+    /// The push into a setup's line so far: the bars since its second drive,
+    /// the one forming with them — as far back as a setup's drives may be.
+    async fn push_now(&self, market: &str, setup: &Setup) -> Option<drives::Push> {
+        let (bars, taker) = self.bars(market, i64::MAX, 300).await.ok()?;
+        drives::push_since(&bars, taker.as_deref()?, setup.side, setup.drives[1].at)
     }
 
     /// Last prices for these markets: Binance's perpetuals all in one ask, Bybit's one by one.
@@ -438,7 +457,7 @@ impl Screener {
                     low: k.low.parse()?,
                     close: k.close.parse()?,
                     volume: k.volume.parse()?,
-                    quote_volume: None,
+                    quote_volume: k.quote_volume.as_deref().and_then(|q| q.parse().ok()),
                 })
             })
             .collect::<anyhow::Result<Vec<Candle>>>()?;
@@ -461,29 +480,33 @@ impl Screener {
             // Entered where the first scan to see it turned read up to, at the live plan's prices.
             let (entry_at, entry) = (f.turn.map(|_| bar), f.turn.map(|_| *price));
             let levels = f.turn.map(|_| levels_json(drives::levels(f.side, *price, f.extreme, f.pullback, f.atr)));
+            let pushes = f.pushes.as_ref().map(|p| pushes_json(p));
             tx.execute(
-                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry, levels, delta_divergence, delta_against)
-                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15, $16)
+                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry, levels, delta_divergence, delta_against, deltas)
+                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15, $16, $17)
                  ON CONFLICT (kind, market, side, timeframe, third_at) DO UPDATE SET
                      drives = EXCLUDED.drives, turned_at = COALESCE(signal.turned_at, EXCLUDED.turned_at),
                      turn_price = COALESCE(signal.turn_price, EXCLUDED.turn_price), score = EXCLUDED.score,
                      divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar,
                      entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry),
                      levels = COALESCE(signal.levels, EXCLUDED.levels),
-                     delta_divergence = EXCLUDED.delta_divergence, delta_against = EXCLUDED.delta_against",
-                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry, &levels, &f.delta_divergence, &f.delta_against],
+                     delta_divergence = EXCLUDED.delta_divergence, delta_against = EXCLUDED.delta_against, deltas = EXCLUDED.deltas",
+                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry, &levels, &f.delta_divergence, &f.delta_against, &pushes],
             )
             .await?;
         }
         for (market, setup) in setups {
             let drives = Value::Array(setup.drives.iter().map(|d| json!({ "at": d.at, "price": d.price })).collect());
+            // Once price has reached the line, the push into it is kept beside the first two.
+            let pushes = setup.pushes.as_ref().map(|p| pushes_json(p));
             tx.execute(
-                "INSERT INTO signal_setup (market, side, first_at, second_at, drives, atr, clear, until_at, seen_bar, pullback)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                "INSERT INTO signal_setup (market, side, first_at, second_at, drives, atr, clear, until_at, seen_bar, pullback, deltas)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT (market, side, first_at, second_at) DO UPDATE SET
                      drives = EXCLUDED.drives, atr = EXCLUDED.atr, clear = EXCLUDED.clear, until_at = EXCLUDED.until_at, seen_bar = EXCLUDED.seen_bar,
-                     pullback = EXCLUDED.pullback",
-                &[market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &drives, &setup.atr, &setup.clear, &setup.until, &bar, &setup.pullback],
+                     pullback = EXCLUDED.pullback,
+                     deltas = CASE WHEN signal_setup.touched_at IS NULL OR signal_setup.deltas IS NULL THEN EXCLUDED.deltas ELSE signal_setup.deltas END",
+                &[market, &setup.side.id(), &setup.drives[0].at, &setup.drives[1].at, &drives, &setup.atr, &setup.clear, &setup.until, &bar, &setup.pullback, &pushes],
             )
             .await?;
         }
@@ -538,7 +561,21 @@ impl Screener {
 fn setup_of(side: &str, drives: &Value, atr: f64, clear: f64, until: i64, pullback: Option<f64>) -> Option<Setup> {
     let point = |i: usize| Some(Point { index: 0, at: drives[i]["at"].as_i64()?, price: drives[i]["price"].as_f64()? });
     let side = if side == "bull" { Side::Bull } else { Side::Bear };
-    Some(Setup { side, drives: [point(0)?, point(1)?], atr, clear, until, pullback: pullback.unwrap_or(f64::NAN) })
+    Some(Setup { side, drives: [point(0)?, point(1)?], atr, clear, until, pullback: pullback.unwrap_or(f64::NAN), pushes: None })
+}
+
+/// The pushes into the drives as the tables keep them and the panel reads them.
+fn pushes_json(pushes: &[drives::Push]) -> Value {
+    Value::Array(pushes.iter().map(|p| json!({ "usd": p.usd, "share": p.share })).collect())
+}
+
+/// Whether the push into the third drive kept less of the volume the
+/// pattern's way than the push into the second — delta divergence, from the
+/// pushes as kept.
+fn weakened(side: Side, pushes: &Value) -> Option<bool> {
+    let share = |i: usize| pushes.get(i)?.get("share")?.as_f64();
+    let sign = if side == Side::Bull { -1.0 } else { 1.0 };
+    Some(sign * share(2)? < sign * share(1)?)
 }
 
 /// A trade's prices as the tables keep them.
@@ -822,6 +859,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             "levels": r.get::<_, Option<Value>>(16),
             "deltaDivergence": r.get::<_, Option<bool>>(17),
             "deltaAgainst": r.get::<_, Option<bool>>(18),
+            "deltas": r.get::<_, Option<Value>>(19),
             "id": r.get::<_, i64>(0),
             "market": r.get::<_, String>(1),
             "side": r.get::<_, String>(2),
@@ -840,17 +878,22 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             "lastSeen": r.get::<_, i64>(15),
         })
     };
-    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar, levels, delta_divergence, delta_against";
+    const COLUMNS: &str = "id, market, side, drives, turned_at, turn_price, score, divergence, price, found_bar, target, stop, entry, outcome, ret, seen_bar, levels, delta_divergence, delta_against, deltas";
     let (signals, ended, touches) = match &scan {
         Some(scan) => {
             let bar: i64 = scan.get(0);
             let touches = client
-                .query("SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price, levels FROM signal_setup WHERE seen_bar = $1 AND touched_at IS NOT NULL ORDER BY touched_at DESC", &[&bar])
+                .query(
+                    "SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price, levels, deltas FROM signal_setup
+                     WHERE seen_bar = $1 AND touched_at IS NOT NULL ORDER BY touched_at DESC",
+                    &[&bar],
+                )
                 .await?
                 .iter()
                 .filter_map(|r| {
                     let setup = setup_of(&r.get::<_, String>(1), &r.get(2), r.get(3), r.get(4), r.get(5), None)?;
                     let at: i64 = r.get(6);
+                    let pushes: Option<Value> = r.get(9);
                     Some(json!({
                         "market": r.get::<_, String>(0),
                         "side": setup.side.id(),
@@ -860,6 +903,8 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
                         "line": setup.line(at),
                         "lineNow": setup.line(now),
                         "levels": r.get::<_, Option<Value>>(8),
+                        "deltaDivergence": pushes.as_ref().and_then(|p| weakened(setup.side, p)),
+                        "deltas": pushes,
                     }))
                 })
                 .collect::<Vec<_>>();
@@ -1173,6 +1218,7 @@ mod tests {
             atr: 1.0,
             delta_divergence,
             delta_against: None,
+            pushes: None,
         };
         let mut plans = Plans::default();
         plans.add(Plan::Fib, "pattern", Side::Bear, Some(&found(80, true, Some(true))), false, &o(Hit::Tp2, 3.0));
@@ -1202,6 +1248,7 @@ mod tests {
             clear: 0.02895,
             until: 300 * STEP,
             pullback: 0.027,
+            pushes: None,
         };
         let lv = touch_levels(&setup, 0.02925);
         let text = touch_text(&[("binance-perp:YGGUSDT".into(), setup, 0.02925, lv)], 130 * STEP, 7 * 60);
