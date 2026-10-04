@@ -447,18 +447,18 @@ export function App() {
           <Icon name="gift" size={13} /> <span>Rewards</span>
         </button>
         <Health />
-        <button class="item alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
+        <button class="item icon alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
           <Icon name="alarm" size={13} />
           <Show when={unread() > 0}>
             <span class="al-badge">{unread()}</span>
           </Show>
         </button>
         <Clock />
-        <button class="item" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
-          <Icon name="settings" size={13} />
+        <button class="item icon" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
+          <Icon name="settings" size={16} />
         </button>
-        <button class="item" data-tip="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
-          ?
+        <button class="item icon" data-tip="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
+          <span>?</span>
         </button>
       </header>
       <main style={{ display: 'flex', 'flex-direction': 'column', 'min-height': '0', overflow: 'hidden' }}>
