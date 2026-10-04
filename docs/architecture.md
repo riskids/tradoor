@@ -296,7 +296,10 @@ markets alerts are set on; elsewhere the page is still the only watcher. OKX
 and Hyperliquid name their markets their own way, so the catalogue's `native`
 translates both the asking and the answering (`trades`). Both sides record a trigger through the same two statements and the
 alert must still be active for them to take, so it fires once however many
-watchers see it. The chart draws each active one as a level to drag or delete.
+watchers see it. The chart draws each active one as a level to drag or delete:
+with a mouse a click picks it — its ring fills — and only then does a drag
+move it, so a press meant for the chart cannot shift it; a finger holds it
+instead. Its label is written in the line's own colour.
 
 Signing in with Telegram (`account`) is how a browser gets its id back —
 history cleared, another device — with every row still keyed by that id.

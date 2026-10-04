@@ -308,6 +308,9 @@ pub struct Chart {
     axis_width: f32,
     crosshair: Option<(f32, f32)>,
     alerts: Vec<AlertLine>,
+    /// The alert a click picked: only it is moved by a drag with a mouse, so a
+    /// press that only grazes a line on its way to pan leaves the line be.
+    selected_alert: Option<i64>,
     /// Minutes whose flow ran hard, oldest first, as the page sent them.
     flow: Vec<FlowMark>,
     /// Another market's candles are on the way; these are the last one's.
@@ -385,6 +388,7 @@ impl Chart {
             ctrl: false,
             touch_input: false,
             selected: None,
+            selected_alert: None,
             tool: None,
             placed: Vec::new(),
             draft: None,
@@ -638,8 +642,22 @@ impl Chart {
                 return;
             }
         }
+        if self.selected_alert.is_some_and(|id| !alerts.iter().any(|a| a.id == id)) {
+            self.selected_alert = None;
+        }
         if self.alerts != alerts {
             self.alerts = alerts;
+            self.touch();
+        }
+    }
+
+    /// Pick an alert, or none: a drawing picked is let go, as only one thing is picked at a time.
+    fn pick_alert(&mut self, id: Option<i64>) {
+        if id.is_some() {
+            self.select(None);
+        }
+        if self.selected_alert != id {
+            self.selected_alert = id;
             self.touch();
         }
     }
@@ -868,6 +886,11 @@ impl Chart {
 
     pub fn set_selected(&mut self, id: Option<i64>) {
         self.selected = id;
+        // A drawing picked from the page lets a picked alert go. The page also
+        // echoes a drawing let go, which an alert just picked must outlive.
+        if id.is_some() {
+            self.selected_alert = None;
+        }
         self.touch();
     }
 
@@ -1452,14 +1475,18 @@ impl Chart {
         for a in &self.alerts {
             let y = f.snap(price.scale.y(a.price) as f32);
             let color = a.color.unwrap_or(t.alert);
+            let picked = self.selected_alert == Some(a.id);
             match a.dash {
-                _ if held_alert == Some(a.id) => f.hline(0.0, plot_w, y, a.width, color),
+                _ if held_alert == Some(a.id) || picked => f.hline(0.0, plot_w, y, a.width, color),
                 Dash::Solid => f.hline(0.0, plot_w, y, a.width, color),
                 Dash::Dashed => f.dashed_line(0.0, y, plot_w, y, a.width, color, 4.0, 3.0),
                 Dash::Dotted => f.dashed_line(0.0, y, plot_w, y, a.width, color, a.width.max(1.5), 3.0),
             }
-            f.circle(plot_w - 10.0, y, 4.5, color.with_alpha(255));
-            f.circle(plot_w - 10.0, y, 3.0, t.background);
+            // Picked, the ring fills: it can be dragged now.
+            f.circle(plot_w - 10.0, y, if picked { 5.5 } else { 4.5 }, color.with_alpha(255));
+            if !picked {
+                f.circle(plot_w - 10.0, y, 3.0, t.background);
+            }
         }
 
         // ---- crosshair
@@ -1824,6 +1851,9 @@ impl Chart {
     }
 
     fn select(&mut self, id: Option<i64>) {
+        if id.is_some() {
+            self.selected_alert = None;
+        }
         if self.selected != id {
             self.selected = id;
             self.events.push(Event::SelectionChanged(id));
@@ -1933,10 +1963,17 @@ impl Chart {
             Drag::Separator { .. } => Cursor::RowResize,
             _ => match self.zone(x, y) {
                 Zone::Separator(_) => Cursor::RowResize,
+                Zone::PriceAxis(0) if self.alert_badge_at(x, y).is_some_and(|id| self.selected_alert != Some(id)) && !self.touch_input => Cursor::Pointer,
                 Zone::PriceAxis(_) => Cursor::NsResize,
                 Zone::TimeAxis => Cursor::ColResize,
                 Zone::Plot(0) if self.handle_at(x, y).is_some() => Cursor::Pointer,
-                Zone::Plot(0) if self.alert_at(x, y).is_some() => Cursor::NsResize,
+                Zone::Plot(0) if let Some((id, _)) = self.alert_at(x, y) => {
+                    if self.selected_alert == Some(id) {
+                        Cursor::NsResize
+                    } else {
+                        Cursor::Pointer
+                    }
+                }
                 Zone::Plot(0) => match self.drawing_at(x, y) {
                     Some(id) if self.selected == Some(id) => Cursor::Move,
                     Some(_) => Cursor::Pointer,
@@ -2049,9 +2086,14 @@ impl Chart {
         let grab_alerts = !self.touch_input;
         self.drag = match self.zone(x, y) {
             Zone::Separator(i) if free => Drag::Separator { upper: i, last_y: y },
-            // An alert's badge on the axis moves the alert; the bare axis scales.
+            // An alert's badge on the axis picks the alert, and moves it once
+            // picked; the bare axis scales.
             Zone::PriceAxis(0) if free => match self.alert_badge_at(x, y).filter(|_| grab_alerts) {
-                Some(id) => Drag::Alert { id, moved: false },
+                Some(id) if self.selected_alert == Some(id) => Drag::Alert { id, moved: false },
+                Some(id) => {
+                    self.pick_alert(Some(id));
+                    Drag::None
+                }
                 None => Drag::PriceAxis { pane: 0, last_y: y },
             },
             Zone::PriceAxis(p) if free => Drag::PriceAxis { pane: p, last_y: y },
@@ -2068,11 +2110,13 @@ impl Chart {
             // it moves it. Any other drawing is only picked by a click: a drag
             // that starts on it pans, as on bare chart, since a position's box
             // or a fib's levels cover so much of the screen that the chart
-            // could hardly be moved past them without moving them.
+            // could hardly be moved past them without moving them. An alert's
+            // line likewise: picked by a click, and only then dragged — a line
+            // across the chart is easily caught by a press meant for the chart.
             Zone::Plot(0) if free => {
                 if let Some((id, index)) = self.handle_at(x, y) {
                     Drag::Anchor { id, index, moved: false }
-                } else if let Some((id, _)) = self.alert_at(x, y).filter(|_| grab_alerts) {
+                } else if let Some((id, _)) = self.alert_at(x, y).filter(|(id, _)| grab_alerts && self.selected_alert == Some(*id)) {
                     Drag::Alert { id, moved: false }
                 } else if let Some(id) = self.drawing_at(x, y).filter(|id| self.selected == Some(*id)) {
                     Drag::Shape { id, last: (x, y), moved: false }
@@ -2187,7 +2231,13 @@ impl Chart {
     fn click(&mut self, x: f32, y: f32) {
         let on_price = self.zone(x, y) == Zone::Plot(0);
         match self.tool {
-            None => self.select(if on_price { self.drawing_at(x, y) } else { None }),
+            None => match self.alert_at(x, y).filter(|_| on_price) {
+                Some((id, _)) => self.pick_alert(Some(id)),
+                None => {
+                    self.pick_alert(None);
+                    self.select(if on_price { self.drawing_at(x, y) } else { None });
+                }
+            },
             Some(DrawingKind::Brush) => {}
             Some(tool) => {
                 let Some(anchor) = self.point_at(x, y).filter(|_| on_price) else { return };
@@ -2312,6 +2362,11 @@ impl Chart {
             "Escape" if self.selected.is_some() => {
                 self.selected = None;
                 self.events.push(Event::SelectionChanged(None));
+                true
+            }
+            "Escape" if self.selected_alert.is_some() => {
+                self.selected_alert = None;
+                self.touch();
                 true
             }
             "Enter" if self.tool == Some(DrawingKind::Path) => self.finish_path(),
@@ -3070,18 +3125,35 @@ mod tests {
         c.pointer_move(300.0, 200.0);
         assert_eq!(c.legend().alert.map(|(id, _)| id), Some(9), "the page is told which one is hovered");
 
+        // Not picked yet, a drag that starts on it pans instead of moving it.
         c.pointer_down(300.0, 200.0, 0);
         c.pointer_move(300.0, 260.0);
+        c.pointer_up(300.0, 260.0);
+        assert!(!c.take_events().iter().any(|e| matches!(e, Event::AlertMoved { .. })), "a press that grazes the line leaves it be");
+        let level_y = c.panes[0].scale.y(level) as f32;
+        click(&mut c, 300.0, level_y);
+        assert_eq!(c.selected_alert, Some(9), "a click picks it");
+
+        c.pointer_down(300.0, level_y, 0);
+        c.pointer_move(300.0, level_y + 60.0);
         // A refresh from the page mid-drag does not snap it back.
         c.set_alerts(vec![AlertLine::at(9, level)]);
-        c.pointer_up(300.0, 260.0);
+        c.pointer_up(300.0, level_y + 60.0);
         let moved = c.take_events().into_iter().find_map(|e| match e {
             Event::AlertMoved { id: 9, price } => Some(price),
             _ => None,
         });
-        let expected = c.anchor_at(300.0, 260.0).unwrap().price;
+        let expected = c.anchor_at(300.0, level_y + 60.0).unwrap().price;
         assert!(moved.is_some_and(|p| (p - expected).abs() < 0.01 * expected.abs()), "{moved:?} vs {expected}");
         assert!(moved.unwrap() < level, "dragged down is lower");
+        click(&mut c, 300.0, 40.0);
+        assert_eq!(c.selected_alert, None, "a click elsewhere lets it go");
+        let level_y = c.panes[0].scale.y(c.alerts[0].price) as f32;
+        click(&mut c, 300.0, level_y);
+        c.set_selected(None);
+        assert_eq!(c.selected_alert, Some(9), "the page echoing no drawing picked does not let it go");
+        assert!(c.key("Escape"));
+        assert_eq!(c.selected_alert, None, "Escape does");
     }
 
     #[test]
@@ -3094,6 +3166,12 @@ mod tests {
         assert_eq!(c.alert_handle_at(axis_x, 203.0).map(|(id, _)| id), Some(9), "the badge is a handle");
         assert_eq!(c.alert_handle_at(axis_x, 260.0), None, "the bare axis is not");
 
+        // The first press on the badge picks the alert, the next moves it.
+        c.pointer_down(axis_x, 200.0, 0);
+        c.pointer_move(axis_x, 150.0);
+        c.pointer_up(axis_x, 150.0);
+        assert!(!c.take_events().iter().any(|e| matches!(e, Event::AlertMoved { .. })));
+        assert_eq!(c.selected_alert, Some(9));
         c.pointer_down(axis_x, 200.0, 0);
         c.pointer_move(axis_x, 150.0);
         c.pointer_up(axis_x, 150.0);

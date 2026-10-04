@@ -568,7 +568,7 @@ table.venues tr.off td { color: var(--dim); }
 .alerts-btn .al-badge { position: absolute; top: 1px; right: -2px; margin: 0; }
 .alert-add { position: absolute; z-index: 6; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; color: var(--text); background: var(--surface-3); border: 1px solid var(--border); }
 .alert-add:hover { color: #fff; background: #22ab94; border-color: #22ab94; }
-.alert-label { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 2px 0 8px; border: 1px solid #22ab94; border-radius: 3px; background: var(--surface); color: #22ab94; font-size: 11px; white-space: nowrap; box-shadow: 0 3px 12px #0008; }
+.alert-label { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 2px 0 8px; border: 1px solid var(--al, #22ab94); border-radius: 3px; background: var(--surface); color: var(--al, #22ab94); font-size: 11px; white-space: nowrap; box-shadow: 0 3px 12px #0008; }
 .alert-label button { display: flex; padding: 3px; color: var(--muted); }
 .alert-label button:hover { color: var(--bear); }
 .al-tabs { display: flex; flex: none; gap: 2px; margin: 6px 8px 2px; padding: 2px; border-radius: 6px; background: var(--surface-2); }

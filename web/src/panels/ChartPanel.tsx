@@ -1196,7 +1196,8 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             {(h) => (
               <div
                 class="alert-label"
-                style={{ right: `${(box?.clientWidth ?? 0) - axisX() + 22}px`, top: `${h().y - 11}px` }}
+                // In the line's own colour, whole: a faint line's label must still read.
+                style={{ right: `${(box?.clientWidth ?? 0) - axisX() + 22}px`, top: `${h().y - 11}px`, '--al': h().alert.style?.color?.slice(0, 7) }}
                 onPointerEnter={() => setOverAlert({ id: h().alert.id, y: h().y })}
                 onPointerLeave={() => setOverAlert(null)}
                 onPointerDown={(e) => e.stopPropagation()}
