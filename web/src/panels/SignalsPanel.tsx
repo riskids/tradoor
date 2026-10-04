@@ -9,7 +9,7 @@
  *
  * The record beside the list says how they went: the same rules replayed over
  * months of history, the live patterns since the screener began, and the
- * latest of those one by one — target or stop first, or neither in four days.
+ * latest of those one by one — as trades with three take-profits and a stop.
  */
 import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { setShownPattern, shownPattern } from '../app/ui';
@@ -50,15 +50,19 @@ interface Openable {
   score: number;
   divergence: boolean;
   stage?: 'line';
+  levels?: { tp: number[]; sl: number } | null;
+  enteredAt?: number;
 }
 /** A touch as a pattern to draw: its two drives, and the third where price reached the line, on that bar. */
-const touchPattern = (t: { market: string; side: 'bear' | 'bull'; drives: SignalPoint[]; touchedAt: number; touchPrice: number }): Openable => ({
+const touchPattern = (t: { market: string; side: 'bear' | 'bull'; drives: SignalPoint[]; touchedAt: number; touchPrice: number; levels?: { tp: number[]; sl: number } | null }): Openable => ({
   market: t.market,
   side: t.side,
   drives: [...t.drives, { at: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS, price: t.touchPrice }],
   score: 0,
   divergence: false,
   stage: 'line',
+  levels: t.levels,
+  enteredAt: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS,
 });
 const isShown = (s: Openable) => {
   const p = shownPattern();
@@ -71,11 +75,17 @@ const share = (part: number, n: number) => (n === 0 ? '—' : `${Math.round((par
 const BECAME: Record<string, string> = { turned: 'became three drives, turned', pattern: 'became three drives', none: 'no third drive' };
 const GROUP_LABEL: Record<SignalGroup['group'], string> = { all: 'All', '70': 'Score 70+', '50': 'Score 50–69', '0': 'Score under 50', div: 'RSI divergence' };
 const OUTCOME: Record<SignalOutcome, [string, string, string]> = {
-  target: ['✓', 'Target', 'Reached the pullback before the third drive first'],
+  tp3: ['✓', 'TP3', 'All three take-profits'],
+  tp2: ['✓', 'TP2', 'Two take-profits, the rest out at the entry or after four days'],
+  tp1: ['✓', 'TP1', 'The first take-profit, the rest out at the entry or after four days'],
   stop: ['✗', 'Stop', 'Went past the third drive first'],
   expired: ['–', 'Neither', 'Neither in four days'],
-  passed: ['·', 'Passed', 'Already past its target when it turned'],
 };
+/** The trade's prices, for a tooltip. */
+const levelsText = (lv: { tp: number[]; sl: number } | null | undefined) =>
+  lv ? `TP ${lv.tp.map(price).join(' / ')} · SL ${price(lv.sl)}` : '';
+/** The trade the record counts, said once. */
+const TRADE = 'TP 3 / 6 / 9% from the entry, SL 3.5% past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days';
 
 export function SignalsPanel(props: { panel: SignalsPanelState }) {
   const [state, setState] = createSignal<SignalsState | null>(null);
@@ -102,8 +112,8 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
   useDismiss(telegramMenu, () => setTelegramMenu(false));
   /** Why a pattern left the list: how it played out, or that it had been news for two days. */
   const why = (s: Signal): string => {
-    if (s.outcome === 'stop') return 'went past the third drive';
-    if (s.outcome === 'target') return 'reached its target';
+    if (s.outcome === 'stop') return 'hit the stop';
+    if (s.outcome === 'tp3' || s.outcome === 'tp2' || s.outcome === 'tp1') return `reached ${s.outcome.toUpperCase()}`;
     if (s.outcome === 'expired') return 'neither in four days';
     return s.turnedAt !== null && s.lastSeen - s.turnedAt >= 44 * 3_600_000 ? 'two days since it turned' : 'no longer three drives';
   };
@@ -131,7 +141,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
     const target = props.panel.link ? props.panel : targetChart();
     if (!target) return;
     batch(() => {
-      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage });
+      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage, levels: s.levels ?? undefined, enteredAt: s.enteredAt });
       setPanelMarket(target.id, s.market);
       setPanelTimeframe(target.id, '4h');
     });
@@ -216,7 +226,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
               <button
                 class="sig-row"
                 classList={{ shown: isShown(p) }}
-                data-tip={`Price reached the line through two drives at ${price(t.touchPrice)} — a third drive as it happens, not yet confirmed by closed bars. The line is at ${price(t.lineNow)} now.`}
+                data-tip={`Price reached the line through two drives at ${price(t.touchPrice)} — a third drive as it happens, not yet confirmed by closed bars. ${levelsText(t.levels)}`}
                 onClick={() => open(p)}
               >
                 <span class={`sig-state ${t.side} line`}>
@@ -241,8 +251,8 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
               <button
                 class="sig-row"
                 classList={{ shown: isShown(s) }}
-                data-tip={`Drives at ${s.drives.map((d) => price(d.price)).join(', ')} · ${turned() ? `Stochastic RSI turned at ${price(s.turnPrice ?? s.price)}` : 'waiting for Stochastic RSI to turn'}${s.divergence ? ' · RSI weaker at the third drive' : ''} — open it on the chart`}
-                onClick={() => open(s)}
+                data-tip={`Drives at ${s.drives.map((d) => price(d.price)).join(', ')} · ${turned() ? `Stochastic RSI turned at ${price(s.turnPrice ?? s.price)}` : 'waiting for Stochastic RSI to turn'}${s.divergence ? ' · RSI weaker at the third drive' : ''}${s.levels ? ` · ${levelsText(s.levels)}` : ''} — open it on the chart`}
+                onClick={() => open({ ...s, enteredAt: s.turnedAt ?? undefined })}
               >
                 <span class={`sig-state ${s.side}`} classList={{ turned: turned() }}>
                   {s.side === 'bear' ? '▼' : '▲'}
@@ -272,7 +282,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
           </div>
           <For each={ended()}>
             {(s) => (
-              <button class="sig-row ended" classList={{ shown: isShown(s) }} data-tip={`${why(s)}${s.ret !== null && s.outcome ? ` · ${pct(s.ret)}` : ''} — open it on the chart`} onClick={() => open(s)}>
+              <button class="sig-row ended" classList={{ shown: isShown(s) }} data-tip={`${why(s)}${s.ret !== null && s.outcome ? ` · ${pct(s.ret)}` : ''} — open it on the chart`} onClick={() => open({ ...s, enteredAt: s.turnedAt ?? undefined })}>
                 <span class={`sig-out ${s.outcome ?? 'gone'}`}>
                   {s.outcome ? OUTCOME[s.outcome][0] : '·'}
                   <span class="word"> {s.outcome ? OUTCOME[s.outcome][1].toUpperCase() : 'ENDED'}</span>
@@ -313,6 +323,7 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
                 )}
               </Show>
             </div>
+            <div class="sig-note dim">{TRADE}</div>
             <Show when={st().backtest}>{(b) => <Table groups={b().groups} sides={props.sides} />}</Show>
             <div class="sig-cap">
               <b>Live</b>
@@ -326,7 +337,7 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
             </Show>
             <div class="sig-cap">
               <b>At the line · replayed</b>
-              <span class="dim">price reaching the line of two drives, entered there</span>
+              <span class="dim">price reaching the line of two drives, entered there: TP 3 / 6 / 9% and SL 3.5% from the touch</span>
             </div>
             <Show when={st().touches.replayed.length > 0} fallback={<div class="sig-note dim">Replayed with the patterns a few minutes after the server starts.</div>}>
               <TouchTable groups={st().touches.replayed} sides={props.sides} />
@@ -345,7 +356,7 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
               {(t) => (
                 <button class="sig-row played" classList={{ shown: isShown(touchPattern(t)) }} data-tip={`${t.became ? BECAME[t.became] : 'not yet known'} — open it on the chart`} onClick={() => props.onOpen(touchPattern(t))}>
                   <span class={`sig-out ${t.outcome ?? 'open'}`} data-tip={t.outcome ? TOUCH_OUTCOME[t.outcome] : 'Still open'}>
-                    {t.outcome ? `${OUTCOME[t.outcome][0]} ${t.outcome === 'stop' ? 'Breakout' : OUTCOME[t.outcome][1]}` : '… Open'}
+                    {t.outcome ? `${OUTCOME[t.outcome][0]} ${OUTCOME[t.outcome][1]}` : '… Open'}
                   </span>
                   <span class="sig-coin">
                     <span class={t.side}>{t.side === 'bear' ? '▼' : '▲'}</span>
@@ -393,10 +404,11 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
 }
 
 const TOUCH_OUTCOME: Record<SignalOutcome, string> = {
-  target: 'Reached the pullback after the second drive first',
-  stop: 'Closed an ATR through the line first: a breakout',
-  expired: 'Neither in four days',
-  passed: 'Already past its target',
+  tp3: 'All three take-profits',
+  tp2: 'Two take-profits',
+  tp1: 'The first take-profit',
+  stop: 'The stop, 3.5% past the touch, before the first take-profit',
+  expired: 'Nothing in four days',
 };
 
 function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull')[] }) {
@@ -407,10 +419,11 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
           <th />
           <th class="num" data-tip="Times price reached a line">Touches</th>
           <th class="num" data-tip="The two drives became three within four days">3 drives</th>
-          <th class="num" data-tip="And Stochastic RSI turned">Turned</th>
-          <th class="num" data-tip="Reached the pullback after the second drive first">Target</th>
-          <th class="num" data-tip="Closed an ATR through the line first">Breakout</th>
-          <th class="num" data-tip="The average move from the touch to the exit, the pattern's way">Avg</th>
+          <th class="num" data-tip="Reached the first take-profit, 3% from the touch">TP1</th>
+          <th class="num" data-tip="Reached the second, 6%">TP2</th>
+          <th class="num" data-tip="Reached the third, 9%">TP3</th>
+          <th class="num" data-tip="The stop, 3.5% past the touch, before the first take-profit">SL</th>
+          <th class="num" data-tip="The average result over the whole position">Avg</th>
         </tr>
       </thead>
       <tbody>
@@ -421,10 +434,11 @@ function TouchTable(props: { groups: SignalTouchGroup[]; sides: ('bear' | 'bull'
                 <span class={g.side}>{g.side === 'bear' ? '▼ Bearish' : '▲ Bullish'}</span>
               </td>
               <td class="num">{g.n}</td>
-              <td class="num">{share(g.pattern, g.n)}</td>
-              <td class="num">{share(g.turned, g.n)}</td>
-              <td class="num bull">{share(g.target, g.n)}</td>
-              <td class="num bear" data-tip={`Neither in four days: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
+              <td class="num" data-tip={`Of them, Stochastic RSI turned: ${share(g.turned, g.n)}`}>{share(g.pattern, g.n)}</td>
+              <td class="num bull">{share(g.tp1, g.n)}</td>
+              <td class="num bull">{share(g.tp2, g.n)}</td>
+              <td class="num bull">{share(g.tp3, g.n)}</td>
+              <td class="num bear" data-tip={`Nothing in four days: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
               <td class="num" classList={{ bull: g.ret > 0, bear: g.ret < 0 }} data-tip={`At best ${pct(g.best)}, at worst ${pct(g.worst)} on the way, on average`}>
                 {g.n ? pct(g.ret) : '—'}
               </td>
@@ -443,10 +457,11 @@ function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[] }) {
         <tr>
           <th />
           <th class="num" data-tip="Patterns that turned">Patterns</th>
-          <th class="num" data-tip="Reached the pullback before the third drive before going past the third drive">Target</th>
-          <th class="num" data-tip="Went past the third drive first">Stop</th>
-          <th class="num" data-tip="Neither within four days">Neither</th>
-          <th class="num" data-tip="The average move to the exit, the pattern's way">Avg</th>
+          <th class="num" data-tip="Reached the first take-profit, 3% from the entry">TP1</th>
+          <th class="num" data-tip="Reached the second, 6%">TP2</th>
+          <th class="num" data-tip="Reached the third, 9%">TP3</th>
+          <th class="num" data-tip="The stop, 3.5% past the third drive, before the first take-profit">SL</th>
+          <th class="num" data-tip="The average result over the whole position: half at TP1, a quarter at each of the others, the rest at the entry, the stop, or the close four days on">Avg</th>
         </tr>
       </thead>
       <tbody>
@@ -459,9 +474,10 @@ function Table(props: { groups: SignalGroup[]; sides: ('bear' | 'bull')[] }) {
                 </Show>
               </td>
               <td class="num">{g.n}</td>
-              <td class="num bull">{share(g.target, g.n)}</td>
-              <td class="num bear">{share(g.stop, g.n)}</td>
-              <td class="num dim">{share(g.expired, g.n)}</td>
+              <td class="num bull">{share(g.tp1, g.n)}</td>
+              <td class="num bull">{share(g.tp2, g.n)}</td>
+              <td class="num bull">{share(g.tp3, g.n)}</td>
+              <td class="num bear" data-tip={`Nothing in four days: ${share(g.expired, g.n)}`}>{share(g.stop, g.n)}</td>
               <td class="num" classList={{ bull: g.ret > 0, bear: g.ret < 0 }} data-tip={`At best ${pct(g.best)}, at worst ${pct(g.worst)} on the way, on average`}>
                 {g.n ? pct(g.ret) : '—'}
               </td>

@@ -11,8 +11,9 @@
 //! ask for it, on Telegram — hours before the bars that confirm it close.
 //!
 //! The record: a pattern that turned is entered at the close the scan read,
-//! and each scan after weighs the bars since against its target and its stop
-//! until one is reached or four days pass (`drives::outcome`). The same rules
+//! as a trade with three take-profits and a stop (`drives::levels`), and each
+//! scan after weighs the bars since until it is closed or four days pass
+//! (`drives::outcome`). The same rules
 //! are replayed weekly — and whenever they change — over some 166 days of
 //! every coin's bars, bar by bar and seeing nothing past the bar a scan would
 //! have read, for what the record would have been.
@@ -46,7 +47,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 3;
+const VERSION: i32 = 4;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -150,7 +151,7 @@ impl Screener {
     async fn settle(&self, bar: i64, held: &HashMap<String, Vec<Candle>>) -> anyhow::Result<()> {
         let client = self.pool.get().await?;
         let open = client
-            .query("SELECT id, market, side, entry_at, entry, target, stop FROM signal WHERE outcome IS NULL AND entry_at IS NOT NULL AND target IS NOT NULL", &[])
+            .query("SELECT id, market, side, entry_at, entry, drives FROM signal WHERE outcome IS NULL AND entry_at IS NOT NULL", &[])
             .await?;
         for row in open {
             let (id, market, entry_at): (i64, String, i64) = (row.get(0), row.get(1), row.get(3));
@@ -168,12 +169,15 @@ impl Screener {
                 },
             };
             let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= entry_at).cloned().collect();
-            let o = drives::outcome(side, row.get(4), row.get(5), row.get(6), &after);
+            let entry: f64 = row.get(4);
+            let Some(extreme) = row.get::<_, Value>(5)[2]["price"].as_f64() else { continue };
+            let o = drives::outcome(side, entry, extreme, &after);
+            let lv = drives::levels(side, entry, extreme);
             let decided = o.result != Hit::Open;
             client
                 .execute(
-                    "UPDATE signal SET outcome = $2, outcome_at = $3, ret = $4, best = $5, worst = $6 WHERE id = $1",
-                    &[&id, &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst],
+                    "UPDATE signal SET outcome = $2, outcome_at = $3, ret = $4, best = $5, worst = $6, target = $7, stop = $8 WHERE id = $1",
+                    &[&id, &decided.then(|| o.result.id()), &decided.then_some(bar), &o.ret, &o.best, &o.worst, &lv.tp[0], &lv.sl],
                 )
                 .await?;
         }
@@ -288,13 +292,9 @@ impl Screener {
                 },
             };
             let touch_bar = touched_at.div_euclid(STEP) * STEP;
-            let pullback = bars.iter().filter(|k| k.open_time > second_at && k.open_time < touch_bar);
-            let target = if setup.side == Side::Bull { pullback.map(|k| k.high).fold(f64::NEG_INFINITY, f64::max) } else { pullback.map(|k| k.low).fold(f64::INFINITY, f64::min) };
-            if !target.is_finite() {
-                continue;
-            }
             let after: Vec<Candle> = bars.iter().filter(|k| k.open_time >= touch_bar).cloned().collect();
-            let o = drives::touch_outcome(&setup, entry, target, &after);
+            let o = drives::touch_outcome(setup.side, entry, &after);
+            let target = drives::levels(setup.side, entry, entry).tp[0];
             // What the scans made of the two drives: a pattern, and whether it turned.
             let became = client
                 .query_opt(
@@ -344,14 +344,14 @@ impl Screener {
             from = from.min(bars.first().map_or(bar, |c| c.open_time));
             for side in [Side::Bear, Side::Bull] {
                 for t in drives::touches(&bars, side) {
-                    if !matches!(t.outcome.result, Hit::Open | Hit::Passed) {
+                    if t.outcome.result != Hit::Open {
                         touches.push(&market, side, bars[t.at].open_time, &t);
                     }
                 }
                 for (at, f) in drives::history(&bars, side) {
                     let entry = bars[at].close;
-                    let o = drives::outcome(side, entry, f.target, f.stop, &bars[at + 1..]);
-                    if matches!(o.result, Hit::Open | Hit::Passed) {
+                    let o = drives::outcome(side, entry, f.extreme, &bars[at + 1..]);
+                    if o.result == Hit::Open {
                         continue;
                     }
                     rows.push(&market, side, bars[at].open_time + STEP, entry, &f, &o);
@@ -431,15 +431,14 @@ impl Screener {
             // Entered where the first scan to see it turned read up to.
             let (entry_at, entry) = (f.turn.map(|_| bar), f.turn.map(|_| *price));
             tx.execute(
-                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, target, stop, entry_at, entry)
-                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15)
+                "INSERT INTO signal (kind, market, side, timeframe, third_at, drives, turned_at, turn_price, score, divergence, price, found_bar, seen_bar, entry_at, entry)
+                 VALUES ($1, $2, $3, '4h', $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)
                  ON CONFLICT (kind, market, side, timeframe, third_at) DO UPDATE SET
                      drives = EXCLUDED.drives, turned_at = COALESCE(signal.turned_at, EXCLUDED.turned_at),
                      turn_price = COALESCE(signal.turn_price, EXCLUDED.turn_price), score = EXCLUDED.score,
                      divergence = EXCLUDED.divergence, price = EXCLUDED.price, seen_bar = EXCLUDED.seen_bar,
-                     target = EXCLUDED.target, stop = EXCLUDED.stop,
                      entry_at = COALESCE(signal.entry_at, EXCLUDED.entry_at), entry = COALESCE(signal.entry, EXCLUDED.entry)",
-                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &f.target, &f.stop, &entry_at, &entry],
+                &[&KIND, market, &f.side.id(), &f.drives[2].at, &drives, &turned_at, &turn_price, &(f.score as i32), &f.divergence, price, &bar, &entry_at, &entry],
             )
             .await?;
         }
@@ -507,11 +506,12 @@ fn touch_text(reached: &[(String, Setup, f64)], at: i64, offset: i32) -> String 
         let name = MarketRef::parse(market).map_or_else(|| market.clone(), |m| format!("{} ({})", m.symbol, m.venue.label()));
         let (dot, way, what) = if setup.side == Side::Bull { ("🟢", "bullish", "a third low") } else { ("🔴", "bearish", "a third high") };
         text += &format!(
-            "\n{dot} {name} — {way}: {what} at the line\n   drives {} → {} · line {} · now {}\n",
+            "\n{dot} {name} — {way}: {what} at the line\n   drives {} → {} · line {} · now {}\n   {}\n",
             price_text(setup.drives[0].price),
             price_text(setup.drives[1].price),
             price_text(setup.line(at)),
             price_text(*price),
+            levels_text(setup.side, *price, *price),
         );
     }
     text + &format!("\nNot confirmed until the four-hour bars close · {}", telegram::stamp(at, offset))
@@ -541,8 +541,9 @@ impl Replayed {
         self.side.push(side.id());
         self.entry_at.push(entry_at);
         self.entry.push(entry);
-        self.target.push(f.target);
-        self.stop.push(f.stop);
+        let lv = drives::levels(side, entry, f.extreme);
+        self.target.push(lv.tp[0]);
+        self.stop.push(lv.sl);
         self.score.push(f.score as i32);
         self.divergence.push(f.divergence);
         self.outcome.push(o.result.id());
@@ -575,7 +576,7 @@ impl TouchesReplayed {
         self.side.push(side.id());
         self.at.push(at);
         self.entry.push(t.entry);
-        self.target.push(t.target);
+        self.target.push(drives::levels(side, t.entry, t.entry).tp[0]);
         self.became.push(t.became.id());
         self.outcome.push(t.outcome.result.id());
         self.bars.push(t.outcome.bars as i32);
@@ -601,6 +602,12 @@ fn price_text(price: f64) -> String {
     format_price(price, Some(digits as usize))
 }
 
+/// A trade's prices, as a message names them.
+fn levels_text(side: Side, entry: f64, extreme: f64) -> String {
+    let lv = drives::levels(side, entry, extreme);
+    format!("TP {} / {} / {} · SL {}", price_text(lv.tp[0]), price_text(lv.tp[1]), price_text(lv.tp[2]), price_text(lv.sl))
+}
+
 /// What the screener says when patterns turn, in the reader's own hours.
 fn signal_text(turned: &[Told], bar: i64, offset: i32) -> String {
     let mut text = format!("🔔 Three drives · 4h — {} turned\n", turned.len());
@@ -609,7 +616,9 @@ fn signal_text(turned: &[Told], bar: i64, offset: i32) -> String {
         let drives = t.drives.iter().map(|p| price_text(*p)).collect::<Vec<_>>().join(" → ");
         let (dot, way) = if t.bull { ("🟢", "bullish") } else { ("🔴", "bearish") };
         let divergence = if t.divergence { " · RSI divergence" } else { "" };
-        text += &format!("\n{dot} {name} — {way}, score {}{divergence}\n   drives {drives} · now {}\n", t.score, price_text(t.price));
+        let side = if t.bull { Side::Bull } else { Side::Bear };
+        let extreme = t.drives.last().copied().unwrap_or(t.price);
+        text += &format!("\n{dot} {name} — {way}, score {}{divergence}\n   drives {drives} · now {}\n   {}\n", t.score, price_text(t.price), levels_text(side, t.price, extreme));
     }
     if turned.len() > TOLD_AT_MOST {
         text += &format!("\n…and {} more in the Signal panel\n", turned.len() - TOLD_AT_MOST);
@@ -632,8 +641,13 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     };
     let now = now_ms();
     let scan = client.query_opt("SELECT bar, at, markets FROM signal_scan ORDER BY bar DESC LIMIT 1", &[]).await?;
+    let levels_json = |lv: drives::Levels| json!({ "tp": lv.tp, "sl": lv.sl });
     let row = |r: &tokio_postgres::Row| {
+        let side = if r.get::<_, String>(2) == "bull" { Side::Bull } else { Side::Bear };
+        let extreme = r.get::<_, Value>(3)[2]["price"].as_f64();
+        let levels = r.get::<_, Option<f64>>(12).zip(extreme).map(|(entry, extreme)| levels_json(drives::levels(side, entry, extreme)));
         json!({
+            "levels": levels,
             "id": r.get::<_, i64>(0),
             "market": r.get::<_, String>(1),
             "side": r.get::<_, String>(2),
@@ -671,6 +685,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
                         "touchPrice": r.get::<_, f64>(7),
                         "line": setup.line(at),
                         "lineNow": setup.line(now),
+                        "levels": levels_json(drives::levels(setup.side, r.get(7), r.get(7))),
                     }))
                 })
                 .collect::<Vec<_>>();
@@ -710,9 +725,20 @@ struct Played {
     worst: f64,
 }
 
+/// How many take-profits an outcome took.
+fn takes(outcome: &str) -> usize {
+    match outcome {
+        "tp3" => 3,
+        "tp2" => 2,
+        "tp1" => 1,
+        _ => 0,
+    }
+}
+
 /// The record by side, and within a side by score and by divergence: how many,
-/// how many reached the target first, the stop first or neither in four days,
-/// and the average move — to the exit, and at best and worst on the way.
+/// how many reached each take-profit, the stop before the first or neither in
+/// four days, and the average result over the whole position, with the
+/// furthest price went either way.
 fn summarize(played: &[Played]) -> Vec<Value> {
     let groups: [(&str, fn(&Played) -> bool); 5] = [
         ("all", |_| true),
@@ -724,15 +750,18 @@ fn summarize(played: &[Played]) -> Vec<Value> {
     let mut out = Vec::new();
     for side in ["bear", "bull"] {
         for (group, keep) in groups {
-            let rows: Vec<&Played> = played.iter().filter(|p| p.side == side && p.outcome != "passed" && keep(p)).collect();
+            let rows: Vec<&Played> = played.iter().filter(|p| p.side == side && keep(p)).collect();
             let n = rows.len();
             let count = |o: &str| rows.iter().filter(|p| p.outcome == o).count();
+            let reached = |tp: usize| rows.iter().filter(|p| takes(&p.outcome) >= tp).count();
             let mean = |f: fn(&Played) -> f64| if n == 0 { 0.0 } else { rows.iter().map(|p| f(p)).sum::<f64>() / n as f64 };
             out.push(json!({
                 "side": side,
                 "group": group,
                 "n": n,
-                "target": count("target"),
+                "tp1": reached(1),
+                "tp2": reached(2),
+                "tp3": reached(3),
                 "stop": count("stop"),
                 "expired": count("expired"),
                 "ret": mean(|p| p.ret),
@@ -760,7 +789,7 @@ fn summarize_touches(reached: &[Reached]) -> Vec<Value> {
     ["bear", "bull"]
         .iter()
         .map(|side| {
-            let rows: Vec<&Reached> = reached.iter().filter(|r| r.side == *side && r.outcome != "passed").collect();
+            let rows: Vec<&Reached> = reached.iter().filter(|r| r.side == *side).collect();
             let n = rows.len();
             let count = |f: &dyn Fn(&Reached) -> bool| rows.iter().filter(|r| f(r)).count();
             let mean = |f: fn(&Reached) -> f64| if n == 0 { 0.0 } else { rows.iter().map(|r| f(r)).sum::<f64>() / n as f64 };
@@ -769,7 +798,9 @@ fn summarize_touches(reached: &[Reached]) -> Vec<Value> {
                 "n": n,
                 "pattern": count(&|r| r.became != "none"),
                 "turned": count(&|r| r.became == "turned"),
-                "target": count(&|r| r.outcome == "target"),
+                "tp1": count(&|r| takes(&r.outcome) >= 1),
+                "tp2": count(&|r| takes(&r.outcome) >= 2),
+                "tp3": count(&|r| takes(&r.outcome) >= 3),
                 "stop": count(&|r| r.outcome == "stop"),
                 "expired": count(&|r| r.outcome == "expired"),
                 "ret": mean(|r| r.ret),
@@ -923,14 +954,15 @@ mod tests {
     #[test]
     fn the_record_counts_each_side_by_score_and_divergence() {
         let p = |side: &str, score: i32, divergence: bool, outcome: &str, ret: f64| Played { side: side.into(), score, divergence, outcome: outcome.into(), ret, best: ret.max(0.0), worst: ret.min(0.0) };
-        let played = [p("bear", 80, true, "target", 6.0), p("bear", 75, false, "stop", -2.0), p("bear", 40, true, "expired", 1.0), p("bear", 60, false, "passed", 0.0), p("bull", 55, false, "target", 4.0)];
+        let played = [p("bear", 80, true, "tp3", 5.25), p("bear", 75, false, "stop", -4.0), p("bear", 40, true, "expired", 1.0), p("bear", 60, false, "tp1", 1.5), p("bull", 55, false, "tp2", 3.0)];
         let groups = summarize(&played);
         let find = |side: &str, group: &str| groups.iter().find(|g| g["side"] == side && g["group"] == group).unwrap().clone();
         let all = find("bear", "all");
-        assert_eq!((all["n"].as_u64(), all["target"].as_u64(), all["stop"].as_u64(), all["expired"].as_u64()), (Some(3), Some(1), Some(1), Some(1)), "a pattern already past its target is no trade");
-        assert!((all["ret"].as_f64().unwrap() - 5.0 / 3.0).abs() < 1e-9);
+        assert_eq!((all["n"].as_u64(), all["tp1"].as_u64(), all["tp2"].as_u64(), all["tp3"].as_u64()), (Some(4), Some(2), Some(1), Some(1)), "a take-profit counts every one before it");
+        assert_eq!((all["stop"].as_u64(), all["expired"].as_u64()), (Some(1), Some(1)));
+        assert!((all["ret"].as_f64().unwrap() - 3.75 / 4.0).abs() < 1e-9);
         assert_eq!(find("bear", "70")["n"].as_u64(), Some(2));
-        assert_eq!(find("bear", "div")["target"].as_u64(), Some(1));
+        assert_eq!(find("bear", "div")["tp3"].as_u64(), Some(1));
         assert_eq!(find("bull", "50")["n"].as_u64(), Some(1));
         assert_eq!(find("bull", "70")["n"].as_u64(), Some(0));
     }
@@ -938,11 +970,11 @@ mod tests {
     #[test]
     fn the_touches_count_what_they_became_and_how_they_went() {
         let r = |side: &str, became: &str, outcome: &str, ret: f64| Reached { side: side.into(), became: became.into(), outcome: outcome.into(), ret, best: 0.0, worst: 0.0 };
-        let groups = summarize_touches(&[r("bear", "turned", "target", 5.0), r("bear", "pattern", "stop", -3.0), r("bear", "none", "expired", 1.0), r("bear", "none", "passed", 0.0), r("bull", "none", "stop", -2.0)]);
+        let groups = summarize_touches(&[r("bear", "turned", "tp2", 3.0), r("bear", "pattern", "stop", -3.5), r("bear", "none", "expired", 0.5), r("bull", "none", "stop", -2.0)]);
         let bear = &groups[0];
         assert_eq!((bear["n"].as_u64(), bear["pattern"].as_u64(), bear["turned"].as_u64()), (Some(3), Some(2), Some(1)));
-        assert_eq!((bear["target"].as_u64(), bear["stop"].as_u64(), bear["expired"].as_u64()), (Some(1), Some(1), Some(1)));
-        assert!((bear["ret"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert_eq!((bear["tp1"].as_u64(), bear["tp2"].as_u64(), bear["tp3"].as_u64(), bear["stop"].as_u64()), (Some(1), Some(1), Some(0), Some(1)));
+        assert!(bear["ret"].as_f64().unwrap().abs() < 1e-9);
         assert_eq!(groups[1]["n"].as_u64(), Some(1));
     }
 
@@ -958,6 +990,7 @@ mod tests {
         let text = touch_text(&[("binance-perp:YGGUSDT".into(), setup, 0.02925)], 130 * STEP, 7 * 60);
         assert!(text.starts_with("📐 Three drives · 4h — 1 at the line\n"), "{text}");
         assert!(text.contains("🔴 YGGUSDT (Binance Perp) — bearish: a third high at the line\n   drives 0.026600 → 0.028700 · line 0.029330 · now 0.029250"), "{text}");
+        assert!(text.contains("· SL 0.030274\n"), "the stop 3.5% over the touch: {text}");
         assert!(text.contains("Not confirmed until the four-hour bars close"), "{text}");
     }
 
@@ -971,6 +1004,7 @@ mod tests {
         assert!(text.starts_with("🔔 Three drives · 4h — 2 turned\n"), "{text}");
         assert!(text.contains("🔴 LINKUSDT (Binance Perp) — bearish, score 86 · RSI divergence\n   drives 13.600 → 14.400 → 15.800 · now 15.100"), "{text}");
         assert!(text.contains("🟢 ZECUSDT (Bybit Perp) — bullish, score 70\n   drives 1,580.00 → 1,520.00 → 1,490.00"), "{text}");
+        assert!(text.contains("   TP 14.647 / 14.194 / 13.741 · SL 16.353\n"), "take-profits a drop of 3, 6 and 9% from now, the stop 3.5% over the third drive: {text}");
         assert!(text.ends_with("UTC+7"), "{text}");
     }
 }

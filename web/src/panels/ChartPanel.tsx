@@ -137,6 +137,15 @@ function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; 
   return [
     { kind: 'trendline', points: [{ time: first.at, price: first.price }, { time: end, price: first.price + slope * (end - first.at) }], label: null, style: { color: '#d1d4dc', width: 1.5 } },
     ...p.drives.map((d, i) => ({ kind: 'circle', points: [{ time: d.at, price: d.price }], label: String(i + 1), style: { color, width: 2, textColor: color, fill: `${color}26` } })),
+    // The trade, from where it was entered: take-profits green, the stop red.
+    ...(p.levels && p.enteredAt
+      ? [...p.levels.tp.map((price, i) => ({ price, label: `TP${i + 1}`, color: '#089981' })), { price: p.levels.sl, label: 'SL', color: '#f23645' }].map((l) => ({
+          kind: 'ray',
+          points: [{ time: p.enteredAt!, price: l.price }],
+          label: l.label,
+          style: { color: l.color, width: 1, dash: 'dashed', textColor: l.color, priceLabels: true },
+        }))
+      : []),
   ];
 }
 

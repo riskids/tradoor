@@ -185,19 +185,22 @@ the line marks the setup AT LINE, shown at the top of the list and told at
 once to readers who turned that on (a second Telegram switch). The bars still
 have to close and Stochastic RSI to turn for it to be a pattern.
 
-A touch has a record too: entered at the price that reached the line, aimed
-at the pullback after the second drive, stopped by a close an ATR through the
-line (a breakout), and marked with what the scans of the next four days made
-of its two drives — three drives that turned, three drives, or none. The
+A touch has a record too: the same trade entered at the price that reached
+the line, which is the third drive's extreme so far — the take-profits and the
+stop both measured from it — and marked with what the scans of the next four
+days made of its two drives: three drives that turned, three drives, or none. The
 replay catches touches the way the live check does, the setup the scan before
 had kept and the bar after reaching the line's near edge, and the scan and
 the replay share the setup code (`Prepared::setup_at`).
 
-The record says how they went. A pattern that turned is entered at the close
-the scan read; its target is the pullback before the third drive and its stop
-a close past the third drive, out at that close; each scan after weighs the
-bars since — target or stop first, a bar touching the target and closing past
-the stop counted as the stop, or neither within four days. The same rules are replayed weekly, and whenever `VERSION` in `signals`
+The record says how they went, each signal as a trade (`drives::levels`):
+take-profits a drop of 3, 6 and 9% from the entry (a rise, bullish), a stop
+3.5% past the third drive's extreme, half the position closed at the first and
+the stop then moved to the entry, a quarter at each of the others, and what is
+still open after four days closed at that close. A bar reaching the stop and a
+take-profit both counts as the stop. A pattern that turned is entered at the
+close the scan read; each scan after weighs the bars since. The list and the
+Telegram messages carry each trade's prices, and opening one draws them. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each
 bar, seeing nothing after it: the replay runs the live scan at every bar. The panel's Record
 shows both by side, score and divergence, with the latest live patterns.

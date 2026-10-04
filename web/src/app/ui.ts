@@ -80,6 +80,9 @@ export interface ShownPattern {
   divergence: boolean;
   /** At the line: the third drive is price reaching it now, not yet a closed bar. */
   stage?: 'line';
+  /** The trade, from the bar it was entered on: take-profits and the stop. */
+  levels?: { tp: number[]; sl: number };
+  enteredAt?: number;
 }
 export const [shownPattern, setShownPattern] = createSignal<ShownPattern | null>(null);
 

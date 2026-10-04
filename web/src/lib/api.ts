@@ -265,17 +265,30 @@ export interface Signal {
   ret: number | null;
   /** The close of the newest bar of the last scan that saw it. */
   lastSeen: number;
+  /** The trade, once it turned and was entered. */
+  levels: SignalLevels | null;
 }
 
-/** Target or stop first, neither within four days, or already past the target when it turned. */
-export type SignalOutcome = 'target' | 'stop' | 'expired' | 'passed';
+/** How a trade closed: all three take-profits, two or one (the rest out at the
+ *  entry or after four days), the stop before the first, or nothing in four days. */
+export type SignalOutcome = 'tp3' | 'tp2' | 'tp1' | 'stop' | 'expired';
+
+/** A trade's prices: take-profits a drop of 3, 6 and 9% from the entry (a rise
+ *  for the bullish side), and the stop 3.5% past the third drive's extreme. */
+export interface SignalLevels {
+  tp: [number, number, number];
+  sl: number;
+}
 
 /** One line of the record: a side, and a cut of it by score or divergence. */
 export interface SignalGroup {
   side: 'bear' | 'bull';
   group: 'all' | '70' | '50' | '0' | 'div';
   n: number;
-  target: number;
+  /** How many reached each take-profit, each counting those that went further. */
+  tp1: number;
+  tp2: number;
+  tp3: number;
   stop: number;
   expired: number;
   /** Average moves in percent, positive the pattern's way: to the exit, and at best and worst before it. */
@@ -310,7 +323,9 @@ export interface SignalTouchGroup {
   /** Became three drives within four days, and of those, turned. */
   pattern: number;
   turned: number;
-  target: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
   stop: number;
   expired: number;
   ret: number;
@@ -360,6 +375,8 @@ export interface SignalTouch {
   /** The line's price when it was reached, and now. */
   line: number;
   lineNow: number;
+  /** The trade entered at the touch. */
+  levels: SignalLevels;
 }
 
 export interface SignalsState {
