@@ -147,6 +147,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
 
   const signals = () => (state()?.signals ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
   const ended = () => (state()?.ended ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
+  const endedTouches = () => (state()?.endedTouches ?? []).filter((t) => props.panel.side === 'all' || t.side === props.panel.side);
   const touches = () => (state()?.touches ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
   const [telegramMenu, setTelegramMenu] = createSignal(false);
   useDismiss(telegramMenu, () => setTelegramMenu(false));
@@ -345,11 +346,36 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
             );
           }}
         </For>
-        <Show when={ended().length > 0}>
+        <Show when={ended().length + endedTouches().length > 0}>
           <div class="sig-cap">
             <b>Ended</b>
             <span class="dim">left the list in the last day</span>
           </div>
+          <For each={endedTouches()}>
+            {(t) => (
+              <button
+                class="sig-row ended"
+                classList={{ shown: isShown(touchPattern(t)) }}
+                data-tip={`Price reached the line at ${price(t.touchPrice)}; the trade from there ${t.outcome ? OUTCOME[t.outcome][2].toLowerCase() : 'ended'} · ${pct(t.ret)} — open it on the chart`}
+                onClick={() => open(touchPattern(t))}
+              >
+                <span class={`sig-out ${t.outcome}`}>
+                  {t.outcome ? OUTCOME[t.outcome][0] : '·'}
+                  <span class="word"> {t.outcome ? OUTCOME[t.outcome][1].toUpperCase() : 'ENDED'}</span>
+                </span>
+                <span class="sig-coin">
+                  <span class={t.side}>{t.side === 'bear' ? '▼' : '▲'}</span>
+                  <b>{symbolOf(t.market)}</b>
+                  <VenueTag market={t.market} />
+                </span>
+                <span class="sig-drives dim">at the line · {t.outcome === 'stop' ? 'hit the stop' : t.outcome === 'expired' ? 'neither take-profit nor stop' : `reached ${t.outcome?.toUpperCase()}`}</span>
+                <span class="sig-score num" classList={{ bull: (t.ret ?? 0) > 0, bear: (t.ret ?? 0) < 0 }}>
+                  {pct(t.ret)}
+                </span>
+                <span class="sig-age num dim">{since(t.outcomeAt ?? t.touchedAt, now())}</span>
+              </button>
+            )}
+          </For>
           <For each={ended()}>
             {(s) => (
               <button class="sig-row ended" classList={{ shown: isShown(s) }} data-tip={`${why(s)}${s.ret !== null && s.outcome ? ` · ${pct(s.ret)}` : ''} — open it on the chart`} onClick={() => open({ ...s, enteredAt: s.turnedAt ?? undefined })}>

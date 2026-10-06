@@ -212,7 +212,9 @@ a third — the pullback after the second made, the line not yet reached
 Binance's perpetuals all in one ask, Bybit's one by one — are weighed against
 those lines: price past the second drive by half an ATR and within an ATR of
 the line marks the setup AT LINE, shown at the top of the list and told at
-once to readers who turned that on (a second Telegram switch). The bars still
+once to readers who turned that on (a second Telegram switch). It stays there
+while its trade is open; once a scan has weighed the trade out, it moves under
+Ended with what it reached. The bars still
 have to close and Stochastic RSI to turn for it to be a pattern.
 
 A touch has a record too: the same trade entered at the price that reached

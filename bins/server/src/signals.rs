@@ -1090,11 +1090,13 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     let (signals, ended, touches) = match &scan {
         Some(scan) => {
             let bar: i64 = scan.get(0);
+            // Price at a line whose trade is still open, while the scans keep the
+            // line; and those whose trade ended within the last day, for Ended.
             let touches = client
                 .query(
-                    "SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price, levels, deltas FROM signal_setup
-                     WHERE seen_bar = $1 AND touched_at IS NOT NULL ORDER BY touched_at DESC",
-                    &[&bar],
+                    "SELECT market, side, drives, atr, clear, until_at, touched_at, touch_price, levels, deltas, outcome, ret, outcome_at FROM signal_setup
+                     WHERE touched_at IS NOT NULL AND ((seen_bar = $1 AND outcome IS NULL) OR outcome_at >= $1 - $2) ORDER BY touched_at DESC",
+                    &[&bar, &(6 * STEP)],
                 )
                 .await?
                 .iter()
@@ -1103,6 +1105,9 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
                     let at: i64 = r.get(6);
                     let pushes: Option<Value> = r.get(9);
                     Some(json!({
+                        "outcome": r.get::<_, Option<String>>(10),
+                        "ret": r.get::<_, Option<f64>>(11),
+                        "outcomeAt": r.get::<_, Option<i64>>(12),
                         "market": r.get::<_, String>(0),
                         "side": setup.side.id(),
                         "drives": r.get::<_, Value>(2),
@@ -1131,6 +1136,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         }
         None => (Vec::new(), Vec::new(), Vec::new()),
     };
+    let (ended_touches, touches): (Vec<Value>, Vec<Value>) = touches.into_iter().partition(|t| !t["outcome"].is_null());
     Ok(Json(json!({
         "scannedAt": scan.as_ref().map(|s| s.get::<_, i64>(1)),
         "bar": scan.as_ref().map(|s| s.get::<_, i64>(0)),
@@ -1145,6 +1151,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         "signals": signals,
         "ended": ended,
         "touches": touches,
+        "endedTouches": ended_touches,
     })))
 }
 

@@ -446,6 +446,10 @@ export interface SignalTouch {
    *  and whether that last one is the weaker. Null without taker volume. */
   deltas: SignalPush[] | null;
   deltaDivergence: boolean | null;
+  /** How the trade went, once it has: a touch whose trade ended is listed under Ended. */
+  outcome: SignalOutcome | null;
+  ret: number | null;
+  outcomeAt: number | null;
 }
 
 export interface SignalsState {
@@ -465,8 +469,10 @@ export interface SignalsState {
   signals: Signal[];
   /** Patterns that had turned and left the list within the last day. */
   ended: Signal[];
-  /** Setups whose line price has reached since the latest scan. */
+  /** Setups whose line price has reached, their trade still open. */
   touches: SignalTouch[];
+  /** Touches whose trade ended within the last day. */
+  endedTouches: SignalTouch[];
 }
 
 /** A Telegram chat an alert is sent to. */
