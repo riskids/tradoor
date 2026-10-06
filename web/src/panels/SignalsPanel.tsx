@@ -299,6 +299,9 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   </Show>
                 </span>
                 <span class="sig-age num dim">{since(t.touchedAt, now())}</span>
+                <span class="sig-limit num" data-tip="Entered where price reached the line: the trade the record counts, its take-profits back down the leg into the line and its stop an ATR past the touch">
+                  <span class="tag entry">ENTRY</span> {price(t.touchPrice)} · {levelsText(t.levels)}
+                </span>
               </button>
             );
           }}
@@ -335,12 +338,27 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   {s.score}
                 </span>
                 <span class="sig-age num dim">{since(s.turnedAt ?? s.drives[2]!.at, now())}</span>
-                <Show when={s.limit}>
-                  {(l) => (
-                    <span class="sig-limit num" classList={{ gone: l().outcome === 'missed' }} data-tip={`${LIMIT}${l().levels ? ` · ${levelsText(l().levels)}` : ''}`}>
-                      <span class="tag">LIMIT</span> {limitText(l())}
-                    </span>
-                  )}
+                <Show when={s.entry !== null || s.limit}>
+                  <span
+                    class="sig-limit num"
+                    data-tip={`${s.entry !== null ? `Entry: the close the scan read when Stochastic RSI turned, the trade the record counts${s.levels ? ` · ${levelsText(s.levels)}` : ''}. ` : ''}${s.limit ? `Limit: ${LIMIT}` : ''}`}
+                  >
+                    <Show when={s.entry}>
+                      {(entry) => (
+                        <>
+                          <span class="tag entry">ENTRY</span> {price(entry())}
+                        </>
+                      )}
+                    </Show>
+                    <Show when={s.limit}>
+                      {(l) => (
+                        <span classList={{ gone: l().outcome === 'missed' }}>
+                          {s.entry !== null ? ' · ' : ''}
+                          <span class="tag">LIMIT</span> {limitText(l())}
+                        </span>
+                      )}
+                    </Show>
+                  </span>
                 </Show>
               </button>
             );
