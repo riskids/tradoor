@@ -32,6 +32,9 @@ export interface ChartController {
 
 export const chartControllers = new Map<string, ChartController>();
 
+/** Up and Down in a panel with a list of its own to walk, by the panel's id: true when it took the key. */
+export const panelSteps = new Map<string, (step: number) => boolean>();
+
 /** Alt + the key arms a drawing tool on the chart in use, as on TradingView.
  *  By `KeyboardEvent.code`: on a Mac, Alt changes the letter `key` reports. */
 export const TOOL_KEYS: Record<string, string> = {

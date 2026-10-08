@@ -12,7 +12,7 @@
  * latest of those one by one — as trades with three take-profits and a stop.
  */
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
-import { shownPattern } from '../app/ui';
+import { panelSteps, shownPattern } from '../app/ui';
 import { api, errorText, type Signal, type SignalCut, type SignalGroup, type SignalLimit, type SignalOutcome, type SignalPlanRow, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
 import { openPattern, touchPattern, type Openable } from '../lib/patterns';
 import { useDismiss } from '../lib/dismiss';
@@ -160,6 +160,21 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
 
   /** The market on the chart this panel drives, at four hours, with the pattern drawn on it. */
   const open = (s: Openable) => openPattern(s, props.panel.link ? props.panel : targetChart());
+
+  // Up and Down, this panel focused, open the row before or after the one on the chart, as shown here.
+  let root: HTMLDivElement | undefined;
+  panelSteps.set(props.panel.id, (step) => {
+    const rows = [...(root?.querySelectorAll<HTMLButtonElement>('.sig-row') ?? [])];
+    if (rows.length === 0) return true;
+    const at = rows.findIndex((r) => r.classList.contains('shown'));
+    const next = rows[at === -1 ? (step > 0 ? 0 : rows.length - 1) : (at + step + rows.length) % rows.length]!;
+    next.click();
+    // The focus goes along, so a row clicked before keeps no ring of its own.
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: 'nearest' });
+    return true;
+  });
+  onCleanup(() => panelSteps.delete(props.panel.id));
   /** The day's and the week's patterns this coin has the same way: a four-hour one beside them is the stronger. */
   const higherOf = (s: Signal) =>
     s.timeframe !== '4h' ? [] : (state()?.signals ?? []).filter((h) => h.timeframe !== '4h' && h.market === s.market && h.side === s.side).map((h) => frameName(h.timeframe));
@@ -175,7 +190,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
   };
 
   return (
-    <div class="panelcol sig">
+    <div class="panelcol sig" ref={root}>
       <div class="toolbar">
         <span class="caps" style={{ padding: '0 4px' }}>
           Signal

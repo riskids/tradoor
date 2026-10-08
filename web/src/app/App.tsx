@@ -37,7 +37,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, mobileMenu, overlay, setOverlay, TOOL_KEYS } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, mobileMenu, overlay, panelSteps, setOverlay, TOOL_KEYS } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -208,7 +208,9 @@ function onKeyDown(e: KeyboardEvent): void {
     void chartControllers.get(panel.id)?.key(e.key);
     return;
   }
-  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && stepWatchlist(panel, e.key === 'ArrowUp' ? -1 : 1)) {
+  // A panel with a list of its own walks that (the Signal panel's patterns); any other, a watchlist.
+  const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+  if (step && (panelSteps.get(panel.id)?.(step) || stepWatchlist(panel, step))) {
     e.preventDefault();
     return;
   }

@@ -17,7 +17,7 @@ const GROUPS: { title: string; keys: [string, string][] }[] = [
     keys: [
       ['a–z', 'Search for a symbol'],
       ['←  →', 'Shorter / longer timeframe'],
-      ['↑  ↓', 'Previous / next market in the watchlist'],
+      ['↑  ↓', 'Previous / next market in the watchlist, or the Signal list'],
       ['wheel', 'Zoom time'],
       ['drag', 'Pan time; up or down moves price'],
       ['wheel or drag price axis', 'Scale price'],
