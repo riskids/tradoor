@@ -474,13 +474,13 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     const p = shownPattern();
     return p && p.market === market() && chartKind() === 'candles' ? p : null;
   };
-  // Brought into view once its market's four-hour bars are in: from a little
-  // before the first drive to now.
+  // Brought into view once its market's bars of its length are in: from a
+  // little before the first drive to now.
   let framed: ShownPattern | null = null;
   createEffect(() => {
     const p = pattern();
     const s = status();
-    if (!p || p === framed || s.loading || s.bars === 0 || s.market !== p.market || s.timeframe !== '4h') return;
+    if (!p || p === framed || s.loading || s.bars === 0 || s.market !== p.market || s.timeframe !== (p.timeframe ?? '4h')) return;
     framed = p;
     showRange((Date.now() - p.drives[0]!.at) / 86_400_000 + 2);
   });

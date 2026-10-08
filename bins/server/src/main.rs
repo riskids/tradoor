@@ -68,6 +68,10 @@ struct Cli {
     /// server follows besides BTC. Without one, only BTC's is followed.
     #[arg(long, env = "TRADOOR_ADMINS", default_value = "", value_delimiter = ',')]
     admins: Vec<String>,
+    /// The site's address (https://your-domain), for the link in a Telegram
+    /// message that opens its chart. Without it the messages carry none.
+    #[arg(long, env = "TRADOOR_SITE_URL", default_value = "")]
+    site_url: String,
 }
 
 #[derive(Subcommand)]
@@ -140,7 +144,8 @@ async fn main() -> anyhow::Result<()> {
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
             let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), admins));
             footprint::Footprint::start(pool.clone(), doh.clone(), catalog.clone());
-            signals::start(pool.clone(), &doh, catalog.clone(), telegram.clone());
+            let site = Some(cli.site_url.trim().to_string()).filter(|s| !s.is_empty());
+            signals::start(pool.clone(), &doh, catalog.clone(), telegram.clone(), site);
             let state = api::AppState {
                 open_interest,
                 flow,

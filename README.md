@@ -135,9 +135,11 @@ commit's tag and run `docker compose up -d`.
 Set the repository variable `SITE_URL` to the site's address (`gh variable set
 SITE_URL --body https://your-domain`). The image build passes it to the web
 build, which then writes the canonical URL, absolute Open Graph image, and
-`robots.txt` with a `sitemap.xml` (`web/site.ts`). Without it the page still has
-its title, description, preview tags and structured data, but no canonical URL
-or sitemap.
+`robots.txt` with a `sitemap.xml` (`web/site.ts`). The deploy also writes it to
+the server's `.env` as `TRADOOR_SITE_URL`, from which the screener's Telegram
+messages link each pattern to its chart. Without it the page still has
+its title, description, preview tags and structured data, but no canonical URL,
+sitemap or links in the messages.
 
 ## Analytics
 

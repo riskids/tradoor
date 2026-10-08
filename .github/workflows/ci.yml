@@ -127,6 +127,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SITE_URL: ${{ vars.SITE_URL }}
         run: |
           set -euo pipefail
           target="$VPS_USER@$VPS_HOST"
@@ -139,7 +140,7 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | ssh "${opts[@]}" -p "$VPS_PORT" "$target" \
             "docker login ghcr.io -u '$GHCR_USER' --password-stdin >/dev/null"
 
-          ssh "${opts[@]}" -p "$VPS_PORT" "$target" "IMAGE='$IMAGE' SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          ssh "${opts[@]}" -p "$VPS_PORT" "$target" "IMAGE='$IMAGE' SHA='$GITHUB_SHA' SITE_URL='$SITE_URL' bash -s" <<'REMOTE'
           set -euo pipefail
           cd /var/www/tradoor
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
@@ -147,6 +148,11 @@ jobs:
           # Pin the exact image, so a rollback is one line in .env.
           sed -i '/^TRADOOR_IMAGE=/d' .env
           echo "TRADOOR_IMAGE=$IMAGE:$SHA" >> .env
+          # The site's address, for links in Telegram messages: the repository variable SITE_URL.
+          if [ -n "$SITE_URL" ]; then
+            sed -i '/^TRADOOR_SITE_URL=/d' .env
+            echo "TRADOOR_SITE_URL=$SITE_URL" >> .env
+          fi
 
           docker compose pull server
           docker compose up -d --remove-orphans

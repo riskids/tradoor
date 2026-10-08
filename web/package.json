@@ -13,7 +13,7 @@
   "size-limit": [
     {
       "name": "app js",
-      "path": ["dist/assets/index-*.js", "dist/assets/web-*.js"],
+      "path": ["dist/assets/index-*.js", "dist/assets/web-*.js", "dist/assets/solid-*.js"],
       "limit": "48.5 kB"
     },
     {

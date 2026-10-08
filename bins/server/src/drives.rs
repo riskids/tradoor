@@ -24,6 +24,24 @@ const MAX_SPAN: usize = 240;
 const PULLBACK_ATR: f64 = 2.0;
 /// — and as a part of the push that made the drive before it.
 const RETRACE: f64 = 0.382;
+
+/// What sets one length of bar's search apart from another's. The four-hour
+/// rules are the ones the record was measured on. A day's or a week's bars
+/// are fewer and their moves longer: a drive's push often reaches the line a
+/// bar before its top, and a pullback after a long run need not give back
+/// quite as much of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rules {
+    /// How deep a pullback between two drives goes, at least, as a part of the push before it.
+    pub retrace: f64,
+    /// Whether the bars beside a drive may reach the line with it.
+    pub beside: bool,
+}
+
+impl Rules {
+    pub const FOUR_HOURS: Rules = Rules { retrace: RETRACE, beside: false };
+    pub const LONGER: Rules = Rules { retrace: 0.3, beside: true };
+}
 /// How far each drive clears the last, at least, in ATRs: less is a double top.
 const CLEAR_ATR: f64 = 0.5;
 /// How far a bar between the drives may poke through their line, in ATRs.
@@ -164,8 +182,15 @@ pub fn push_since(candles: &[Candle], taker: &[f64], side: Side, second: i64) ->
 }
 
 /// The pattern on `side` whose third drive is the newest, if there is one now.
+#[cfg(test)]
 pub fn find(candles: &[Candle], taker: Taker, side: Side) -> Option<Found> {
-    let prepared = Prepared::new(candles, taker, side)?;
+    find_with(candles, taker, side, Rules::FOUR_HOURS)
+}
+
+/// The same, under another length's rules.
+pub fn find_with(candles: &[Candle], taker: Taker, side: Side, rules: Rules) -> Option<Found> {
+    let mut prepared = Prepared::new(candles, taker, side)?;
+    prepared.rules = rules;
     prepared.at(candles.len() - 1)
 }
 
@@ -208,8 +233,9 @@ impl Ended {
 
 /// Why the pattern whose third drive is the bar opening at `third_at` is no
 /// longer one as of the newest bar; None if it still stands, or is not there.
-pub fn ended(candles: &[Candle], side: Side, third_at: i64) -> Option<Ended> {
-    let p = Prepared::new(candles, None, side)?;
+pub fn ended(candles: &[Candle], side: Side, third_at: i64, rules: Rules) -> Option<Ended> {
+    let mut p = Prepared::new(candles, None, side)?;
+    p.rules = rules;
     let zi = p.pivots.iter().position(|pivot| candles[pivot.index].open_time == third_at)?;
     p.judge(p.shape(zi).as_ref()?, candles.len() - 1).err()
 }
@@ -575,6 +601,7 @@ struct Prepared {
     pivots: Vec<tradoor_core::indicators::Pivot>,
     /// Each pivot's shape, worked out the first time it is asked for.
     shapes: Vec<std::cell::OnceCell<Option<Shape>>>,
+    rules: Rules,
     /// Each pivot's pairs as the second drive, its first drives newest first.
     pairs: Vec<std::cell::OnceCell<Vec<Pair>>>,
     /// What takers bought less what they sold, per bar, the pattern's way: for
@@ -599,7 +626,7 @@ impl Prepared {
         let pivots = pivot_highs(&high, PIVOT_LEFT, PIVOT_RIGHT);
         let shapes = (0..pivots.len()).map(|_| std::cell::OnceCell::new()).collect();
         let pairs = (0..pivots.len()).map(|_| std::cell::OnceCell::new()).collect();
-        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots, shapes, pairs, delta, c })
+        Some(Self { side, atr: atr(&c, 14), rsi: rsi(&close, 14), k: stoch.k, d: stoch.d, pivots, shapes, pairs, delta, c, rules: Rules::FOUR_HOURS })
     }
 
     fn atr_at(&self, i: usize) -> Option<f64> {
@@ -701,7 +728,7 @@ impl Prepared {
             }
             let low_before = before.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
             let low_ab = c[a.index + 1..b.index].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
-            if a.value - low_ab < (PULLBACK_ATR * atr_b).max(RETRACE * (a.value - low_before)) {
+            if a.value - low_ab < (PULLBACK_ATR * atr_b).max(self.rules.retrace * (a.value - low_before)) {
                 continue;
             }
             let end = (a.index + MAX_SPAN).min(c.len());
@@ -716,7 +743,7 @@ impl Prepared {
             let ready = (b.index + 1..end)
                 .find(|&t| {
                     low = low.min(c[t].low);
-                    b.value - low >= (PULLBACK_ATR * self.atr_at(t).unwrap_or(atr_b)).max(RETRACE * (b.value - low_ab))
+                    b.value - low >= (PULLBACK_ATR * self.atr_at(t).unwrap_or(atr_b)).max(self.rules.retrace * (b.value - low_ab))
                 })
                 .unwrap_or(c.len());
             out.push(Pair { a: ai, b: bi, ready, broken });
@@ -755,16 +782,20 @@ impl Prepared {
                 if off.abs() > ALIGN_ATR {
                     continue;
                 }
-                // The line holds between the drives: they are pushes to it, not a range under it.
-                if (a.index + 1..z).filter(|i| *i != b.index).any(|i| c[i].high > line(i) + LINE_ATR * self.atr_at(i).unwrap_or(atr_z)) {
+                // The line holds between the drives: they are pushes to it, not a
+                // range under it. Under the longer lengths' rules a bar beside a
+                // drive is part of that drive's push and may reach the line with it.
+                let near = |i: usize| i == a.index + 1 || i + 1 == b.index || i == b.index + 1 || i + 1 == z;
+                let beside = |i: usize| i == b.index || (self.rules.beside && near(i));
+                if (a.index + 1..z).filter(|i| !beside(*i)).any(|i| c[i].high > line(i) + LINE_ATR * self.atr_at(i).unwrap_or(atr_z)) {
                     continue;
                 }
                 // And between them price pulled back for real.
                 let low_between = |from: usize, to: usize| c[from + 1..to].iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
                 let low_before = before.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
                 let (low_ab, low_bz) = (low_between(a.index, b.index), low_between(b.index, z));
-                if a.value - low_ab < (PULLBACK_ATR * atr_b).max(RETRACE * (a.value - low_before))
-                    || b.value - low_bz < (PULLBACK_ATR * atr_z).max(RETRACE * (b.value - low_ab))
+                if a.value - low_ab < (PULLBACK_ATR * atr_b).max(self.rules.retrace * (a.value - low_before))
+                    || b.value - low_bz < (PULLBACK_ATR * atr_z).max(self.rules.retrace * (b.value - low_ab))
                 {
                     continue;
                 }
@@ -1116,10 +1147,10 @@ mod tests {
         // Past the first take-profit, 114.4, by the bar the turn is first seen on: nothing left to enter.
         let bars = three_up(&[(121, 113.0), (130, 110.0)]);
         assert!(find(&bars, None, Side::Bear).is_none());
-        assert_eq!(ended(&bars, Side::Bear, 120 * H4), Some(Ended::Played));
+        assert_eq!(ended(&bars, Side::Bear, 120 * H4, Rules::FOUR_HOURS), Some(Ended::Played));
         // Once it has turned, the fall is the trade at work.
-        assert_eq!(ended(&three_up(&[(126, 114.0)]), Side::Bear, 120 * H4), None);
-        assert_eq!(ended(&three_up(&[(124, 116.0), (128, 121.5)]), Side::Bear, 120 * H4), Some(Ended::Outdone), "a close past the third drive");
+        assert_eq!(ended(&three_up(&[(126, 114.0)]), Side::Bear, 120 * H4, Rules::FOUR_HOURS), None);
+        assert_eq!(ended(&three_up(&[(124, 116.0), (128, 121.5)]), Side::Bear, 120 * H4, Rules::FOUR_HOURS), Some(Ended::Outdone), "a close past the third drive");
     }
 
     #[test]

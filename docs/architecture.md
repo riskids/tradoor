@@ -190,6 +190,27 @@ chart's own (`circle` is a drawing kind for that). Telegram, for readers who
 turn it on, hears once per scan of the patterns scoring 70 or more that
 turned in it; the panel lists them all.
 
+The same search runs on the day's and the week's bars (`signals::Frame`, kept
+in `signal.timeframe`), the strong kind: the list puts them first, starred, and
+a four-hour row says +1D or +1W where the same coin has one the same way. Their
+rules are a little looser (`drives::Rules::LONGER`) — a pullback of 30% of the
+push before is enough, and the bar either side of a drive may poke through the
+line, a drive on long bars often being two of them — and untested by the
+replay, which runs the four hours' alone. Their trades and limits are weighed on
+their own bars and kept apart in the Record (`higher` in the stats); setups and
+AT LINE are the four hours' only. Telegram hears of each that turns whatever its
+score, while the turn is new — within two of its bars.
+
+Every message of a pattern or a touch links to it (`TRADOOR_SITE_URL`):
+`?signal=<id>&market=…&tf=…` opens the pattern on its chart, at its length and
+drawn, `?market=…&tf=4h&touched=<ms>` a touch (`web/src/lib/deeplink.ts`). A
+page left open reads the list every minute and tells of what is new there — a
+four-hour pattern that turned, a day's or week's from when it appears, price at
+a line — as a notice that opens it, and as the system's own notification while
+the tab is in the background (`web/src/lib/signal-alerts.ts`). What a browser
+was told is kept in it, so a later visit tells what came meanwhile, once; its
+first visit only learns what is there.
+
 Where the exchange says who took each trade — Binance's klines carry the
 taker buy volume, Bybit's do not — the delta at the drives is read too: the
 share of the volume buyers took on the push into the third drive (from the low

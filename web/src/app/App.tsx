@@ -409,9 +409,13 @@ export function App() {
   onMount(() => {
     const chart = targetChart();
     if (chart) focusPanel(chart.id);
-    void syncWithServer();
+    // A link from Telegram opens its chart once the layout is in; new signals are told as they come.
+    void syncWithServer().then(() => /[?&](signal|market)=/.test(location.search) && void import('../lib/deeplink').then((m) => m.followLink()));
     startAlerts();
-    if (!IS_CRAWLER) startReferral();
+    if (!IS_CRAWLER) {
+      startReferral();
+      setTimeout(() => void import('../lib/signal-alerts').then((m) => m.watchSignals()), 4_000);
+    }
     addEventListener('keydown', onKeyDown);
     addEventListener('contextmenu', onContextMenu);
     const off = onEngineFailure(setEngineError);

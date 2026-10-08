@@ -276,6 +276,8 @@ export interface Signal {
   deltas: SignalPush[] | null;
   /** The limit entry the scan that first saw it set, once weighed. */
   limit: SignalLimit | null;
+  /** The length of bar it was found on: four hours, or the day's or week's — the strong kind. */
+  timeframe: '4h' | '1d' | '1w';
   /** Why it left the list, once it has. */
   endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'unread' | 'replaced' | 'gone' | null;
 }
@@ -418,6 +420,8 @@ export interface SignalStats {
   /** The rules replayed over the history, bar by bar. */
   backtest: { at: number; version: number; markets: number; from: number; to: number; groups: SignalGroup[]; limits: SignalGroup[]; variants: SignalPlanRow[] | null } | null;
   live: { since: number | null; open: number; groups: SignalGroup[] };
+  /** The day's and the week's patterns, live, apart from the four hours'. */
+  higher: { since: number | null; open: number; groups: SignalGroup[] };
   /** Limit entries live: counted from the patterns first seen once they began. */
   limits: { since: number; open: number; groups: SignalGroup[] };
   recent: SignalPlayed[];

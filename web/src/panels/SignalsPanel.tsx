@@ -11,9 +11,10 @@
  * months of history, the live patterns since the screener began, and the
  * latest of those one by one — as trades with three take-profits and a stop.
  */
-import { batch, createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
-import { setShownPattern, shownPattern } from '../app/ui';
-import { api, errorText, type Signal, type SignalCut, type SignalGroup, type SignalLimit, type SignalOutcome, type SignalPlanRow, type SignalPoint, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
+import { shownPattern } from '../app/ui';
+import { api, errorText, type Signal, type SignalCut, type SignalGroup, type SignalLimit, type SignalOutcome, type SignalPlanRow, type SignalPush, type SignalsState, type SignalStats, type SignalTouchGroup } from '../lib/api';
+import { openPattern, touchPattern, type Openable } from '../lib/patterns';
 import { useDismiss } from '../lib/dismiss';
 import { VenueTag } from '../lib/exchanges';
 import { formatPrice, formatTurnover } from '../lib/format';
@@ -22,7 +23,7 @@ import { symbolOf } from '../lib/markets';
 import { formatDateTime, formatHm } from '../lib/timezone';
 import { toast } from '../lib/toasts';
 import type { SignalsPanelState } from '../workspace/model';
-import { patchPanel, setPanelMarket, setPanelTimeframe, targetChart } from '../workspace/store';
+import { patchPanel, targetChart } from '../workspace/store';
 
 /** How often the list is asked for again; the scan itself runs every four hours. */
 const POLL_MS = 60_000;
@@ -41,30 +42,8 @@ const since = (at: number, now: number) => {
   const hours = Math.floor(minutes / 60);
   return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 };
-const FOUR_HOURS = 4 * 3_600_000;
-/** Any pattern a row can open: the list's, or the record's. */
-interface Openable {
-  market: string;
-  side: 'bear' | 'bull';
-  drives: SignalPoint[];
-  score: number;
-  divergence: boolean;
-  stage?: 'line';
-  levels?: { tp: number[]; sl: number } | null;
-  enteredAt?: number;
-  limit?: SignalLimit | null;
-}
-/** A touch as a pattern to draw: its two drives, and the third where price reached the line, on that bar. */
-const touchPattern = (t: { market: string; side: 'bear' | 'bull'; drives: SignalPoint[]; touchedAt: number; touchPrice: number; levels?: { tp: number[]; sl: number } | null }): Openable => ({
-  market: t.market,
-  side: t.side,
-  drives: [...t.drives, { at: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS, price: t.touchPrice }],
-  score: 0,
-  divergence: false,
-  stage: 'line',
-  levels: t.levels,
-  enteredAt: Math.floor(t.touchedAt / FOUR_HOURS) * FOUR_HOURS,
-});
+/** `1D`, `1W`: a length of bar as a chip names it. */
+const frameName = (tf: string) => tf.toUpperCase();
 const isShown = (s: Openable) => {
   const p = shownPattern();
   return p !== null && p.market === s.market && p.drives[2]?.at === s.drives[2]?.at;
@@ -180,16 +159,10 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
   const recent = () => (stats()?.recent ?? []).filter((s) => props.panel.side === 'all' || s.side === props.panel.side);
 
   /** The market on the chart this panel drives, at four hours, with the pattern drawn on it. */
-  const open = (s: Openable) => {
-    const target = props.panel.link ? props.panel : targetChart();
-    if (!target) return;
-    batch(() => {
-      const limit = s.limit ? { price: s.limit.price, from: s.limit.setAt, until: s.limit.until ?? s.limit.setAt } : undefined;
-      setShownPattern({ market: s.market, side: s.side, drives: s.drives, score: s.score, divergence: s.divergence, stage: s.stage, levels: (s.levels ?? s.limit?.levels) ?? undefined, enteredAt: s.enteredAt ?? s.limit?.setAt, limit });
-      setPanelMarket(target.id, s.market);
-      setPanelTimeframe(target.id, '4h');
-    });
-  };
+  const open = (s: Openable) => openPattern(s, props.panel.link ? props.panel : targetChart());
+  /** The day's and the week's patterns this coin has the same way: a four-hour one beside them is the stronger. */
+  const higherOf = (s: Signal) =>
+    s.timeframe !== '4h' ? [] : (state()?.signals ?? []).filter((h) => h.timeframe !== '4h' && h.market === s.market && h.side === s.side).map((h) => frameName(h.timeframe));
 
   const setNotify = async (patch: { notify?: boolean; touch?: boolean; limits?: boolean }) => {
     try {
@@ -207,7 +180,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
         <span class="caps" style={{ padding: '0 4px' }}>
           Signal
         </span>
-        <span class="dim what">Three drives · 4h</span>
+        <span class="dim what">Three drives · 4H · 1D · 1W</span>
         <span class="sep" />
         <button class="tb" classList={{ on: props.panel.view !== 'record' }} data-tip="The patterns now" onClick={() => patchPanel(props.panel.id, { view: 'list' })}>
           Signals
@@ -306,13 +279,15 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
             );
           }}
         </For>
-        <For each={signals()} fallback={<Show when={state()?.scannedAt}>{<div class="empty">No three drives on four-hour bars right now.</div>}</Show>}>
+        <For each={signals()} fallback={<Show when={state()?.scannedAt}>{<div class="empty">No three drives on four-hour, daily or weekly bars right now.</div>}</Show>}>
           {(s) => {
             const turned = () => s.turnedAt !== null;
+            const strong = s.timeframe !== '4h';
+            const higher = higherOf(s);
             return (
               <button
                 class="sig-row"
-                classList={{ shown: isShown(s) }}
+                classList={{ shown: isShown(s), strong }}
                 data-tip={`Drives at ${s.drives.map((d) => price(d.price)).join(', ')} · ${pushesText(s.deltas)} · ${turned() ? `Stochastic RSI turned at ${price(s.turnPrice ?? s.price)}` : 'waiting for Stochastic RSI to turn'}${s.divergence ? ' · RSI weaker at the third drive' : ''}${s.levels ? ` · ${levelsText(s.levels)}` : ''} — open it on the chart`}
                 onClick={() => open({ ...s, enteredAt: s.turnedAt ?? undefined })}
               >
@@ -323,6 +298,18 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                 <span class="sig-coin">
                   <b>{symbolOf(s.market)}</b>
                   <VenueTag market={s.market} />
+                  <Show when={strong}>
+                    <span class="tf-chip strong" data-tip={`Three drives on ${s.timeframe === '1w' ? 'weekly' : 'daily'} bars: the strong kind. Opens the chart at ${frameName(s.timeframe)}.`}>
+                      ★ {frameName(s.timeframe)}
+                    </span>
+                  </Show>
+                  <For each={higher}>
+                    {(tf) => (
+                      <span class="tf-chip" data-tip={`This coin also has ${s.side === 'bear' ? 'bearish' : 'bullish'} three drives on ${tf === '1W' ? 'weekly' : 'daily'} bars, the same way`}>
+                        +{tf}
+                      </span>
+                    )}
+                  </For>
                 </span>
                 <Pushes deltas={s.deltas} />
                 <span class="sig-score num">
@@ -405,6 +392,9 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   <span class={s.side}>{s.side === 'bear' ? '▼' : '▲'}</span>
                   <b>{symbolOf(s.market)}</b>
                   <VenueTag market={s.market} />
+                  <Show when={s.timeframe !== '4h'}>
+                    <span class="tf-chip strong">★ {frameName(s.timeframe)}</span>
+                  </Show>
                 </span>
                 <span class="sig-drives dim">{why(s)}</span>
                 <span class="sig-score num">{s.score}</span>
@@ -566,6 +556,17 @@ function Record(props: { stats: SignalStats | null; sides: ('bear' | 'bull')[]; 
             </div>
             <Show when={st().live.groups.some((g) => g.n > 0)} fallback={<div class="sig-note dim">None has played out yet: a pattern is given {st().windowBars / 6} days.</div>}>
               <Table groups={st().live.groups} sides={props.sides} />
+            </Show>
+            <div class="sig-cap">
+              <b>Live · 1D & 1W</b>
+              <span class="dim">
+                the strong kind, each weighed over {st().windowBars} of its own bars
+                {st().higher.since ? ` · since ${day(st().higher.since!)}` : ''}
+                {st().higher.open ? ` · ${st().higher.open} still open` : ''}
+              </span>
+            </div>
+            <Show when={st().higher.groups.some((g) => g.n > 0)} fallback={<div class="sig-note dim">None has played out yet: a daily pattern is given {st().windowBars} days, a weekly one as many weeks.</div>}>
+              <Table groups={st().higher.groups} sides={props.sides} />
             </Show>
             <div class="sig-cap">
               <b>Limit entry · replayed</b>

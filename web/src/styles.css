@@ -682,6 +682,11 @@ table.venues tr.off td { color: var(--dim); }
 /* A pattern's limit entry, on a line of its own under the row. */
 .sig-limit { grid-column: 2 / -1; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sig-limit .tag { color: var(--warn); font-size: 9px; letter-spacing: 0.04em; }
+/* A pattern on the day's or the week's bars, the strong kind; and a four-hour one its coin also has. */
+.sig-row.strong { background: color-mix(in oklab, var(--warn) 6%, transparent); box-shadow: inset 2px 0 0 color-mix(in oklab, var(--warn) 70%, transparent); }
+.tf-chip { flex: none; padding: 1px 4px; border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent); color: var(--warn); font-size: 9px; letter-spacing: 0.04em; }
+.tf-chip.strong { background: color-mix(in oklab, var(--warn) 16%, transparent); font-weight: 600; }
+.sig-row.strong.shown { background: color-mix(in oklab, var(--primary) 7%, transparent); box-shadow: inset 2px 0 0 var(--primary); }
 .sig-limit .tag.entry { color: var(--info); }
 .sig-limit .gone, .sig-limit .gone .tag { color: var(--dim); }
 @container (max-width: 440px) {
