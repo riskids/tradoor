@@ -70,16 +70,16 @@ const MAGNET_TIP: Record<MagnetMode, string> = {
 
 /** What each click is for, in order — on a position tool the order is the meaning. */
 const TOOL_STEPS: Record<string, string> = {
-  path: 'Path: click each turn, then Enter or double-click to finish · esc cancels',
+  path: 'Path: click each turn, then Enter or double-click to finish · right-click or esc cancels',
   brush: 'Brush: drag across the chart to draw',
-  trendline: 'Trendline: click the first point, then the second · esc cancels',
+  trendline: 'Trendline: click the first point, then the second · right-click or esc cancels',
   horizontal: 'Level: click the price',
   ray: 'Ray: click where the level starts',
-  rect: 'Zone: click one corner, then the opposite corner · esc cancels',
-  fib: 'Fib: click the 100% end — where the move started — then the 0% end · esc cancels',
+  rect: 'Zone: click one corner, then the opposite corner · right-click or esc cancels',
+  fib: 'Fib: click the 100% end — where the move started — then the 0% end · right-click or esc cancels',
   text: 'Note: click where the note goes',
-  measure: 'Measure: click from, then to · esc cancels',
-  channel: 'Channel: click both ends of the first line, then where the parallel line runs · shift keeps it level · esc cancels',
+  measure: 'Measure: click from, then to · right-click or esc cancels',
+  channel: 'Channel: click both ends of the first line, then where the parallel line runs · shift keeps it level · right-click or esc cancels',
   long: 'Long: click where the entry goes',
   short: 'Short: click where the entry goes',
 };
@@ -1142,6 +1142,11 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           onContextMenu={(e) => {
             e.preventDefault();
             if (fingerLast) return;
+            // While drawing, a right-click cancels it, and puts the tool down.
+            if (tool() !== '') {
+              setTool('');
+              return;
+            }
             const p = local(e);
             // On an alert's line or badge: that alert's own menu, not the chart's.
             const over = hoveredAlert();
