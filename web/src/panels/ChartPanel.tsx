@@ -445,9 +445,26 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   }, 2_000);
   onCleanup(() => clearInterval(follow));
   const [tick, setTick] = createSignal(0);
+  const [ping, setPing] = createSignal('ping…');
   if (DEBUG) {
     const timer = setInterval(() => setTick((n) => n + 1), 1_000);
-    onCleanup(() => clearInterval(timer));
+    // Whether the worker hears this page at all: an answer, or none within a second and a half.
+    const pinger = setInterval(() => {
+      let answered = false;
+      const sentAt = Date.now();
+      call('ping', { id: sid }).then(
+        (r) => {
+          answered = true;
+          setPing(`ping ${Date.now() - sentAt}ms · got ${r.got} · asked ${r.asked ?? '–'} · slots ${r.slots}`);
+        },
+        (e) => setPing(`ping failed: ${errorText(e)}`),
+      );
+      setTimeout(() => !answered && setPing(`ping LOST (${new Date().toLocaleTimeString()})`), 1_500);
+    }, 2_000);
+    onCleanup(() => {
+      clearInterval(timer);
+      clearInterval(pinger);
+    });
   }
   // The liquidation feed follows this ticker on every exchange that lists it.
   createEffect(() => {
@@ -1170,7 +1187,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         >
           <Show when={DEBUG}>
             <div class="debug-line">
-              {(tick(), `${sid} · panel ${market()} ${timeframe()} · engine ${status().market ?? '–'} ${status().timeframe ?? ''} ${status().loading ? 'loading' : 'ready'} ${status().bars} bars${status().error ? ` · ${status().error}` : ''} · sent ${marketSends} · worker ${((Date.now() - heardAt) / 1000).toFixed(1)}s ago`)}
+              {(tick(), `${sid} · panel ${market()} ${timeframe()} · engine ${status().market ?? '–'} ${status().timeframe ?? ''} ${status().loading ? 'loading' : 'ready'} ${status().bars} bars${status().error ? ` · ${status().error}` : ''} · sent ${marketSends} · worker ${((Date.now() - heardAt) / 1000).toFixed(1)}s ago · ${ping()}`)}
             </div>
           </Show>
           <Show when={tool() !== '' || selected() !== null || drawError()}>

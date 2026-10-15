@@ -216,6 +216,8 @@ class Slot {
   });
   private liquidationOff: (() => void)[] = [];
   /** The shapes' GPU context: taken by the browser and not back yet, and whether that has been said. */
+  /** The market and timeframe last asked for, for `?debug`. */
+  asked: string | null = null;
   private gpuLost = false;
   private gpuGone = false;
   private gpuTimer: ReturnType<typeof setTimeout> | undefined;
@@ -876,6 +878,7 @@ const calls: Handlers = {
   daily: dailyCall,
   capture: captureCall,
   prefetch: prefetchCall,
+  ping: ({ id }) => ({ got, slots: slots.size, asked: slots.get(id)?.asked ?? null }),
 };
 
 /**
@@ -1024,6 +1027,7 @@ function handle(msg: ToWorker): void {
       slot.watchLiquidations(msg.markets);
       break;
     case 'market':
+      slot.asked = `${msg.market} ${msg.timeframe}`;
       // A load that throws says so on the chart: unheard, the chart kept the
       // last market under the new one's name — and a market already noted as
       // the one held, without an error, is not loaded again when asked.
@@ -1099,7 +1103,11 @@ function handle(msg: ToWorker): void {
 let ready = false;
 const queued: ToWorker[] = [];
 
+/** Messages from the page so far, for `?debug`. */
+let got = 0;
+
 scope.onmessage = (e) => {
+  got += 1;
   if (ready) handle(e.data);
   else queued.push(e.data);
 };
