@@ -98,7 +98,7 @@ The file format is described in [format.md](format.md).
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/flow?coin=` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | one coin's flow on every market it is followed on, the coins followed, and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
-| `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, or stop |
+| `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, week (`?for=week`) or until stopped (`?for=always`), or stop |
 | `GET /api/signals` · `PUT /api/signals/notify` · `GET /api/signals/stats` | what the latest screener scan found, with when it ran and runs next; whether this reader is told on Telegram when a pattern turns; the record — the history replayed, the live patterns since, and the latest of them |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
@@ -118,7 +118,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
 | `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest`, `signal_touch_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
-| `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses |
+| `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses, none for one followed until stopped |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `account`, `account_signin` | a Telegram user and the browser id their things are kept under, and the sign-ins waiting on their yes |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -160,9 +160,10 @@ its flow falls back to half the threshold, so one push does not ring over.
 
 BTC is always followed. An admin — a browser id listed in `TRADOOR_ADMINS` —
 adds another coin from the panel's `+`, and the server follows it on each of
-those exchanges that lists it, quoted as BTC is there, for a day from when it
-was last asked for; Keep 24h asks again, Stop or the chip's × ends it, and at the end of its day
-it lapses and its streams close. Its threshold until the reader sets one is
+those exchanges that lists it, quoted as BTC is there, for a day or a week from
+when it was last asked for, or until it is stopped (`flow_coin.ends_at` empty);
+Keep 24h, 7d or Always asks again, Stop or the chip's × ends it, and at the end
+of its time it lapses and its streams close. Its threshold until the reader sets one is
 three times its usual minute over the last day. Anyone can read the coins being
 followed, and drag the chips into the order they like (kept with the panel);
 only an admin chooses them, at most ten at once.

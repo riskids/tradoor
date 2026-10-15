@@ -13,8 +13,9 @@
 //!
 //! BTC is always followed. Another coin is followed once one of the server's
 //! admins asks for it from the panel, on each exchange BTC is read from that
-//! lists it, for a day from when they last asked; then it lapses and its
-//! streams are closed, so what the server reads stays what someone wants.
+//! lists it, for a day or a week from when they last asked, or until they stop
+//! it; then it lapses and its streams are closed, so what the server reads
+//! stays what someone wants.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -57,8 +58,10 @@ const MARKETS: [(&str, f64); 11] = [
 ];
 /// The coin always followed; `MARKETS` are its markets.
 const ALWAYS: &str = "BTC";
-/// How long a coin asked for is followed before it lapses.
+/// How long a coin asked for is followed before it lapses: a day, unless a
+/// week or no end is asked for (`Span`).
 const FOLLOW_MS: i64 = 24 * 3_600_000;
+const FOLLOW_WEEK_MS: i64 = 7 * FOLLOW_MS;
 /// Coins followed at once besides BTC: each is up to eleven more streams.
 const MAX_COINS: i64 = 10;
 /// A new coin's threshold until a few minutes of its flow say what is usual.
@@ -131,11 +134,11 @@ fn notional(venue: Venue, price: f64, qty: f64, contract: f64) -> f64 {
     if venue == Venue::OkxPerp { price * qty * contract } else { price * qty }
 }
 
-/// A coin followed besides BTC: until when, and on which markets.
+/// A coin followed besides BTC: until when — none until it is stopped — and on which markets.
 #[derive(Clone, Debug)]
 struct Followed {
     coin: String,
-    ends_at: i64,
+    ends_at: Option<i64>,
     markets: Vec<String>,
 }
 
@@ -252,11 +255,11 @@ impl Flow {
     /// Brings the streams in line with the coins asked for: a coin added has its
     /// markets read, one lapsed or stopped has them closed.
     async fn sync(self: &Arc<Self>) -> anyhow::Result<()> {
-        let rows = self.pool.get().await?.query("SELECT coin, ends_at FROM flow_coin WHERE ends_at > $1 ORDER BY added_at", &[&now_ms()]).await?;
+        let rows = self.pool.get().await?.query("SELECT coin, ends_at FROM flow_coin WHERE ends_at IS NULL OR ends_at > $1 ORDER BY added_at", &[&now_ms()]).await?;
         let held = self.coins.lock().map(|c| c.clone()).unwrap_or_default();
         let mut coins = Vec::new();
         for row in rows {
-            let (coin, ends_at): (String, i64) = (row.get(0), row.get(1));
+            let (coin, ends_at): (String, Option<i64>) = (row.get(0), row.get(1));
             // Where a coin trades is asked of the catalogue once, not every pass.
             let markets = match held.iter().find(|f| f.coin == coin && !f.markets.is_empty()) {
                 Some(f) => f.markets.clone(),
@@ -669,9 +672,16 @@ pub async fn state(State(state): State<AppState>, headers: HeaderMap, Query(q): 
     })))
 }
 
-/// `PUT /api/flow/coins/{coin}`: follow a coin's flow for the next day, or for
-/// a day from now if it already is. The server's admins choose.
-pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>) -> ApiResult<Json<Value>> {
+#[derive(serde::Deserialize)]
+pub struct FollowQuery {
+    #[serde(rename = "for")]
+    span: Option<String>,
+}
+
+/// `PUT /api/flow/coins/{coin}?for=day|week|always`: follow a coin's flow for
+/// the next day (the default), the next week, or until it is stopped — from
+/// now, if it already is. The server's admins choose.
+pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>, Query(q): Query<FollowQuery>) -> ApiResult<Json<Value>> {
     let flow = admin(&state, &headers)?;
     let coin = coin.trim().to_ascii_uppercase();
     if !valid_coin(&coin) {
@@ -680,34 +690,39 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
     if coin == ALWAYS {
         return Err(ApiError::bad_request("BTC is always followed"));
     }
+    let now = now_ms();
+    let ends_at = match q.span.as_deref().unwrap_or("day") {
+        "day" => Some(now + FOLLOW_MS),
+        "week" => Some(now + FOLLOW_WEEK_MS),
+        "always" => None,
+        _ => return Err(ApiError::bad_request("for is day, week or always")),
+    };
     let markets = coin_markets(&flow.catalog, &coin).await;
     if markets.is_empty() {
         return Err(ApiError::bad_request(format!("none of the exchanges flow is read from lists {coin}")));
     }
     let client = state.pool.get().await?;
-    let now = now_ms();
-    let others: i64 = client.query_one("SELECT count(*) FROM flow_coin WHERE ends_at > $1 AND coin <> $2", &[&now, &coin]).await?.get(0);
+    let others: i64 = client.query_one("SELECT count(*) FROM flow_coin WHERE (ends_at IS NULL OR ends_at > $1) AND coin <> $2", &[&now, &coin]).await?.get(0);
     if others >= MAX_COINS {
         return Err(ApiError::bad_request(format!("{MAX_COINS} coins are followed already — stop one first")));
     }
-    let ends_at = now + FOLLOW_MS;
     // A coin still followed keeps its place in the list; one that lapsed comes back at the end.
     client
         .execute(
             "INSERT INTO flow_coin (coin, added_by, added_at, ends_at) VALUES ($1, $2, $3, $4)
              ON CONFLICT (coin) DO UPDATE SET ends_at = EXCLUDED.ends_at, added_by = EXCLUDED.added_by,
-                 added_at = CASE WHEN flow_coin.ends_at > EXCLUDED.added_at THEN flow_coin.added_at ELSE EXCLUDED.added_at END",
+                 added_at = CASE WHEN flow_coin.ends_at IS NULL OR flow_coin.ends_at > EXCLUDED.added_at THEN flow_coin.added_at ELSE EXCLUDED.added_at END",
             &[&coin, &owner(&headers)?, &now, &ends_at],
         )
         .await?;
     if let Err(e) = flow.sync().await {
         tracing::warn!(error = %e, "following the coins asked for");
     }
-    tracing::info!(coin, markets = markets.len(), "following a coin's flow for a day");
+    tracing::info!(coin, markets = markets.len(), until = ?ends_at, "following a coin's flow");
     Ok(Json(json!({ "coin": coin, "until": ends_at, "markets": markets })))
 }
 
-/// `DELETE /api/flow/coins/{coin}`: stop following a coin before its day is up.
+/// `DELETE /api/flow/coins/{coin}`: stop following a coin before its time is up.
 pub async fn unfollow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>) -> ApiResult<Json<Value>> {
     let flow = admin(&state, &headers)?;
     let coin = coin.trim().to_ascii_uppercase();

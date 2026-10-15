@@ -219,9 +219,12 @@ export interface FlowMinute {
 /** A coin whose flow the server follows. */
 export interface FlowCoin {
   coin: string;
-  /** When it lapses; null for BTC, which is always followed. */
+  /** When it lapses; null for one recorded until it is stopped, as BTC always is. */
   until: number | null;
 }
+
+/** How long a coin is recorded: a day, a week, or until it is stopped. */
+export type FlowSpan = 'day' | 'week' | 'always';
 
 export interface FlowState {
   /** Whether this server follows any market's flow. */
@@ -551,7 +554,7 @@ export const api = {
   signalsNotify: (patch: { notify?: boolean; touch?: boolean; limits?: boolean }) =>
     json<{ notify: boolean; touch: boolean; limits: boolean }>('/api/signals/notify', { method: 'PUT', body: patch }),
   flow: (coin: string) => json<FlowState>(`/api/flow?coin=${encodeURIComponent(coin)}`),
-  flowFollow: (coin: string) => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'PUT' }),
+  flowFollow: (coin: string, span: FlowSpan = 'day') => json<FlowCoin & { markets: string[] }>(`/api/flow/coins/${encodeURIComponent(coin)}?for=${span}`, { method: 'PUT' }),
   flowUnfollow: (coin: string) => json<{ coin: string }>(`/api/flow/coins/${encodeURIComponent(coin)}`, { method: 'DELETE' }),
   flowMinutes: (market: string) => json<{ market: string; thresholdUsd: number; minutes: FlowMinute[] }>(`/api/flow/minutes?market=${encodeURIComponent(market)}`),
   flowWatch: (market: string, watch: { thresholdUsd: number; notify: boolean }) => json<FlowWatch>(`/api/flow/${encodeURIComponent(market)}`, { method: 'PUT', body: watch }),
