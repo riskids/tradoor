@@ -412,6 +412,12 @@ restored, the engine makes its program and buffers again and draws
 line. `__tradoorSend({ t: 'loseGpu', id: 'chart-1', ms: 1500 })` in a
 development console loses one and gives it back.
 
+A chart is told its market by an effect, and an error anywhere in the same
+update ends the rest of that update — on an iPhone a chart kept the last
+market's bars under the new one's name. The engine's status names the market
+it holds, so every two seconds a chart that does not follow is told again; and
+an error nobody caught shows as a notice, a phone having no console to read it in.
+
 A chart's market may be a ratio, `venue:A/venue:B` — XPL on Bybit priced in BTC
 on Binance — offered by the symbol search when a query has a stroke between two
 markets (TradingView's `BYBIT:XPLUSDT.P/BINANCE:BTCUSDT` works too). The worker

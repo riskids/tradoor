@@ -424,11 +424,21 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
 
   // The candles are the TPO brackets. A weekly split of 15-minute brackets is
   // 672 a profile, so a TPO chart opens with enough for a run of profiles.
-  createEffect(() => {
+  const sendMarket = () => {
     const s = split();
     const perProfile = s ? Math.round(tfMs(s) / tfMs(timeframe())) : 0;
     send({ t: 'market', id: sid, market: market(), timeframe: timeframe(), bars: s ? Math.min(Math.max(perProfile * 8, 1_500), 6_000) : undefined });
-  });
+  };
+  createEffect(sendMarket);
+  // Should that run be lost — an error anywhere in the same update ends the
+  // rest of it — the chart would keep the last market's bars under this one's
+  // name, as an iPhone showed. The engine says which market it holds: a chart
+  // that does not follow is told again.
+  const follow = setInterval(() => {
+    const s = status();
+    if (s.market && !s.loading && (s.market !== market() || s.timeframe !== timeframe())) untrack(sendMarket);
+  }, 2_000);
+  onCleanup(() => clearInterval(follow));
   // The liquidation feed follows this ticker on every exchange that lists it.
   createEffect(() => {
     const m = market();

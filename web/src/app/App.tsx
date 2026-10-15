@@ -15,6 +15,7 @@ import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { showAlertsPanel, startAlerts, unread } from '../lib/alerts';
 import { Toasts } from '../components/Toasts';
+import { toast } from '../lib/toasts';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
 import { referralCard, startReferral } from '../lib/referral';
 import { Layout, panelTitle } from '../workspace/Layout';
@@ -420,6 +421,15 @@ export function App() {
     }
     addEventListener('keydown', onKeyDown);
     addEventListener('contextmenu', onContextMenu);
+    // An error nobody caught is said, not swallowed: in an update it also ends
+    // the rest of that update, and a phone has no console to read it in.
+    const told = new Set<string>();
+    addEventListener('error', (e) => {
+      // Another site's script says only "Script error.", or names its own address.
+      if ((e.filename && !e.filename.startsWith(location.origin)) || /^Script error/.test(e.message) || told.has(e.message)) return;
+      told.add(e.message);
+      toast({ tone: 'warn', title: 'Something went wrong', body: e.message }, 20_000);
+    });
     const off = onEngineFailure(setEngineError);
     onCleanup(() => {
       removeEventListener('keydown', onKeyDown);
