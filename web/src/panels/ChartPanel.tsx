@@ -5,7 +5,7 @@
  */
 import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
-import { call, holdChart, lastPrice, releaseChart, send } from '../engine/client';
+import { call, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
@@ -69,6 +69,9 @@ const MAGNET_TIP: Record<MagnetMode, string> = {
 };
 
 /** What each click is for, in order — on a position tool the order is the meaning. */
+/** `?debug`: a line of what the engine holds, for a phone with no console to read. */
+const DEBUG = new URLSearchParams(location.search).has('debug');
+
 const TOOL_STEPS: Record<string, string> = {
   path: 'Path: click each turn, then Enter or double-click to finish · right-click or esc cancels',
   brush: 'Brush: drag across the chart to draw',
@@ -424,7 +427,9 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
 
   // The candles are the TPO brackets. A weekly split of 15-minute brackets is
   // 672 a profile, so a TPO chart opens with enough for a run of profiles.
+  let marketSends = 0;
   const sendMarket = () => {
+    marketSends += 1;
     const s = split();
     const perProfile = s ? Math.round(tfMs(s) / tfMs(timeframe())) : 0;
     send({ t: 'market', id: sid, market: market(), timeframe: timeframe(), bars: s ? Math.min(Math.max(perProfile * 8, 1_500), 6_000) : undefined });
@@ -439,6 +444,11 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
     if (s.market && !s.loading && (s.market !== market() || s.timeframe !== timeframe())) untrack(sendMarket);
   }, 2_000);
   onCleanup(() => clearInterval(follow));
+  const [tick, setTick] = createSignal(0);
+  if (DEBUG) {
+    const timer = setInterval(() => setTick((n) => n + 1), 1_000);
+    onCleanup(() => clearInterval(timer));
+  }
   // The liquidation feed follows this ticker on every exchange that lists it.
   createEffect(() => {
     const m = market();
@@ -1158,6 +1168,11 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 120)) });
           }}
         >
+          <Show when={DEBUG}>
+            <div class="debug-line">
+              {(tick(), `${sid} · panel ${market()} ${timeframe()} · engine ${status().market ?? '–'} ${status().timeframe ?? ''} ${status().loading ? 'loading' : 'ready'} ${status().bars} bars${status().error ? ` · ${status().error}` : ''} · sent ${marketSends} · worker ${((Date.now() - heardAt) / 1000).toFixed(1)}s ago`)}
+            </div>
+          </Show>
           <Show when={tool() !== '' || selected() !== null || drawError()}>
             <div class="hint">
               {tool() ? TOOL_STEPS[tool()] : selected() !== null ? 'Drawing selected · double-click for settings · Delete removes it, esc deselects' : ''}

@@ -16,6 +16,8 @@ export interface SlotHandlers {
 
 
 let worker: Worker | null = null;
+/** When the worker last said anything, for `?debug`'s line. */
+export let heardAt = 0;
 let failure: string | null = null;
 const failureListeners = new Set<(message: string) => void>();
 const slots = new Map<string, SlotHandlers>();
@@ -71,7 +73,10 @@ function dispatch(msg: FromWorker): void {
 function engine(): Worker {
   if (worker) return worker;
   worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'tradoor-engine' });
-  worker.onmessage = (e: MessageEvent<FromWorker>) => dispatch(e.data);
+  worker.onmessage = (e: MessageEvent<FromWorker>) => {
+    heardAt = Date.now();
+    dispatch(e.data);
+  };
   worker.onerror = (e) => fail(e.message || 'the chart engine stopped');
   return worker;
 }
