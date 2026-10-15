@@ -10,7 +10,7 @@ import { DEFAULT_MARKET, isChartMarket, isMarket } from '../lib/markets';
 import { FLAGS, isSection, SECTION_NAME_MAX, sectionName } from '../lib/watchlist';
 
 const isSectionItem = (v: unknown): v is string => typeof v === 'string' && isSection(v) && v.length > 1 && v.length <= SECTION_NAME_MAX + 1;
-import { isTimeframe } from '../lib/timeframes';
+import { FAVORITE_TIMEFRAMES, isTimeframe, TIMEFRAMES } from '../lib/timeframes';
 
 /** What a new panel can be. `tpo` is a preset: a chart drawn as TPO profiles. */
 export type PanelType = 'chart' | 'watchlist' | 'tpo' | 'values' | 'liquidations' | 'flow' | 'signals' | 'alerts';
@@ -167,6 +167,8 @@ export interface WorkspaceDoc {
   links: Record<LinkColor, LinkState>;
   /** Chart theme keys, and `ui.*` for the page's own colours. */
   theme: Record<string, string>;
+  /** The timeframes a chart's bar shows as buttons, shortest first; the rest are in its menu. */
+  timeframes: string[];
 }
 
 export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom';
@@ -234,6 +236,7 @@ export function defaultWorkspace(): WorkspaceDoc {
     panels: { [chart.id]: chart, [tpo.id]: tpo, [values.id]: values, [watchlist.id]: watchlist, [alerts.id]: alerts },
     links,
     theme: {},
+    timeframes: [...FAVORITE_TIMEFRAMES],
   };
 }
 
@@ -347,7 +350,9 @@ export function validate(raw: unknown): WorkspaceDoc | null {
   const theme: Record<string, string> = {};
   if (isObj(raw.theme)) for (const [k, v] of Object.entries(raw.theme)) if (typeof v === 'string' && v.length <= 40) theme[k] = v;
   const savedAt = Number(raw.savedAt);
-  return { v: 1, name: str(raw.name, '').slice(0, 120) || 'Default', savedAt: Number.isFinite(savedAt) ? savedAt : 0, root, panels, links, theme };
+  // Kept in the list's own order; a layout from before favourites has the usual ones.
+  const timeframes = Array.isArray(raw.timeframes) ? TIMEFRAMES.map((t) => t.value).filter((tf) => (raw.timeframes as unknown[]).includes(tf)) : [...FAVORITE_TIMEFRAMES];
+  return { v: 1, name: str(raw.name, '').slice(0, 120) || 'Default', savedAt: Number.isFinite(savedAt) ? savedAt : 0, root, panels, links, theme, timeframes };
 }
 
 // ---------------------------------------------------------------- the tree

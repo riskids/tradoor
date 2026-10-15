@@ -28,9 +28,9 @@ import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { isRatio, symbolOf, venueLabel } from '../lib/markets';
 import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert, titleOf } from '../lib/alerts';
 import { toast } from '../lib/toasts';
-import { FAVORITE_TIMEFRAMES, TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
+import { TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
-import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf } from '../workspace/store';
+import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
 
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
@@ -186,6 +186,12 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const [alertStyling, setAlertStyling] = createSignal<number | null>(null);
   const [alertDraft, setAlertDraft] = createSignal<{ id: number; style: AlertStyle } | null>(null);
   const [tfMenu, setTfMenu] = createSignal<number | null>(null);
+  /** Under its button, or moved back inside the panel where it would run past the right edge — a phone's bar scrolls. */
+  const fitMenu = (el: HTMLElement) =>
+    queueMicrotask(() => {
+      const room = (el.offsetParent as HTMLElement | null)?.clientWidth ?? 0;
+      if (el.offsetLeft + el.offsetWidth > room - 4) el.style.left = `${Math.max(4, room - el.offsetWidth - 4)}px`;
+    });
   /** The TPO quick access menu, open at this x in the toolbar. */
   const [tpoMenu, setTpoMenu] = createSignal<number | null>(null);
   useDismiss(tpoMenu, () => setTpoMenu(null));
@@ -794,19 +800,19 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <VenueTag market={market()} name />
         <WatchlistToggle market={market()} />
         <span class="sep" />
-        <For each={FAVORITE_TIMEFRAMES}>
+        <For each={doc.timeframes}>
           {(tf) => (
             <button class="tb num" classList={{ on: timeframe() === tf }} data-tip={tfName(tf)} onClick={() => setPanelTimeframe(id, tf)}>
               {tfLabel(tf)}
             </button>
           )}
         </For>
-        <Show when={!FAVORITE_TIMEFRAMES.includes(timeframe())}>
+        <Show when={!doc.timeframes.includes(timeframe())}>
           <button class="tb num on" data-tip={tfName(timeframe())}>
             {tfLabel(timeframe())}
           </button>
         </Show>
-        <button ref={tfButton} class="tb" data-tip="Every timeframe" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft : null))}>
+        <button ref={tfButton} class="tb" data-tip="Every timeframe — star one to keep it here" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft - (tfButton.parentElement?.scrollLeft ?? 0) : null))}>
           <Icon name="chevron" size={11} />
         </button>
         <span class="sep" />
@@ -965,24 +971,40 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
 
       <Show when={tfMenu()} keyed>
         {(left) => (
-          <div class="menu" style={{ left: `${left}px`, top: '25px', 'min-width': '0' }} onPointerDown={(e) => e.stopPropagation()}>
+          <div class="menu tf-menu" ref={fitMenu} style={{ left: `${left}px`, top: '25px' }} onPointerDown={(e) => e.stopPropagation()}>
             <For each={[0, 1, 2, 3, 4]}>
               {(group) => (
                 <div class="group">
                   <For each={TIMEFRAMES.filter((t) => t.group === group)}>
-                    {(t) => (
-                      <button
-                        class="num"
-                        classList={{ cur: t.value === timeframe() }}
-                        data-tip={t.live ? t.name : `${t.name} — folded from shorter bars; closed bars only`}
-                        onClick={() => {
-                          setPanelTimeframe(id, t.value);
-                          setTfMenu(null);
-                        }}
-                      >
-                        {t.label}
-                      </button>
-                    )}
+                    {(t) => {
+                      const favorite = () => doc.timeframes.includes(t.value);
+                      return (
+                        <span class="tf-pick">
+                          <button
+                            class="num"
+                            classList={{ cur: t.value === timeframe() }}
+                            data-tip={t.live ? t.name : `${t.name} — folded from shorter bars; closed bars only`}
+                            onClick={() => {
+                              setPanelTimeframe(id, t.value);
+                              setTfMenu(null);
+                            }}
+                          >
+                            {t.label}
+                          </button>
+                          {/* A favourite is a button in the chart's bar; the menu stays open to star more. */}
+                          <button
+                            class="fav"
+                            classList={{ on: favorite() }}
+                            aria-pressed={favorite()}
+                            aria-label={`Favourite: ${t.name}`}
+                            data-tip={favorite() ? 'In the bar — click to take it out' : 'Add to the bar'}
+                            onClick={() => toggleFavoriteTimeframe(t.value)}
+                          >
+                            <Icon name="star" size={9} stroke={2} fill={favorite()} />
+                          </button>
+                        </span>
+                      );
+                    }}
                   </For>
                 </div>
               )}

@@ -38,6 +38,7 @@ export const TIMEFRAMES: readonly TimeframeDef[] = DEFS.map(([value, label, name
 
 const BY_VALUE = new Map(TIMEFRAMES.map((t) => [t.value, t]));
 
+/** The chart bar's buttons until the reader stars their own (`WorkspaceDoc.timeframes`). */
 export const FAVORITE_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
 
 export const isTimeframe = (v: unknown): v is string => typeof v === 'string' && BY_VALUE.has(v);

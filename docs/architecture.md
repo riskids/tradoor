@@ -122,7 +122,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `account`, `account_signin` | a Telegram user and the browser id their things are kept under, and the sign-ins waiting on their yes |
 | `telegram_message` | what the bot sent and when to take it back |
-| `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme — whole, with an optimistic version |
+| `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
@@ -137,7 +137,9 @@ copy changed last wins. The local copy is stamped with the browser id that
 saved it: taking another browser's id (Settings) asks for their layout, so a
 copy stamped for someone else is not opened with — it would show the wrong
 workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market and
-timeframe; a watchlist that is not linked drives the last chart used.
+timeframe; a watchlist that is not linked drives the last chart used. The
+timeframes starred in a chart's timeframe menu are the buttons on every chart's
+bar (`WorkspaceDoc.timeframes`, kept with the layout).
 
 Panels: chart, watchlist, values, liquidations, flow, signal and alerts.
 

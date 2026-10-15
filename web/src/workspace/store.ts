@@ -10,6 +10,7 @@ import { api, ApiError } from '../lib/api';
 import { ownerId } from '../lib/owner';
 import { readJson, readPref, writePref } from '../lib/prefs';
 import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
+import { TIMEFRAMES } from '../lib/timeframes';
 
 const LOCAL_KEY = 'workspace';
 /** Whose the local copy is, written beside it. */
@@ -124,6 +125,14 @@ export function setPanelTimeframe(id: string, timeframe: string): void {
     setDoc('panels', id, 'timeframe', timeframe);
   });
   touched();
+}
+
+/** A timeframe into the charts' bar of buttons, or back to their menu alone. */
+export function toggleFavoriteTimeframe(timeframe: string): void {
+  update((d) => {
+    const on = d.timeframes.includes(timeframe);
+    d.timeframes = TIMEFRAMES.map((t) => t.value).filter((tf) => (tf === timeframe ? !on : d.timeframes.includes(tf)));
+  });
 }
 
 /** Joining a group adopts the group's market and timeframe. */
