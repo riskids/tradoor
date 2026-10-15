@@ -389,7 +389,20 @@ export class Series {
    */
   ensure(bars: number): Promise<void> {
     const first = Math.min(bars, FIRST_BARS);
-    const ready = this.run(() => this.fill(first));
+    const ready = this.run(async () => {
+      const held = this.cols.time.length > 0;
+      await this.fill(first);
+      // Held from before — by a chart once shown, a call, a row looked at —
+      // its newest bars may have closed since. Drawn from those, a chart
+      // jumped to the bar forming now, the ones between missing until the
+      // next one closed: an hour on an hour's bars. Nothing closed, nothing
+      // is asked; the exchange not answering leaves what is held.
+      if (held) {
+        const before = this.cols.time.length;
+        await this.tail().catch(() => undefined);
+        if (this.cols.time.length !== before) this.emit();
+      }
+    });
     if (bars > first) {
       void this.run(async () => {
         const before = this.cols.time.length;
