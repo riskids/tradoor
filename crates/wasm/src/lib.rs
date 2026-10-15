@@ -72,6 +72,14 @@ impl ChartEngine {
         Ok(Self { chart, gl, text, size: (0.0, 0.0, 1.0) })
     }
 
+    /// The shapes' GPU context is back after the browser took it away: made
+    /// ready again, and the chart drawn anew on the next frame.
+    pub fn restore_gpu(&mut self) -> Result<(), JsValue> {
+        self.gl.restore()?;
+        self.chart.touch();
+        Ok(())
+    }
+
     /// What draws the shapes: `webgl2`, or `2d` where a worker has no WebGL2.
     pub fn renderer(&self) -> String {
         self.gl.kind().to_string()

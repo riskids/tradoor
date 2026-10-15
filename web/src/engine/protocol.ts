@@ -198,6 +198,8 @@ export type ToWorker =
   | { t: 'timeZone'; offsetMinutes: number }
   /** Development only: fake liquidations, so the ping design can be judged. */
   | { t: 'demoLiquidations'; id: string; perMinute: number }
+  /** Development only: the chart's GPU context lost as iOS loses it, and back after `ms` (never when negative). */
+  | { t: 'loseGpu'; id: string; ms: number }
   /** The ticker's perpetual on each exchange that lists it, for the liquidation feed. */
   | { t: 'liquidationMarkets'; id: string; markets: string[] }
   | { t: 'call'; req: number; name: CallName; args: unknown };

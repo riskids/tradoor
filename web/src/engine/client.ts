@@ -80,6 +80,9 @@ export function send(msg: ToWorker, transfer: Transferable[] = []): void {
   engine().postMessage(msg, transfer);
 }
 
+// Development only: `__tradoorSend({ t: 'loseGpu', id: 'chart-0', ms: 1500 })` in the console.
+if (import.meta.env.DEV) (globalThis as { __tradoorSend?: typeof send }).__tradoorSend = send;
+
 export function call<K extends CallName>(name: K, args: Calls[K]['args']): Promise<Calls[K]['result']> {
   if (failure) return Promise.reject(new Error(failure));
   const req = nextRequest++;

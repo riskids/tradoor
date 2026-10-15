@@ -403,6 +403,14 @@ Shapes are drawn with WebGL2 in the worker where the browser allows it there
 where it does not: a frame is single-coloured triangles, so runs of one colour
 fill as one path. `?renderer=2d` forces that path in development.
 
+iOS takes a page's WebGL contexts back when it is put away or short of memory,
+which leaves the chart's shapes blank, its labels still there. The worker asks
+for the context back (`preventDefault` on `webglcontextlost`) and, once it is
+restored, the engine makes its program and buffers again and draws
+(`Gl::restore`); a context not back within three seconds says so in the status
+line. `__tradoorSend({ t: 'loseGpu', id: 'chart-1', ms: 1500 })` in a
+development console loses one and gives it back.
+
 A chart's market may be a ratio, `venue:A/venue:B` — XPL on Bybit priced in BTC
 on Binance — offered by the symbol search when a query has a stroke between two
 markets (TradingView's `BYBIT:XPLUSDT.P/BINANCE:BTCUSDT` works too). The worker

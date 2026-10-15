@@ -26,6 +26,9 @@ const CHART_BARS = 1_500;
 const MAX_BASE_BARS = 60_000;
 /** Timeframes the exchange does not stream (2D, 3M…) pick up new bars this often. */
 const POLL_MS = 5 * 60_000;
+/** How long a GPU context the browser took is waited for before the chart says so. */
+const GPU_WAIT_MS = 3_000;
+const GPU_GONE = 'graphics lost — reload to redraw';
 /** A closed bar REST has not vouched for yet is asked for again after these,
  *  the last repeating until it answers. */
 const ASK_MS = [4_000, 15_000, 30_000, 60_000];
@@ -212,13 +215,48 @@ class Slot {
     this.metaDirty = true;
   });
   private liquidationOff: (() => void)[] = [];
+  /** The shapes' GPU context: taken by the browser and not back yet, and whether that has been said. */
+  private gpuLost = false;
+  private gpuGone = false;
+  private gpuTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     readonly id: string,
-    gl: OffscreenCanvas,
+    readonly gl: OffscreenCanvas,
     text: OffscreenCanvas,
     flat = false,
   ) {
+    // iOS takes a page's WebGL contexts back when it is put away or short of
+    // memory, and the chart then stays blank until the page is loaded again.
+    // Asking for it back (preventDefault) is what makes the browser restore
+    // it; the engine then makes its GPU state again and draws.
+    gl.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.gpuLost = true;
+      clearTimeout(this.gpuTimer);
+      this.gpuTimer = setTimeout(() => {
+        if (!this.gpuLost) return;
+        this.gpuGone = true;
+        this.setStatus({ error: GPU_GONE });
+        this.engine.set_message(GPU_GONE);
+      }, GPU_WAIT_MS);
+    });
+    gl.addEventListener('webglcontextrestored', () => {
+      this.gpuLost = false;
+      clearTimeout(this.gpuTimer);
+      try {
+        this.engine.restore_gpu();
+      } catch (e) {
+        this.setStatus({ error: `graphics not restored: ${message(e)}` });
+        return;
+      }
+      if (this.gpuGone) {
+        this.gpuGone = false;
+        this.setStatus({ error: null });
+        this.engine.set_message(this.status.loading ? 'Loading…' : '');
+      }
+      schedule();
+    });
     this.engine = new ChartEngine(gl, text, '1h', flat);
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
@@ -280,6 +318,7 @@ class Slot {
 
   destroy(): void {
     clearInterval(this.demo);
+    clearTimeout(this.gpuTimer);
     clearTimeout(this.priceTimer);
     this.watchLiquidations([]);
     this.openInterest.stop();
@@ -689,7 +728,8 @@ class Slot {
   }
 
   private setStatus(patch: Partial<ChartStatus>): void {
-    const next = { ...this.status, ...patch, market: this.market, timeframe: this.timeframe };
+    // A market loaded while the graphics are gone is still not drawn: the word stays.
+    const next = { ...this.status, ...patch, ...(this.gpuGone && !patch.error ? { error: GPU_GONE } : {}), market: this.market, timeframe: this.timeframe };
     const keys = Object.keys(next) as (keyof ChartStatus)[];
     if (keys.every((k) => next[k] === this.status[k])) return;
     this.status = next;
@@ -964,6 +1004,14 @@ function handle(msg: ToWorker): void {
       break;
     case 'visible':
       slot.show(msg.value);
+      break;
+    case 'loseGpu':
+      // Development only: the GPU context taken as iOS takes it, and given back after `ms` (never when negative).
+      if (import.meta.env.DEV) {
+        const ext = (slot.gl.getContext('webgl2') as WebGL2RenderingContext | null)?.getExtension('WEBGL_lose_context');
+        ext?.loseContext();
+        if (ext && msg.ms >= 0) setTimeout(() => ext.restoreContext(), msg.ms);
+      }
       break;
     case 'demoLiquidations':
       slot.demoLiquidations(msg.perMinute);

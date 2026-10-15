@@ -57,6 +57,36 @@ fn compile(gl: &GL, kind: u32, source: &str) -> Result<WebGlShader, JsValue> {
     Ok(shader)
 }
 
+/// The program, vertex array and buffers a frame is drawn with: made with the
+/// context, and again when a lost context is given back.
+type Parts = (WebGlProgram, WebGlVertexArrayObject, WebGlBuffer, WebGlBuffer, Option<WebGlUniformLocation>);
+
+fn parts(gl: &GL) -> Result<Parts, JsValue> {
+    let program = gl.create_program().ok_or("could not create a program")?;
+    gl.attach_shader(&program, &compile(gl, GL::VERTEX_SHADER, VERTEX)?);
+    gl.attach_shader(&program, &compile(gl, GL::FRAGMENT_SHADER, FRAGMENT)?);
+    gl.link_program(&program);
+    if gl.get_program_parameter(&program, GL::LINK_STATUS).as_bool() != Some(true) {
+        return Err(JsValue::from_str(&gl.get_program_info_log(&program).unwrap_or_default()));
+    }
+
+    let vao = gl.create_vertex_array().ok_or("could not create a vertex array")?;
+    gl.bind_vertex_array(Some(&vao));
+    let positions = gl.create_buffer().ok_or("could not create a buffer")?;
+    gl.bind_buffer(GL::ARRAY_BUFFER, Some(&positions));
+    gl.enable_vertex_attrib_array(0);
+    gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
+    let colors = gl.create_buffer().ok_or("could not create a buffer")?;
+    gl.bind_buffer(GL::ARRAY_BUFFER, Some(&colors));
+    gl.enable_vertex_attrib_array(1);
+    gl.vertex_attrib_pointer_with_i32(1, 4, GL::UNSIGNED_BYTE, true, 0, 0);
+
+    gl.enable(GL::BLEND);
+    gl.blend_func_separate(GL::SRC_ALPHA, GL::ONE_MINUS_SRC_ALPHA, GL::ONE, GL::ONE_MINUS_SRC_ALPHA);
+    let u_size = gl.get_uniform_location(&program, "u_size");
+    Ok((program, vao, positions, colors, u_size))
+}
+
 impl Gl {
     pub fn new(canvas: OffscreenCanvas) -> Result<Self, JsValue> {
         let options = js_sys::Object::new();
@@ -64,34 +94,25 @@ impl Gl {
             js_sys::Reflect::set(&options, &key.into(), &value.into())?;
         }
         let gl: GL = canvas.get_context_with_context_options("webgl2", &options)?.ok_or("WebGL2 is not available in this browser")?.dyn_into()?;
-
-        let program = gl.create_program().ok_or("could not create a program")?;
-        gl.attach_shader(&program, &compile(&gl, GL::VERTEX_SHADER, VERTEX)?);
-        gl.attach_shader(&program, &compile(&gl, GL::FRAGMENT_SHADER, FRAGMENT)?);
-        gl.link_program(&program);
-        if gl.get_program_parameter(&program, GL::LINK_STATUS).as_bool() != Some(true) {
-            return Err(JsValue::from_str(&gl.get_program_info_log(&program).unwrap_or_default()));
-        }
-
-        let vao = gl.create_vertex_array().ok_or("could not create a vertex array")?;
-        gl.bind_vertex_array(Some(&vao));
-        let positions = gl.create_buffer().ok_or("could not create a buffer")?;
-        gl.bind_buffer(GL::ARRAY_BUFFER, Some(&positions));
-        gl.enable_vertex_attrib_array(0);
-        gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
-        let colors = gl.create_buffer().ok_or("could not create a buffer")?;
-        gl.bind_buffer(GL::ARRAY_BUFFER, Some(&colors));
-        gl.enable_vertex_attrib_array(1);
-        gl.vertex_attrib_pointer_with_i32(1, 4, GL::UNSIGNED_BYTE, true, 0, 0);
-
-        gl.enable(GL::BLEND);
-        gl.blend_func_separate(GL::SRC_ALPHA, GL::ONE_MINUS_SRC_ALPHA, GL::ONE, GL::ONE_MINUS_SRC_ALPHA);
-        let u_size = gl.get_uniform_location(&program, "u_size");
+        let (program, vao, positions, colors, u_size) = parts(&gl)?;
         Ok(Self { canvas, gl, program, vao, positions, colors, u_size, capacity: 0 })
+    }
+
+    /// The context back after the browser took it — iOS takes a page's when it
+    /// is put away or short of memory. Nothing made on it before survives, so
+    /// it is all made again, and the next frame fills the buffers anew.
+    pub fn restore(&mut self) -> Result<(), JsValue> {
+        (self.program, self.vao, self.positions, self.colors, self.u_size) = parts(&self.gl)?;
+        self.capacity = 0;
+        Ok(())
     }
 
     pub fn draw(&mut self, frame: &Frame) {
         let gl = &self.gl;
+        // A lost context draws nothing, whatever it is asked: the frame waits for it to come back.
+        if gl.is_context_lost() {
+            return;
+        }
         let (w, h) = ((frame.width * frame.dpr).round().max(1.0) as u32, (frame.height * frame.dpr).round().max(1.0) as u32);
         if self.canvas.width() != w {
             self.canvas.set_width(w);
@@ -233,6 +254,14 @@ impl Surface {
         match self {
             Self::Gpu(gl) => gl.draw(frame),
             Self::Flat(flat) => flat.draw(frame),
+        }
+    }
+
+    /// Made again on a context the browser gave back; a 2D canvas has nothing to lose.
+    pub fn restore(&mut self) -> Result<(), JsValue> {
+        match self {
+            Self::Gpu(gl) => gl.restore(),
+            Self::Flat(_) => Ok(()),
         }
     }
 
