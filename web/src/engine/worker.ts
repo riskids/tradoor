@@ -494,6 +494,10 @@ class Slot {
       .catch(() => undefined);
   }
 
+  loadFailed(e: unknown): void {
+    this.setStatus({ loading: false, error: `not loaded: ${message(e)}` });
+  }
+
   private fail(error: string): void {
     this.fresh = false;
     this.engine.set_loading(false);
@@ -1020,7 +1024,10 @@ function handle(msg: ToWorker): void {
       slot.watchLiquidations(msg.markets);
       break;
     case 'market':
-      void slot.load(msg.market, msg.timeframe, msg.bars);
+      // A load that throws says so on the chart: unheard, the chart kept the
+      // last market under the new one's name — and a market already noted as
+      // the one held, without an error, is not loaded again when asked.
+      slot.load(msg.market, msg.timeframe, msg.bars).catch((e: unknown) => slot.loadFailed(e));
       break;
     case 'studies':
       slot.setStudies(msg.value);
