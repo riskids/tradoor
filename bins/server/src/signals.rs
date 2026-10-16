@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 use tradoor_core::format::format_price;
 use tradoor_core::{Candle, Interval};
 use tradoor_store::now_ms;
-use tradoor_venues::{binance, bybit, Exchange, MarketRef};
+use tradoor_venues::{binance, bybit, Exchange, MarketRef, OwnedKline};
 
 use crate::api::{owner, ApiError, ApiResult, AppState};
 use crate::catalog::Catalog;
@@ -43,7 +43,7 @@ use crate::drives::{self, Fill, Found, Hit, Plan, Point, Setup, Side};
 use crate::telegram::{self, Telegram};
 
 /// Coins screened, by a day's turnover.
-const COINS: usize = 200;
+pub(crate) const COINS: usize = 200;
 /// Closed bars read per coin: enough for forty days of drives and their warm-up.
 const BARS: u32 = 500;
 /// Closed bars a replay reads per coin: as many as Bybit gives in one ask, some 166 days.
@@ -676,22 +676,7 @@ impl Screener {
         }
         let mut klines = if exchange == Exchange::Binance { binance::parse_klines(&body)? } else { bybit::parse_klines(&body)? };
         klines.retain(|k| k.open_time.saturating_add(frame.step()) <= bar);
-        let taker = klines.iter().map(|k| k.taker_buy_volume.as_deref()?.parse::<f64>().ok()).collect::<Option<Vec<f64>>>();
-        let candles = klines
-            .iter()
-            .map(|k| {
-                Ok(Candle {
-                    open_time: k.open_time,
-                    open: k.open.parse()?,
-                    high: k.high.parse()?,
-                    low: k.low.parse()?,
-                    close: k.close.parse()?,
-                    volume: k.volume.parse()?,
-                    quote_volume: k.quote_volume.as_deref().and_then(|q| q.parse().ok()),
-                })
-            })
-            .collect::<anyhow::Result<Vec<Candle>>>()?;
-        Ok((candles, taker))
+        candles_of(&klines)
     }
 
     /// The scan and what it found, a pattern seen before keeping the bar it first turned on.
@@ -806,6 +791,27 @@ impl Screener {
     fn touch_link(&self, market: &str, at: i64) -> Option<String> {
         self.site.as_ref().map(|site| format!("{site}/?market={market}&tf=4h&touched={at}"))
     }
+}
+
+/// Klines as candles, oldest first, with each bar's taker buy volume where
+/// the exchange reports it — all of them or none.
+pub(crate) fn candles_of(klines: &[OwnedKline]) -> anyhow::Result<(Vec<Candle>, Option<Vec<f64>>)> {
+    let taker = klines.iter().map(|k| k.taker_buy_volume.as_deref()?.parse::<f64>().ok()).collect::<Option<Vec<f64>>>();
+    let candles = klines
+        .iter()
+        .map(|k| {
+            Ok(Candle {
+                open_time: k.open_time,
+                open: k.open.parse()?,
+                high: k.high.parse()?,
+                low: k.low.parse()?,
+                close: k.close.parse()?,
+                volume: k.volume.parse()?,
+                quote_volume: k.quote_volume.as_deref().and_then(|q| q.parse().ok()),
+            })
+        })
+        .collect::<anyhow::Result<Vec<Candle>>>()?;
+    Ok((candles, taker))
 }
 
 /// A frame's name as a message writes it, starred where its patterns are the strong kind.

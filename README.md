@@ -226,6 +226,13 @@ RSALIANTO_DATABASE_URL=postgres://… scripts/export-rsalianto-drawings.sh > dra
 ./target/release/tradoor-server import-drawings drawings.jsonl --owner <your-browser-id>
 ```
 
+## Weighing the signals
+
+```sh
+ssh user@server 'bash -s' < scripts/export-signals.sh > signals.tar.gz   # the live record, as CSV
+./target/release/tradoor-server signal-research signals.jsonl           # the rules over ~500 days of bars
+```
+
 ## Keyboard
 
 `a–z` search a symbol · `← →` timeframe · `/` or `Ctrl K` commands · `?` help ·

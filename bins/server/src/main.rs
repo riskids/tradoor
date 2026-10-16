@@ -22,6 +22,7 @@ mod limits;
 mod liquidations;
 mod open_interest;
 mod relay;
+mod research;
 mod signals;
 mod telegram;
 mod trades;
@@ -88,12 +89,26 @@ enum Command {
     /// Give the drawings and workspace that have no owner — everything from
     /// before browsers had ids — to one browser id (Settings → Browser id).
     Adopt { owner: String },
+    /// Replay the screener's four-hour rules over a long history of the coins
+    /// it screens and write each pattern, with what was known at its entry and
+    /// the bars after, as JSON lines (see research.rs). Needs no database.
+    SignalResearch {
+        out: PathBuf,
+        #[arg(long, default_value_t = signals::COINS)]
+        coins: usize,
+        /// Four-hour bars read per coin: 3000 is some five hundred days.
+        #[arg(long, default_value_t = 3000)]
+        bars: usize,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
+    if let Some(Command::SignalResearch { out, coins, bars }) = &cli.command {
+        return research::run(cli.binance_spot_rest.clone(), out, *coins, *bars).await;
+    }
     let database_url = cli.database_url.clone().context("DATABASE_URL is required")?;
 
     // Migrations run on a dedicated connection before the pool opens, so every
@@ -112,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
             }
             import::run(&pool, &file, &owner).await
         }
+        Command::SignalResearch { .. } => unreachable!("run before the database"),
         Command::Adopt { owner } => {
             if !api::valid_owner(&owner) {
                 anyhow::bail!("a browser id is 16 to 64 letters, digits and dashes — copy it from Settings");

@@ -302,6 +302,17 @@ the limit entries replayed and live — their score bands fifteen lower, as they
 are set before the turn adds its fifteen. A restart under a new `VERSION` scans
 the bar again.
 
+For weighing the rules away from the server there are two tools. Run on the
+server, `scripts/export-signals.sh` writes the record's tables — patterns,
+setups, scans, the latest replay — as CSV in one tar.gz. And
+`tradoor-server signal-research out.jsonl` (`research`, no database) replays
+the four-hour rules over some five hundred days of the screened coins' bars,
+writing each pattern as a JSON line: the scan that first saw it and the one
+that saw it turn, what else was known then (RSI and Stochastic RSI at the
+drives and the entry, how far the third drive sits off the line, the trend and
+volatility it came out of, Bitcoin's), each plan's result, its limit, and the
+bars after the third drive — so filters and plans can be tried offline.
+
 Footprint is the same prints kept by price rather than summed: a trade lands
 in the level its price falls in, and a minute is a column of levels
 (`footprint_minute`, `/api/footprint?market&from&to`). Eight markets are
