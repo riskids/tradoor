@@ -412,6 +412,15 @@ restored, the engine makes its program and buffers again and draws
 line. `__tradoorSend({ t: 'loseGpu', id: 'chart-1', ms: 1500 })` in a
 development console loses one and gives it back.
 
+The worker is built as one file, its lazy imports inlined (`vite.config.ts`).
+A chunk split off it imports back from the worker's own file, and Safari runs
+that file a second time in the same worker on the first such import — the
+loaders of the exchanges past Binance and Bybit, or a liquidation feed reading
+one: the copy took the page's messages with no charts, while the first kept
+drawing what it had, a chart that no longer answered a touch or a market.
+`?debug` shows, under every chart, what its engine holds, and which worker
+answers a ping, since when, and with how many charts.
+
 A chart is told its market by an effect, and an error anywhere in the same
 update ends the rest of that update — on an iPhone a chart kept the last
 market's bars under the new one's name. The engine's status names the market

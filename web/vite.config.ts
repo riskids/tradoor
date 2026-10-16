@@ -15,7 +15,15 @@ export default defineConfig({
     // ws: the exchange stream relay for networks that block the exchanges.
     proxy: { '/api': { target: server, ws: true }, '/data': server },
   },
-  worker: { format: 'es' },
+  worker: {
+    format: 'es',
+    // One file, its lazy imports inlined. A chunk split off the worker imports
+    // back from the worker's own file, and Safari runs that file a second time
+    // in the same worker on the first such import: the copy takes over the
+    // messages with no charts, while the first keeps drawing what it had — on
+    // an iPhone, a chart that stopped answering after a Bitget market.
+    rolldownOptions: { output: { codeSplitting: false } },
+  },
   build: {
     target: 'es2022',
     modulePreload: { polyfill: false },
