@@ -10,7 +10,7 @@
 import { decode_partition } from '../wasm/pkg/tradoor_wasm.js';
 import { parseMarket, type MarketRef, type Venue } from '../lib/markets';
 import { nativeOf } from '../lib/native';
-import { restInterval } from './intervals';
+import { INTERVALS, lacksUtc, marketInterval } from './intervals';
 import { block, isBlocked, reached } from './reach';
 
 export interface Cols {
@@ -144,8 +144,24 @@ const ANSWER_MS = 7_000;
  */
 const WHOLE_MS = 30_000;
 
+/**
+ * The least time between two requests to a host that counts them tightly:
+ * Bitget allows twenty candle requests a second, and a chart's history asked
+ * a dozen pages at once, round after round — half of them answered 429, each
+ * then waited out a second or more.
+ */
+const SPACING_MS: Record<string, number> = { 'api.bitget.com': 70 };
+const nextAt = new Map<string, number>();
+
 async function fetchExchange(url: string): Promise<Response> {
   const host = new URL(url).host;
+  const spacing = SPACING_MS[host];
+  if (spacing) {
+    const now = Date.now();
+    const at = Math.max(now, nextAt.get(host) ?? 0);
+    nextAt.set(host, at + spacing);
+    if (at > now) await sleep(at - now);
+  }
   if (!RELAYED.has(host) && !isBlocked(host)) {
     const abort = new AbortController();
     const started = Date.now();
@@ -332,6 +348,8 @@ const FIRST_BARS = 600;
 /** Intervals of a fixed length, whose pages can be worked out in advance. */
 const EXACT_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']);
 const MAX_TAIL_PAGES = 12;
+/** Between the chunks of history loaded behind a chart's first screen. */
+const BACKFILL_PAUSE_MS = 500;
 const TAIL_THROTTLE_MS = 30_000;
 /** A series nobody reads is dropped after this long — a deep 1m history is large. */
 /** How long a series with no chart on it is kept: long enough that going back
@@ -403,13 +421,20 @@ export class Series {
         if (this.cols.time.length !== before) this.emit();
       }
     });
-    if (bars > first) {
-      void this.run(async () => {
-        const before = this.cols.time.length;
-        await this.fill(bars);
-        if (this.cols.time.length !== before) this.emit();
-      });
-    }
+    // The rest a chunk at a time, each queued anew behind whatever was asked
+    // meanwhile: in one piece, a second chart on these bars waited on all of
+    // it for its first screen — sixty of Bitget's 200-bar pages, twenty
+    // seconds. A pause between chunks keeps under the exchanges' rates.
+    const more = async () => {
+      if (this.cols.time.length >= bars || this.exhausted) return;
+      const before = this.cols.time.length;
+      if ((await this.olderChunk(bars - before)) === 0) this.exhausted = true;
+      if (this.cols.time.length !== before) this.emit();
+      if (this.cols.time.length < bars && !this.exhausted) setTimeout(() => void this.run(more), BACKFILL_PAUSE_MS);
+    };
+    // The first chunk waits too, so another chart's first screen asked in the
+    // same moment — the Values panel's, a second chart's — goes ahead of it.
+    if (bars > first) setTimeout(() => void this.run(more), BACKFILL_PAUSE_MS);
     return ready;
   }
 
@@ -561,6 +586,32 @@ export class Series {
   }
 }
 
+const probes = new Map<string, Promise<void>>();
+
+/**
+ * Whether a Bitget market takes its UTC day, week and month: asked once, of
+ * one bar, whatever the chart's length. Its stock tokens answer 400, code
+ * 48001 — and their live candles at those lengths say nothing — so theirs are
+ * read and streamed shorter, and their quiet hours are not taken for a dead
+ * socket. A probe that could not be made is forgotten, to be made again.
+ */
+function probeUtc(market: string, ref: MarketRef): Promise<void> {
+  const name = INTERVALS[ref.venue]?.['1d'];
+  if (!ref.venue.startsWith('bitget') || !name) return Promise.resolve();
+  let probe = probes.get(market);
+  if (!probe) {
+    probe = (async () => {
+      const native = await nativeOf(market);
+      const path = ref.venue === 'bitget-perp' ? 'mix/market/candles?productType=usdt-futures&' : 'spot/market/candles?';
+      const res = await fetchExchange(`https://api.bitget.com/api/v2/${path}symbol=${native}&granularity=${name}&limit=1`);
+      const body = (await res.json().catch(() => null)) as { code?: string } | null;
+      if (body?.code === '48001') lacksUtc(market);
+    })().catch(() => void probes.delete(market));
+    probes.set(market, probe);
+  }
+  return probe;
+}
+
 /**
  * The series behind a chart: stored partitions at `base` when the market has
  * them, the exchange at `interval` when it does not.
@@ -570,8 +621,9 @@ export async function openSeries(market: string, base: string, interval: string)
   if (!ref) throw new Error(`not a market: ${market}`);
   const stored = (await manifest(ref))?.bases[base] ?? [];
   const source: SeriesSource = stored.length > 0 ? 'archive' : 'exchange';
+  if (source === 'exchange') await probeUtc(market, ref);
   // A length the exchange lacks is fetched shorter and folded by the chart.
-  const at = source === 'archive' ? base : restInterval(ref.venue, interval);
+  const at = source === 'archive' ? base : marketInterval(market, ref.venue, interval);
   const key = `${market}|${at}`;
   let series = registry.get(key);
   if (!series) {

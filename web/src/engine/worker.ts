@@ -11,7 +11,7 @@ import { MARK_ORDER, markIndex } from '../lib/mark-order';
 import { parseMarket, ratioLegs, type MarketRef } from '../lib/markets';
 import { concatCols, emptyCols, formingRows, intervalMs, lowerBound, openSeries, sliceCols, type CandleSeries, type Cols, type Series } from './history';
 import type { RatioSeries } from './ratio';
-import { restInterval } from './intervals';
+import { lacksUtcOf, marketInterval } from './intervals';
 import { nativeOf } from '../lib/native';
 import type { CallName, Calls, ChartEvent, ChartStatus, DailyBars, FromWorker, IndicatorValues, PointerKind, StudyDefinition, ToWorker } from './protocol';
 import { followLiquidations } from '../lib/liquidation-feed';
@@ -24,6 +24,12 @@ import { onWake } from './reach';
 const CHART_BARS = 1_500;
 /** Cap on the base bars behind them — 1,500 bars of 30m is 45,000 minutes. */
 const MAX_BASE_BARS = 60_000;
+/**
+ * Fewer where the exchange's bars are folded into the chart's: a week or a
+ * month of Bitget's stock tokens, read as 4h bars, would otherwise page back
+ * through some three hundred answers and a phone's worth of data.
+ */
+const MAX_FOLDED_BARS = 12_000;
 /** Timeframes the exchange does not stream (2D, 3M…) pick up new bars this often. */
 const POLL_MS = 5 * 60_000;
 /** How long a GPU context the browser took is waited for before the chart says so. */
@@ -108,7 +114,9 @@ const baseBars = (series: CandleSeries, tf: TfInfo, bars: number): number =>
   // A ratio is folded to the chart's bars already, and asks each side for its own.
   series.source === 'ratio'
     ? bars
-    : Math.min(MAX_BASE_BARS, series.source === 'archive' ? Math.ceil((bars * tf.barMs) / tf.baseMs) : Math.ceil((bars * tf.barMs) / intervalMs(series.interval)));
+    : series.source === 'archive'
+      ? Math.min(MAX_BASE_BARS, Math.ceil((bars * tf.barMs) / tf.baseMs))
+      : Math.min(intervalMs(series.interval) < tf.barMs ? MAX_FOLDED_BARS : MAX_BASE_BARS, Math.ceil((bars * tf.barMs) / intervalMs(series.interval)));
 
 /** A chart's candles: one market's series, or one market priced in another. */
 async function openChartSeries(market: string, tf: TfInfo): Promise<CandleSeries> {
@@ -470,7 +478,7 @@ class Slot {
    */
   private liveEarly(tf: TfInfo): boolean {
     const ref = parseMarket(this.market);
-    return !ratioLegs(this.market) && ref !== null && tf.live !== null && restInterval(ref.venue, tf.live) === tf.live;
+    return !ratioLegs(this.market) && ref !== null && tf.live !== null && marketInterval(this.market, ref.venue, tf.live) === tf.live;
   }
 
   /**
@@ -485,7 +493,7 @@ class Slot {
     if (!ref || !tf.live || ratioLegs(this.market)) return;
     const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
     const start = barStart(this.timeframe, Date.now());
-    void formingRows(this.market, restInterval(ref.venue, tf.live), start)
+    void formingRows(this.market, marketInterval(this.market, ref.venue, tf.live), start)
       .then((rows) => {
         if (gen !== this.gen || rows.length === 0 || feed.bar() !== null) return;
         const high = Math.max(...rows.map((r) => r[2]!));
@@ -570,7 +578,7 @@ class Slot {
     }
     const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
     // An exchange without this length streams a shorter one, combined here into the chart's bar.
-    const streamed = restInterval(ref.venue, tf.live);
+    const streamed = marketInterval(this.market, ref.venue, tf.live);
     const combine = streamed !== tf.live ? combiner(this.timeframe, this.series?.cols ?? emptyCols()) : null;
     const listener: StreamListener = {
       message: (m: StreamMsg) => {
@@ -598,7 +606,7 @@ class Slot {
     });
     void nativeOf(this.market).then((symbol) => {
       if (off || gen !== this.gen) return;
-      this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed }, listener));
+      this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed, quiet: lacksUtcOf(this.market) }, listener));
       // Binance's kline publishes about once a second; trades fill in between.
       if (ref.venue.startsWith('binance')) this.cleanup.push(hub.subscribe(ref.venue, { kind: 'trades', symbol }, listener));
     });
@@ -618,7 +626,7 @@ class Slot {
     });
     legs.forEach((leg, i) => {
       const ref = parseMarket(leg) as MarketRef;
-      const streamed = restInterval(ref.venue, live);
+      const streamed = marketInterval(leg, ref.venue, live);
       const combine = streamed !== live ? combiner(this.timeframe, series.legs[i]!.cols) : null;
       const listener: StreamListener = {
         message: (m: StreamMsg) => {
@@ -637,7 +645,7 @@ class Slot {
       };
       void nativeOf(leg).then((symbol) => {
         if (off || gen !== this.gen) return;
-        this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed }, listener));
+        this.cleanup.push(hub.subscribe(ref.venue, { kind: 'kline', symbol, interval: streamed, quiet: lacksUtcOf(leg) }, listener));
       });
     });
   }

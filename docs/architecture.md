@@ -27,9 +27,23 @@ page never drops a frame of the chart.
 2. An archive series loads the newest partitions until it holds enough base bars
    for 1,500 chart bars, then asks the exchange for bars newer than the last
    stored one. An exchange series pages back through the REST API instead,
-   asking for no more than a screenful first (600 bars) and the rest behind it.
-   A market is fetched before it is chosen: a watchlist row under the pointer,
-   or the result highlighted in the symbol search.
+   asking for no more than a screenful first (600 bars) and the rest behind it,
+   a chunk at a time with a pause between, each queued behind whatever was
+   asked meanwhile — another chart's first screen waits on one chunk, not on
+   the whole history. Requests to Bitget are spaced 70 ms apart, under its
+   twenty a second. A series asked for again takes in the bars that closed
+   since it was loaded before it is drawn. A market is fetched before it is
+   chosen: a watchlist row under the pointer, or the result highlighted in the
+   symbol search.
+
+   Bitget's stock tokens ("rMU", "rSPY" and the like, some with the stock's
+   history back to 2011) refuse its UTC day, week and month, code 48001, and
+   their days at UTC+8 start mid-session. The first time a Bitget market is
+   opened, one bar of its UTC day is asked for (`probeUtc`); refused, its 6h,
+   12h, D, W and M are read and streamed as 1h or 4h bars and folded on UTC
+   boundaries (`marketInterval`), at most 12,000 of them behind a chart. Their
+   candles stop between trading hours, so their stream is quiet: Bitget taking
+   the subscription is enough for it to be live.
 3. `fold_candles` builds the chart timeframe from the base bars — 4h from 1h, a
    Monday-aligned week from days — and drops a bucket that has not closed.
 4. The kline stream (plus aggregate trades on Binance) feeds `LiveFeedEngine`,

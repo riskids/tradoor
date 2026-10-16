@@ -27,3 +27,25 @@ export function restInterval(venue: Venue, interval: string): string {
   if (!names || names[interval]) return interval;
   return FALLBACK[interval]?.find((i) => names[i]) ?? interval;
 }
+
+/** The lengths Bitget names by the UTC day, week or month. */
+const UTC_NAMED = new Set(['6h', '12h', '1d', '1w', '1M']);
+/**
+ * Markets that refuse those names — Bitget's stock tokens ("rMU" and the
+ * like) have no UTC day, week or month, and the days it does give them start
+ * at 16:00 UTC — as found the first time one is asked (`history.ts`).
+ */
+const LACKS_UTC = new Set<string>();
+
+export function lacksUtc(market: string): void {
+  LACKS_UTC.add(market);
+}
+
+/** One of those markets: a stock token, whose candles also stop between its trading hours. */
+export const lacksUtcOf = (market: string): boolean => LACKS_UTC.has(market);
+
+/** As `restInterval`, for one market: one without UTC lengths reads them as 4h bars (1h for 6h), folded on UTC boundaries. */
+export function marketInterval(market: string, venue: Venue, interval: string): string {
+  if (LACKS_UTC.has(market) && UTC_NAMED.has(interval)) return interval === '6h' ? '1h' : '4h';
+  return restInterval(venue, interval);
+}

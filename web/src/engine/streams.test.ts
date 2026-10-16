@@ -163,6 +163,20 @@ test('a socket of liquidations only is live on the exchange\'s answer, not on a 
   stop();
 });
 
+test('a quiet market\'s candles are live on the exchange\'s answer', async () => {
+  const states: string[] = [];
+  FakeSocket.opened = [];
+  (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeSocket;
+  // A stock token outside its hours pushes no candle at all.
+  const stop = new StreamHub().subscribe('binance-perp', { kind: 'kline', symbol: 'BTCUSDT', interval: '4h', quiet: true }, { message: () => {}, state: (st) => states.push(st) });
+  await tick();
+  const socket = FakeSocket.opened.at(-1);
+  assert(socket, 'the hub opened no socket');
+  socket.onmessage?.({ data: JSON.stringify({ result: null, id: 1 }) });
+  assertEquals(states.at(-1), 'live', 'answered, so connected, though nothing trades');
+  stop();
+});
+
 test('a candle socket still needs data before it counts as live', async () => {
   const states: string[] = [];
   FakeSocket.opened = [];

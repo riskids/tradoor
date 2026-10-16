@@ -11,7 +11,9 @@ export type SocketState = 'connecting' | 'live' | 'stalled' | 'retrying';
 
 /** `symbol` is the exchange's own name for the market (see lib/native). */
 export type StreamSpec =
-  | { kind: 'kline'; symbol: string; interval: string }
+  /// `quiet`: a market that may push nothing for hours — Bitget's stock tokens
+  /// outside their trading hours — so the exchange's answer is enough to be live.
+  | { kind: 'kline'; symbol: string; interval: string; quiet?: boolean }
   | { kind: 'trades'; symbol: string }
   | { kind: 'ticker'; symbol: string }
   /// Positions the exchange closed out — perpetuals only.
@@ -594,6 +596,6 @@ export class StreamHub {
       listener.state('stalled', false);
       return () => {};
     }
-    return conn.add(topic, listener, spec.kind === 'liquidations');
+    return conn.add(topic, listener, spec.kind === 'liquidations' || (spec.kind === 'kline' && spec.quiet === true));
   }
 }
