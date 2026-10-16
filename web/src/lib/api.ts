@@ -221,6 +221,8 @@ export interface FlowCoin {
   coin: string;
   /** When it lapses; null for one recorded until it is stopped, as BTC always is. */
   until: number | null;
+  /** One of those always recorded — BTC and ETH — that nobody stops. */
+  fixed?: boolean;
 }
 
 /** How long a coin is recorded: a day, a week, or until it is stopped. */

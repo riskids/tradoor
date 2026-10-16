@@ -11,7 +11,7 @@
 //! filling up as you watch. The crossings are per reader: the threshold is
 //! theirs to set, and only the markets they asked for reach their Telegram.
 //!
-//! BTC is always followed. Another coin is followed once one of the server's
+//! BTC and ETH are always followed. Another coin is followed once one of the server's
 //! admins asks for it from the panel, on each exchange BTC is read from that
 //! lists it, for a day or a week from when they last asked, or until they stop
 //! it; then it lapses and its streams are closed, so what the server reads
@@ -58,6 +58,14 @@ const MARKETS: [(&str, f64); 11] = [
 ];
 /// The coin always followed; `MARKETS` are its markets.
 const ALWAYS: &str = "BTC";
+/// Coins followed always after BTC, on whatever lists them, in this order
+/// before any an admin adds — and not to be stopped or counted among those.
+const PERMANENT: [&str; 1] = ["ETH"];
+
+/// BTC, or one of the coins followed with it always.
+fn permanent(coin: &str) -> bool {
+    coin == ALWAYS || PERMANENT.contains(&coin)
+}
 /// How long a coin asked for is followed before it lapses: a day, unless a
 /// week or no end is asked for (`Span`).
 const FOLLOW_MS: i64 = 24 * 3_600_000;
@@ -134,12 +142,14 @@ fn notional(venue: Venue, price: f64, qty: f64, contract: f64) -> f64 {
     if venue == Venue::OkxPerp { price * qty * contract } else { price * qty }
 }
 
-/// A coin followed besides BTC: until when — none until it is stopped — and on which markets.
+/// A coin followed besides BTC: until when — none until it is stopped — on
+/// which markets, and whether it is one of those followed always.
 #[derive(Clone, Debug)]
 struct Followed {
     coin: String,
     ends_at: Option<i64>,
     markets: Vec<String>,
+    fixed: bool,
 }
 
 /// What one reader wants of one market.
@@ -257,15 +267,18 @@ impl Flow {
     async fn sync(self: &Arc<Self>) -> anyhow::Result<()> {
         let rows = self.pool.get().await?.query("SELECT coin, ends_at FROM flow_coin WHERE ends_at IS NULL OR ends_at > $1 ORDER BY added_at", &[&now_ms()]).await?;
         let held = self.coins.lock().map(|c| c.clone()).unwrap_or_default();
+        // The coins followed always first, then those asked for, in the order they were.
+        let asked = rows.iter().map(|r| (r.get::<_, String>(0), r.get::<_, Option<i64>>(1))).filter(|(coin, _)| !permanent(coin));
+        let wanted = PERMANENT.iter().map(|c| (c.to_string(), None)).chain(asked).collect::<Vec<_>>();
         let mut coins = Vec::new();
-        for row in rows {
-            let (coin, ends_at): (String, Option<i64>) = (row.get(0), row.get(1));
+        for (coin, ends_at) in wanted {
             // Where a coin trades is asked of the catalogue once, not every pass.
             let markets = match held.iter().find(|f| f.coin == coin && !f.markets.is_empty()) {
                 Some(f) => f.markets.clone(),
                 None => coin_markets(&self.catalog, &coin).await,
             };
-            coins.push(Followed { coin, ends_at, markets });
+            let fixed = permanent(&coin);
+            coins.push(Followed { coin, ends_at, markets, fixed });
         }
         if let Ok(mut held) = self.coins.lock() {
             *held = coins;
@@ -657,9 +670,9 @@ pub async fn state(State(state): State<AppState>, headers: HeaderMap, Query(q): 
             })
         })
         .collect::<Vec<_>>();
-    let mut coins = vec![json!({ "coin": ALWAYS, "until": null })];
+    let mut coins = vec![json!({ "coin": ALWAYS, "until": null, "fixed": true })];
     if let Ok(held) = flow.coins.lock() {
-        coins.extend(held.iter().filter(|c| !c.markets.is_empty()).map(|c| json!({ "coin": c.coin, "until": c.ends_at })));
+        coins.extend(held.iter().filter(|c| !c.markets.is_empty()).map(|c| json!({ "coin": c.coin, "until": c.ends_at, "fixed": c.fixed })));
     }
     Ok(Json(json!({
         "watching": true,
@@ -687,8 +700,8 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
     if !valid_coin(&coin) {
         return Err(ApiError::bad_request("a coin is its ticker less the quote, like ETH or 1000PEPE"));
     }
-    if coin == ALWAYS {
-        return Err(ApiError::bad_request("BTC is always followed"));
+    if permanent(&coin) {
+        return Err(ApiError::bad_request(format!("{coin} is always followed")));
     }
     let now = now_ms();
     let ends_at = match q.span.as_deref().unwrap_or("day") {
@@ -702,7 +715,12 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
         return Err(ApiError::bad_request(format!("none of the exchanges flow is read from lists {coin}")));
     }
     let client = state.pool.get().await?;
-    let others: i64 = client.query_one("SELECT count(*) FROM flow_coin WHERE (ends_at IS NULL OR ends_at > $1) AND coin <> $2", &[&now, &coin]).await?.get(0);
+    // Those followed always are no admin's to count, whatever an older row says.
+    let fixed = PERMANENT.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+    let others: i64 = client
+        .query_one("SELECT count(*) FROM flow_coin WHERE (ends_at IS NULL OR ends_at > $1) AND coin <> $2 AND coin <> ALL($3)", &[&now, &coin, &fixed])
+        .await?
+        .get(0);
     if others >= MAX_COINS {
         return Err(ApiError::bad_request(format!("{MAX_COINS} coins are followed already — stop one first")));
     }
@@ -726,8 +744,8 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
 pub async fn unfollow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>) -> ApiResult<Json<Value>> {
     let flow = admin(&state, &headers)?;
     let coin = coin.trim().to_ascii_uppercase();
-    if coin == ALWAYS {
-        return Err(ApiError::bad_request("BTC is always followed"));
+    if permanent(&coin) {
+        return Err(ApiError::bad_request(format!("{coin} is always followed")));
     }
     state.pool.get().await?.execute("DELETE FROM flow_coin WHERE coin = $1", &[&coin]).await?;
     if let Err(e) = flow.sync().await {

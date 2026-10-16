@@ -172,8 +172,10 @@ eye: the minutes themselves, so they show at any timeframe, and hovering one
 names the money, the minute and the price. After a crossing a market stays quiet until
 its flow falls back to half the threshold, so one push does not ring over.
 
-BTC is always followed. An admin — a browser id listed in `TRADOOR_ADMINS` —
-adds another coin from the panel's `+`, and the server follows it on each of
+BTC and ETH are always followed, in that order (`PERMANENT` in `flow`), ETH on
+each exchange that lists it as BTC's markets are quoted, its threshold found as
+an added coin's is; neither can be stopped nor counts among the ten. An admin —
+a browser id listed in `TRADOOR_ADMINS` — adds another coin from the panel's `+`, and the server follows it on each of
 those exchanges that lists it, quoted as BTC is there, for a day or a week from
 when it was last asked for, or until it is stopped (`flow_coin.ends_at` empty);
 Keep 24h, 7d or Always asks again, Stop or the chip's × ends it, and at the end

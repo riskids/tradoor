@@ -3,7 +3,7 @@
  * market the server follows one coin on, with the minutes that ran hard enough
  * to be worth a word beneath them.
  *
- * BTC is always followed. The server's admins add another coin from here, and
+ * BTC and ETH are always followed. The server's admins add another coin from here, and
  * the server records it for a day or a week from when they last asked, or for
  * as long as they leave it, until they stop it with the chip's ×; anyone can
  * read the coins being recorded, and drag the chips into the order they like.
@@ -42,7 +42,9 @@ const left = (until: number, now: number): string => {
 const lapses = (until: number, now: number): string => (until - now > 86_400_000 ? formatDateTime(until).slice(5, 16) : formatClock(until));
 /** `ETH` from `eth` or `ETHUSDT`: a coin as the server names it. */
 const coinFrom = (text: string): string => text.trim().toUpperCase().replace(/^(.+?)(USDT|USDC|USD)$/, '$1');
-const ALWAYS: FlowCoin = { coin: 'BTC', until: null };
+const ALWAYS: FlowCoin = { coin: 'BTC', until: null, fixed: true };
+/** Recorded always, nobody's to stop: BTC and ETH, as the server says. */
+const fixed = (c: FlowCoin): boolean => c.fixed === true || c.coin === ALWAYS.coin;
 /** How long an admin can have a coin recorded, as the buttons and the notice say it. */
 const SPANS: { span: FlowSpan; label: string; told: string }[] = [
   { span: 'day', label: '24h', told: 'for 24 hours' },
@@ -101,7 +103,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
     const rank = (c: FlowCoin) => (order.includes(c.coin) ? order.indexOf(c.coin) : order.length + list.indexOf(c));
     return [...list].sort((a, b) => rank(a) - rank(b));
   };
-  const recording = () => coins().find((c) => c.coin === shown() && c.coin !== ALWAYS.coin);
+  const recording = () => coins().find((c) => c.coin === shown() && !fixed(c));
   const choose = (name: string) => patchPanel(props.panel.id, { coin: name });
 
   // Dragging a chip along the toolbar: where it would land, as an index among the chips.
@@ -225,17 +227,17 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
                 <button
                   class="tb fl-coin"
                   classList={{ on: c.coin === shown() }}
-                  data-tip={c.until !== null ? `Recorded until ${lapses(c.until, now())} · drag to reorder` : c.coin === ALWAYS.coin ? 'Always recorded · drag to reorder' : 'Recorded until it is stopped · drag to reorder'}
+                  data-tip={c.until !== null ? `Recorded until ${lapses(c.until, now())} · drag to reorder` : fixed(c) ? 'Always recorded · drag to reorder' : 'Recorded until it is stopped · drag to reorder'}
                   onClick={() => {
                     if (performance.now() - draggedAt > 300) choose(c.coin);
                   }}
                 >
                   {c.coin}
-                  <Show when={c.until} fallback={c.coin === ALWAYS.coin ? null : <span class="left">∞</span>}>
+                  <Show when={c.until} fallback={fixed(c) ? null : <span class="left">∞</span>}>
                     {(until) => <span class="left">{left(until(), now())}</span>}
                   </Show>
                 </button>
-                <Show when={state()?.admin && c.coin !== ALWAYS.coin}>
+                <Show when={state()?.admin && !fixed(c)}>
                   <button class="x" aria-label={`Stop recording ${c.coin}`} data-tip={`Stop recording ${c.coin}`} onClick={() => void stop(c.coin)}>
                     <Icon name="close" size={9} stroke={2.4} />
                   </button>
