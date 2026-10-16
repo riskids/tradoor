@@ -46,7 +46,12 @@ pub fn parse_products(venue: Venue, instruments: &str, tickers: Option<&str>) ->
             let symbol = i["symbol"].as_str()?;
             let decimals = if perp { i["pricePlace"].as_str() } else { i["pricePrecision"].as_str() }.and_then(|d| d.parse().ok());
             let t = stats.get(symbol);
-            product(venue, i["baseCoin"].as_str()?, i["quoteCoin"].as_str()?, symbol, decimals, t.and_then(|t| num(t.get("quoteVolume"))), t.and_then(|t| num(t.get("lastPr"))), t.and_then(|t| num(t.get("change24h"))).map(|c| c * 100.0))
+            // Its stock tokens ("rSPY") report the stock's own turnover on its
+            // exchange — twenty billion dollars a day — not what trades on
+            // Bitget, and topped every list sorted by it. No figure beats that one.
+            let stock = i["areaSymbol"] == "yes";
+            let volume = t.and_then(|t| num(t.get("quoteVolume"))).filter(|_| !stock);
+            product(venue, i["baseCoin"].as_str()?, i["quoteCoin"].as_str()?, symbol, decimals, volume, t.and_then(|t| num(t.get("lastPr"))), t.and_then(|t| num(t.get("change24h"))).map(|c| c * 100.0))
         })
         .collect();
     Ok(unique(list))
@@ -69,5 +74,20 @@ mod tests {
         assert!((p[0].change_pct.unwrap() - 1.182).abs() < 1e-9);
         let spot = r#"{"code":"00000","data":[{"symbol":"BTCUSDT","baseCoin":"BTC","quoteCoin":"USDT","pricePrecision":"2","status":"online"},{"symbol":"OLDUSDT","baseCoin":"OLD","quoteCoin":"USDT","pricePrecision":"2","status":"offline"}]}"#;
         assert_eq!(parse_products(Venue::BitgetSpot, spot, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stock_token_has_no_turnover_of_its_own() {
+        let spot = r#"{"code":"00000","data":[
+            {"symbol":"RSPYUSDT","baseCoin":"rSPY","quoteCoin":"USDT","pricePrecision":"2","status":"online","areaSymbol":"yes"},
+            {"symbol":"BTCUSDT","baseCoin":"BTC","quoteCoin":"USDT","pricePrecision":"2","status":"online","areaSymbol":"no"}]}"#;
+        let tickers = r#"{"code":"00000","data":[
+            {"symbol":"RSPYUSDT","lastPr":"773.17","change24h":"0.0077","quoteVolume":"20051277094.0366"},
+            {"symbol":"BTCUSDT","lastPr":"82106.86","change24h":"0.01","quoteVolume":"316840328.28"}]}"#;
+        let p = parse_products(Venue::BitgetSpot, spot, Some(tickers)).unwrap();
+        let of = |s: &str| p.iter().find(|p| p.symbol == s).unwrap();
+        assert_eq!(of("RSPYUSDT").quote_volume_24h, None, "the stock's own turnover is not Bitget's");
+        assert_eq!(of("RSPYUSDT").last_price, Some(773.17));
+        assert!(of("BTCUSDT").quote_volume_24h.is_some());
     }
 }

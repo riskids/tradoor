@@ -9,49 +9,15 @@ import { catalog, errorText, type Product } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { ExchangeLogo, exchangeOfVenue, LIVE_EXCHANGES, type ExchangeId } from '../lib/exchanges';
 import { isChartMarket, isMarket, ratioOf, venueLabel } from '../lib/markets';
+import { popularity, rank, type Kind, type Sort } from '../lib/symbol-rank';
 
-type Kind = 'all' | 'perp' | 'spot';
+const EXCHANGE_IDS = LIVE_EXCHANGES.map((e) => e.id);
 
-const DOLLARS = new Set(['USDT', 'USDC', 'USD', 'FDUSD', 'BUSD']);
-
-/** Exact symbol, then base, then prefixes, then substrings; ties by 24h turnover.
- *  Words like "bybit" or "perp" in the query filter instead of matching, and
- *  TradingView's spelling works too: `BYBIT:XPLUSDT.P` is Bybit's perpetual. */
-function rank(products: readonly Product[], query: string, kindFilter: Kind, exchangeFilter: ExchangeId | null): Product[] {
-  let exchange: string | null = exchangeFilter;
-  let kind = kindFilter;
-  const terms: string[] = [];
-  for (let word of query.toUpperCase().split(/[\s/:-]+/).filter(Boolean)) {
-    if (word.endsWith('.P')) {
-      kind = 'perp';
-      word = word.slice(0, -2);
-    }
-    if (LIVE_EXCHANGES.some((e) => e.id === word.toLowerCase())) exchange = word.toLowerCase();
-    else if (word === 'PERP' || word === 'SPOT') kind = word.toLowerCase() as Kind;
-    // TradingView's index and other prefixes name no exchange of ours.
-    else if (word !== 'CRYPTO' && word !== 'INDEX') terms.push(word.replace(/[^A-Z0-9]/g, ''));
-  }
-  const needle = terms.join('');
-  const scored: [number, number, Product][] = [];
-  for (const p of products) {
-    if (kind !== 'all' && p.kind !== kind) continue;
-    if (exchange && !p.venue.startsWith(exchange)) continue;
-    let score = 1;
-    if (needle) {
-      if (p.symbol === needle) score = 100;
-      else if (p.base === needle) score = 90;
-      else if (p.symbol.startsWith(needle)) score = 70;
-      else if (p.base.startsWith(needle)) score = 60;
-      else if (p.symbol.includes(needle)) score = 30;
-      else continue;
-    }
-    // Turnover is counted in the quote: a BTC/IDR market's runs to trillions
-    // of rupiah, so among equals a dollar-quoted market comes first.
-    scored.push([score + (DOLLARS.has(p.quote) ? 0.5 : 0), p.quoteVolume24h ?? 0, p]);
-  }
-  scored.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
-  return scored.slice(0, 100).map((s) => s[2]);
-}
+const SORTS: { id: Sort; label: string; tip: string }[] = [
+  { id: 'popular', label: 'POPULAR', tip: 'The coins traded most across every exchange first' },
+  { id: 'gainers', label: 'GAINERS', tip: 'Up most in 24 hours — dollar markets turning over a million or more, one per coin' },
+  { id: 'losers', label: 'LOSERS', tip: 'Down most in 24 hours — dollar markets turning over a million or more, one per coin' },
+];
 
 /** A quote currency on its own: `BTC/USDT` is the pair being asked for, not BTC priced in USDT. */
 const QUOTES = new Set(['USDT', 'USDC', 'USD', 'BUSD', 'FDUSD', 'TUSD', 'DAI', 'EUR']);
@@ -67,7 +33,7 @@ function ratio(products: readonly Product[], query: string): [Product, Product] 
   const pick = (side: string) => {
     const bare = side.trim().toUpperCase().replace(/^[A-Z]+:/, '').replace(/\.P$/, '');
     if (bare.length < 2 || QUOTES.has(bare)) return null;
-    return rank(products, side, 'all', null)[0] ?? null;
+    return rank(products, side, 'all', null, 'popular', popularity(products), EXCHANGE_IDS)[0] ?? null;
   };
   const a = pick(sides[0]!);
   const b = pick(sides[1]!);
@@ -92,10 +58,12 @@ export function SymbolSearch(props: {
   const [query, setQuery] = createSignal(props.initial);
   const [kind, setKind] = createSignal<Kind>('all');
   const [exchange, setExchange] = createSignal<ExchangeId | null>(null);
+  const [sort, setSort] = createSignal<Sort>('popular');
   const [cursor, setCursor] = createSignal(0);
   const [markets] = createResource(() => catalog());
   const products = () => (markets.state === 'ready' ? markets()!.products : []);
-  const rows = createMemo(() => rank(products(), query(), kind(), exchange()));
+  const pop = createMemo(() => popularity(products()));
+  const rows = createMemo(() => rank(products(), query(), kind(), exchange(), sort(), pop(), EXCHANGE_IDS));
   /** The ratio the query spells, first in the list when there is one. */
   const pair = createMemo(() => (props.ratios ? ratio(products(), query()) : null));
   const first = () => (pair() ? 1 : 0);
@@ -116,7 +84,7 @@ export function SymbolSearch(props: {
     // Caret at the end, never select-all: the next keystroke must extend the query.
     input.setSelectionRange(input.value.length, input.value.length);
   });
-  createEffect(on([query, kind, exchange], () => setCursor(0), { defer: true }));
+  createEffect(on([query, kind, exchange, sort], () => setCursor(0), { defer: true }));
   createEffect(() => {
     cursor();
     list.querySelector('[data-cur]')?.scrollIntoView({ block: 'nearest' });
@@ -186,6 +154,14 @@ export function SymbolSearch(props: {
               {(k) => (
                 <button classList={{ on: kind() === k }} onClick={() => setKind(k)}>
                   {k.toUpperCase()}
+                </button>
+              )}
+            </For>
+            <span class="sep-v" />
+            <For each={SORTS}>
+              {(o) => (
+                <button classList={{ on: sort() === o.id }} data-tip={o.tip} onClick={() => setSort(o.id)}>
+                  {o.label}
                 </button>
               )}
             </For>

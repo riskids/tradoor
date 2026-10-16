@@ -441,6 +441,16 @@ market's bars under the new one's name. The engine's status names the market
 it holds, so every two seconds a chart that does not follow is told again; and
 an error nobody caught shows as a notice, a phone having no console to read it in.
 
+The symbol search ranks what a query matches — exact symbol, then base, then
+prefix, then anywhere — and among equals by how much the coin trades on every
+exchange together, its dollar markets summed, then by the market's own
+turnover: "SO" is SOL's markets before SONIC (`lib/symbol-rank.ts`). With
+nothing typed it lists each coin once, at its busiest market, the most traded
+first; Gainers and Losers list the day's biggest moves the same way, dollar
+markets turning over a million or more. Stablecoins against each other are
+left out of those lists, and found when typed. Bitget's stock tokens report the
+stock's own turnover, billions a day; the catalogue keeps none for them.
+
 A chart's market may be a ratio, `venue:A/venue:B` — XPL on Bybit priced in BTC
 on Binance — offered by the symbol search when a query has a stroke between two
 markets (TradingView's `BYBIT:XPLUSDT.P/BINANCE:BTCUSDT` works too). The worker
