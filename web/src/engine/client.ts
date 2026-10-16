@@ -18,6 +18,12 @@ export interface SlotHandlers {
 let worker: Worker | null = null;
 /** When the worker last said anything, for `?debug`'s line. */
 export let heardAt = 0;
+/** `?debug`: this module's own name, how many times it has run in the page, and the workers it made — more than one each is a second engine. */
+const CLIENT = Math.random().toString(36).slice(2, 6);
+const runs = globalThis as { __tradoorClients?: number };
+runs.__tradoorClients = (runs.__tradoorClients ?? 0) + 1;
+let workersMade = 0;
+export const debugClient = (): string => `client ${CLIENT} ran ${runs.__tradoorClients}× made ${workersMade}`;
 let failure: string | null = null;
 const failureListeners = new Set<(message: string) => void>();
 const slots = new Map<string, SlotHandlers>();
@@ -73,6 +79,7 @@ function dispatch(msg: FromWorker): void {
 function engine(): Worker {
   if (worker) return worker;
   worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'tradoor-engine' });
+  workersMade += 1;
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     heardAt = Date.now();
     dispatch(e.data);

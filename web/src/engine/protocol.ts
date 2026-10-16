@@ -145,7 +145,7 @@ export interface Calls {
   /** Fetch a market's history before a chart asks for it. */
   prefetch: { args: { market: string; timeframe: string }; result: null };
   /** `?debug`: whether the worker hears the page — how many messages it has had, and the market a chart was last asked for. */
-  ping: { args: { id: string }; result: { got: number; slots: number; asked: string | null } };
+  ping: { args: { id: string }; result: { worker: string; up: number; got: number; slots: number; asked: string | null } };
 }
 
 export type CallName = keyof Calls;

@@ -878,7 +878,7 @@ const calls: Handlers = {
   daily: dailyCall,
   capture: captureCall,
   prefetch: prefetchCall,
-  ping: ({ id }) => ({ got, slots: slots.size, asked: slots.get(id)?.asked ?? null }),
+  ping: ({ id }) => ({ worker: WORKER, up: Math.round((Date.now() - STARTED) / 1000), got, slots: slots.size, asked: slots.get(id)?.asked ?? null }),
 };
 
 /**
@@ -1103,8 +1103,10 @@ function handle(msg: ToWorker): void {
 let ready = false;
 const queued: ToWorker[] = [];
 
-/** Messages from the page so far, for `?debug`. */
+/** Messages from the page so far, and which worker this is and since when, for `?debug`. */
 let got = 0;
+const WORKER = Math.random().toString(36).slice(2, 6);
+const STARTED = Date.now();
 
 scope.onmessage = (e) => {
   got += 1;

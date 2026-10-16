@@ -5,7 +5,7 @@
  */
 import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
-import { call, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
+import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
@@ -455,7 +455,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
       call('ping', { id: sid }).then(
         (r) => {
           answered = true;
-          setPing(`ping ${Date.now() - sentAt}ms · got ${r.got} · asked ${r.asked ?? '–'} · slots ${r.slots}`);
+          setPing(`ping ${Date.now() - sentAt}ms · worker ${r.worker} up ${r.up}s · got ${r.got} · asked ${r.asked ?? '–'} · slots ${r.slots} · ${debugClient()} · canvases ${document.querySelectorAll('canvas').length}`);
         },
         (e) => setPing(`ping failed: ${errorText(e)}`),
       );
