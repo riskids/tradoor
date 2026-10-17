@@ -596,8 +596,12 @@ impl Indices {
     }
 }
 
+/// An index's bars may be kept a little: they move once a minute at most, so
+/// fifteen seconds at Cloudflare's edge (a Cache Rule makes `/api/index/`
+/// cacheable there) answers the visitors near it without the trip here, and a
+/// browser polling every fifteen asks afresh each time.
 fn json(body: Bytes) -> Response {
-    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+    ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=10, s-maxage=15")], body).into_response()
 }
 
 #[derive(Deserialize)]
