@@ -182,67 +182,93 @@ export const PROTOCOLS: Record<string, () => Protocol> = {
 
 export const lighterResolution = (interval: string): string => INTERVALS['lighter-perp']?.[interval] ?? interval;
 
-export const lighterPoller = (): Poller => new Poller(lighterBars, 3_000);
+export const lighterPoller = (): Poller => new Poller(lighterRead, 3_000);
 /** The server reads its sources every minute or so; a quarter of that is soon enough. */
-export const indexPoller = (): Poller => new Poller(indexBars, 15_000);
+export const indexPoller = (): Poller => new Poller(indexRead, 15_000);
 
 /** A bar as a poll reads it: `[open time, open, high, low, close, volume]`. */
 type Bar = [number, number, number, number, number, number];
+/** Each asked-for key's last bars, the forming one last, by `id|resolution`. */
+type Read = (keys: string[]) => Promise<Map<string, Bar[]>>;
 
-/** Lighter's last two bars of a length, the forming one last. */
-async function lighterBars(id: string, resolution: string): Promise<Bar[]> {
+/** Lighter: a market at a time, as its API asks; one that fails is left out. */
+const lighterRead: Read = async (keys) => {
   const now = Date.now();
-  const res = await fetch(`https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=${id}&resolution=${resolution}&start_timestamp=${now - 3 * 86_400_000}&end_timestamp=${now}&count_back=2`);
-  const body = (await res.json()) as { c?: { t: number; o: number; h: number; l: number; c: number; v: number }[] };
-  return (body.c ?? []).slice(-2).map((k) => [k.t, k.o, k.h, k.l, k.c, k.v]);
-}
+  const got = await Promise.allSettled(
+    keys.map(async (key): Promise<[string, Bar[]]> => {
+      const [id, resolution] = key.split('|');
+      const res = await fetch(`https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=${id}&resolution=${resolution}&start_timestamp=${now - 3 * 86_400_000}&end_timestamp=${now}&count_back=2`);
+      const body = (await res.json()) as { c?: { t: number; o: number; h: number; l: number; c: number; v: number }[] };
+      return [key, (body.c ?? []).slice(-2).map((k) => [k.t, k.o, k.h, k.l, k.c, k.v])];
+    }),
+  );
+  return new Map(got.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])));
+};
 
-/** An index's last two bars from the tradoor server, which works them out. */
-async function indexBars(symbol: string, interval: string): Promise<Bar[]> {
-  const res = await fetch(`/api/index/candles?symbol=${symbol}&interval=${interval}&limit=2`);
-  if (!res.ok) throw new Error(`index ${res.status}`);
-  return (await res.json()) as Bar[];
-}
+/** The indices this server works out: every one of a length in one request. */
+const indexRead: Read = async (keys) => {
+  const byLength = new Map<string, string[]>();
+  for (const key of keys) {
+    const [symbol, interval] = key.split('|') as [string, string];
+    byLength.set(interval, [...(byLength.get(interval) ?? []), symbol]);
+  }
+  const out = new Map<string, Bar[]>();
+  await Promise.all(
+    [...byLength].map(async ([interval, symbols]) => {
+      const res = await fetch(`/api/index/latest?interval=${interval}&symbols=${symbols.join(',')}`);
+      if (!res.ok) return;
+      for (const [symbol, bars] of Object.entries((await res.json()) as Record<string, Bar[]>)) out.set(`${symbol}|${interval}`, bars);
+    }),
+  );
+  return out;
+};
 
 /**
  * Bars for a venue with no candle stream — Lighter, and the indices this
- * server works out: the forming bar asked for every few seconds. One timer
- * per market and length, however many listen.
+ * server works out: the forming bar asked for every few seconds, every market
+ * and length on one timer, however many listen.
  */
 export class Poller {
-  private readonly topics = new Map<string, { listeners: Set<StreamListener>; timer: ReturnType<typeof setInterval> }>();
+  private readonly topics = new Map<string, Set<StreamListener>>();
+  private timer: ReturnType<typeof setInterval> | undefined;
+  /** Keys added since the last poll: asked for at once, those added together in one go. */
+  private fresh: string[] = [];
 
   constructor(
-    private readonly bars: (id: string, resolution: string) => Promise<Bar[]>,
+    private readonly read: Read,
     private readonly every: number,
   ) {}
 
   add(id: string, resolution: string, listener: StreamListener): () => void {
     const key = `${id}|${resolution}`;
-    let entry = this.topics.get(key);
-    if (!entry) {
-      const listeners = new Set<StreamListener>();
-      const tick = async () => {
-        try {
-          const rows = await this.bars(id, resolution);
-          for (const l of listeners) l.state('live', false);
-          for (const k of rows) for (const l of listeners) l.message({ kind: 'kline', openTime: k[0], open: k[1], high: k[2], low: k[3], close: k[4], volume: k[5], lastTradeId: 0, closed: false });
-        } catch {
-          for (const l of listeners) l.state('retrying', false);
-        }
-      };
-      entry = { listeners, timer: setInterval(() => void tick(), this.every) };
-      this.topics.set(key, entry);
-      void tick();
+    let listeners = this.topics.get(key);
+    if (!listeners) {
+      listeners = new Set();
+      this.topics.set(key, listeners);
+      if (this.fresh.push(key) === 1) setTimeout(() => void this.poll(this.fresh.splice(0)), 0);
     }
-    entry.listeners.add(listener);
+    listeners.add(listener);
     listener.state('connecting', false);
+    this.timer ??= setInterval(() => void this.poll([...this.topics.keys()]), this.every);
     return () => {
-      const e = this.topics.get(key);
-      if (!e || !e.listeners.delete(listener) || e.listeners.size > 0) return;
-      clearInterval(e.timer);
+      const held = this.topics.get(key);
+      if (!held || !held.delete(listener) || held.size > 0) return;
       this.topics.delete(key);
+      if (this.topics.size > 0) return;
+      clearInterval(this.timer);
+      this.timer = undefined;
     };
+  }
+
+  private async poll(keys: string[]): Promise<void> {
+    const got = await this.read(keys).catch(() => new Map<string, Bar[]>());
+    for (const key of keys) {
+      const listeners = this.topics.get(key);
+      const rows = got.get(key);
+      if (!listeners) continue;
+      for (const l of listeners) l.state(rows ? 'live' : 'retrying', false);
+      for (const k of rows ?? []) for (const l of listeners) l.message({ kind: 'kline', openTime: k[0], open: k[1], high: k[2], low: k[3], close: k[4], volume: k[5], lastTradeId: 0, closed: false });
+    }
   }
 }
 

@@ -75,9 +75,12 @@ export async function venueRows(ref: MarketRef, native: string, interval: string
       return inRange((body.c ?? []).map((k) => [k.t, k.o, k.h, k.l, k.c, k.v]), range);
     }
     case 'index': {
-      // Worked out by the tradoor server, and asked of it: never relayed.
-      let url = `/api/index/candles?symbol=${ref.symbol}&interval=${interval}&limit=${limit}&end=${end}`;
+      // Worked out by the tradoor server, and asked of it: never relayed. The
+      // latest bars are asked for without an end, so every chart asks alike
+      // and the server's kept answer serves them all.
+      let url = `/api/index/candles?symbol=${ref.symbol}&interval=${interval}&limit=${limit}`;
       if (range.start !== undefined) url += `&start=${range.start}`;
+      if (range.end !== undefined) url += `&end=${range.end}`;
       const res = await fetch(url);
       const body = (await res.json()) as Row[] | { error?: string };
       if (!Array.isArray(body)) throw new Error(body.error || `the index answered ${res.status}`);

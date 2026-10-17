@@ -108,6 +108,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/health` | `{ok, db}` |
 | `GET /api/markets` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid with trade.xyz's, Kraken, Lighter) with 24h stats and each exchange's own name for it, and the server's own indices, cached 30 minutes |
 | `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
+| `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
@@ -139,7 +140,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
-| `market_cap`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year); the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
+| `market_cap`, `index_hour`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year), and each cap series rolled up by the hour; the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
 | `ingest_run` | recorder and backfill history |
@@ -203,9 +204,19 @@ read hourly, and its delayed quote every minute — the day's own bar until the
 history carries it (`index_bar`), and each new value as a point at the
 quote's New York time (`index_tick`), which its bars shorter than a day are
 drawn from, from when the recording began. A new browser's watchlist lists
-them under Macro, after the coins. A chart or a watchlist row asks for an index's bars like any market's,
-of the server (`/api/index/candles`, never relayed), and its forming bar every
-fifteen seconds (`Poller`). A symbol is `[A-Z0-9_]`, so BTC.D is `BTC_D`,
+them under Macro, after the coins. A chart asks for an index's bars like any
+market's, of the server (`/api/index/candles`, never relayed), and its forming
+bar every fifteen seconds; a page's indices are polled together, each length's
+in one request (`Poller`, `/api/index/latest`).
+
+It is made to answer in the same few milliseconds however long the recording
+grows. Each minute the caps are rolled up into the hour they fall in
+(`index_hour`), so a bar of an hour or longer reads twenty-four rows a day
+rather than every minute — a year of daily bars is some 5 ms, not 150. And an
+answer is kept in memory until the next read moves anything: the many charts
+and watchlists asking for the same latest bars cost the database one query a
+minute between them. An `end` at or past the forming bar asks for the latest,
+so a chart's `end=now` shares that answer too. A symbol is `[A-Z0-9_]`, so BTC.D is `BTC_D`,
 shown and searched with its dot; TradingView's `CRYPTOCAP:` and `TVC:` prefixes
 are read past. Alerts on an index are watched by the page alone.
 

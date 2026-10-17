@@ -14,14 +14,24 @@
 //! hour, and its delayed quote every minute — the day's own bar until the
 //! history carries it (`index_bar`), and each new value as a point
 //! (`index_tick`), from which its bars shorter than a day are drawn.
+//!
+//! Made to answer fast however long the recording grows: the caps are rolled
+//! up by the hour each minute (`index_hour`), so an hour's bars and longer
+//! read those rather than every minute; and the bars a request asks for are
+//! kept in memory until the next read moves anything, so the many watchlists
+//! polling the same latest bars cost the database one query a minute, not one
+//! each — and `latest` answers a whole watchlist's indices in one request.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use axum::body::Bytes;
 use axum::extract::{Query, State};
-use axum::Json;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -51,6 +61,10 @@ const HISTORY_EVERY: u32 = 60;
 const MAX_BARS: i64 = 2000;
 /// Minutes of the coins' worth kept, to pair CoinGecko's next figures with the minute they are of.
 const RECENT: usize = 30;
+/// Answers kept in memory at most; past it they all go, to be asked again.
+const CACHED: usize = 512;
+/// Indices one `latest` request may name.
+const LATEST_AT_MOST: usize = 24;
 
 /// One series: its symbol, what it is, and where its numbers come from.
 struct Series {
@@ -102,6 +116,10 @@ pub struct Indices {
     /// The stablecoins' worth as last read, carried into each row until the next.
     stable: Mutex<Option<f64>>,
     caps: Mutex<Caps>,
+    /// Moves with every write: an answer worked out before it is stale.
+    generation: AtomicU64,
+    /// Answers by request, each with the generation it was worked out in.
+    answers: std::sync::Mutex<HashMap<String, (u64, Bytes)>>,
 }
 
 /// CoinGecko's latest figures with the coins' worth then, and the last
@@ -115,12 +133,23 @@ struct Caps {
 impl Indices {
     pub fn start(pool: deadpool_postgres::Pool, doh: &Arc<Doh>) -> anyhow::Result<Arc<Self>> {
         let http = reqwest::Client::builder().dns_resolver(doh.resolver()).user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(30)).build()?;
-        let indices = Arc::new(Self { pool, http, stable: Mutex::new(None), caps: Mutex::new(Caps::default()) });
+        let indices = Arc::new(Self {
+            pool,
+            http,
+            stable: Mutex::new(None),
+            caps: Mutex::new(Caps::default()),
+            generation: AtomicU64::new(0),
+            answers: std::sync::Mutex::new(HashMap::new()),
+        });
         tokio::spawn(indices.clone().run());
         Ok(indices)
     }
 
     async fn run(self: Arc<Self>) {
+        // The hours recorded before the rollup was kept, or while the server was down.
+        if let Err(e) = self.roll_up(None).await {
+            tracing::warn!(error = %e, "rolling the market cap up by the hour");
+        }
         for read in 0u32.. {
             if read % STABLE_EVERY == 0 {
                 if let Err(e) = self.read_stablecoins().await {
@@ -138,6 +167,7 @@ impl Indices {
             if let Err(e) = self.read_vix_quote().await {
                 tracing::warn!(error = %e, "reading the VIX");
             }
+            self.generation.fetch_add(1, Ordering::Relaxed);
             tokio::time::sleep(READ_EVERY).await;
         }
     }
@@ -198,6 +228,34 @@ impl Indices {
                 &[&at, &cap.total, &cap.btc, &cap.eth, &cap.usdt, &cap.top10, &stable],
             )
             .await?;
+        drop(client);
+        self.roll_up(Some(at.div_euclid(HOUR) * HOUR)).await
+    }
+
+    /// Each cap series' hourly bar from the minutes: the hour opening at
+    /// `hour`, or every hour since the last rolled up.
+    async fn roll_up(&self, hour: Option<i64>) -> anyhow::Result<()> {
+        let client = self.pool.get().await?;
+        let from = match hour {
+            Some(h) => h,
+            None => client.query_one("SELECT coalesce(max(open_time), 0) FROM index_hour", &[]).await?.get(0),
+        };
+        let to = hour.map_or(i64::MAX, |h| h + HOUR);
+        let values = SERIES
+            .iter()
+            .filter_map(|s| match s.source {
+                Source::Cap(expr) => Some(format!("SELECT '{}' AS symbol, at, {expr} AS v FROM market_cap WHERE at >= $1 AND at < $2", s.symbol)),
+                Source::Quoted => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let sql = format!(
+            "INSERT INTO index_hour (symbol, open_time, open, high, low, close)
+             SELECT symbol, (at / {HOUR}) * {HOUR}, (array_agg(v ORDER BY at))[1], max(v), min(v), (array_agg(v ORDER BY at DESC))[1]
+             FROM ({values}) s WHERE v IS NOT NULL GROUP BY symbol, (at / {HOUR}) * {HOUR}
+             ON CONFLICT (symbol, open_time) DO UPDATE SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close"
+        );
+        client.execute(&sql, &[&from, &to]).await?;
         Ok(())
     }
 
@@ -459,6 +517,89 @@ impl Step {
     }
 }
 
+impl Indices {
+    /// An index's bars as JSON, `[open time, open, high, low, close, volume]`,
+    /// oldest first, the forming one with them — from `start` on when it is
+    /// given, else the newest up to `end` — kept until the next write.
+    async fn bars(&self, s: &'static Series, interval: &str, start: Option<i64>, end: Option<i64>, limit: i64) -> Result<Bytes, ApiError> {
+        let step = step_of(interval).ok_or_else(|| ApiError::bad_request("no such bar length"))?;
+        let limit = limit.clamp(1, MAX_BARS);
+        // An end at or past the forming bar's opening asks for the latest bars:
+        // asked as one, a chart's `end=now` is answered from memory with the rest.
+        let end = end.filter(|&e| match step {
+            Step::Fixed(ms, offset) => e < (now_ms() - offset).div_euclid(ms) * ms + offset,
+            Step::Month => true,
+        });
+        let key = format!("{}|{interval}|{start:?}|{end:?}|{limit}", s.symbol);
+        let generation = self.generation.load(Ordering::Relaxed);
+        if let Some((g, body)) = self.answers.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            if *g == generation {
+                return Ok(body.clone());
+            }
+        }
+        // The moments the bars asked for can hold: a bar more either side, cut to `limit` below.
+        let (from, to) = match (start, end) {
+            (Some(start), end) => (start, end.unwrap_or(i64::MAX / 2).min(start + (limit + 1) * step.span())),
+            (None, end) => {
+                let end = end.unwrap_or_else(now_ms);
+                (end - (limit + 1) * step.span(), end + step.span())
+            }
+        };
+        let hourly = match step {
+            Step::Fixed(ms, _) => ms >= HOUR && ms % HOUR == 0,
+            Step::Month => true,
+        };
+        let intraday = matches!(step, Step::Fixed(ms, _) if ms < DAY);
+        // Bars of points in time — each its first and last value and its
+        // extremes — or of shorter bars, which carry their own.
+        let points = |table: &str, value: &str, symbol: &str| {
+            format!(
+                "SELECT b, (array_agg(v ORDER BY at))[1], max(v), min(v), (array_agg(v ORDER BY at DESC))[1]
+                 FROM (SELECT {} AS b, at, {value} AS v FROM {table} WHERE at >= $1 AND at < $2 {symbol}) s
+                 WHERE v IS NOT NULL GROUP BY b ORDER BY b",
+                step.opening("at")
+            )
+        };
+        let rolled = |table: &str| {
+            format!(
+                "SELECT {} AS b, (array_agg(open ORDER BY open_time))[1], max(high), min(low), (array_agg(close ORDER BY open_time DESC))[1]
+                 FROM {table} WHERE symbol = $3 AND open_time >= $1 AND open_time < $2 GROUP BY b ORDER BY b",
+                step.opening("open_time")
+            )
+        };
+        let client = self.pool.get().await?;
+        let rows = match s.source {
+            Source::Cap(_) if hourly => client.query(&rolled("index_hour"), &[&from, &to, &s.symbol]).await?,
+            Source::Cap(expr) => client.query(&points("market_cap", expr, ""), &[&from, &to]).await?,
+            Source::Quoted if intraday => client.query(&points("index_tick", "value", "AND symbol = $3"), &[&from, &to, &s.symbol]).await?,
+            Source::Quoted => client.query(&rolled("index_bar"), &[&from, &to, &s.symbol]).await?,
+        };
+        let mut bars: Vec<Value> = rows
+            .iter()
+            .filter(|r| start.is_none_or(|start| r.get::<_, i64>(0) >= start) && end.is_none_or(|end| r.get::<_, i64>(0) <= end))
+            .map(|r| Value::from(vec![r.get::<_, i64>(0) as f64, s.round(r.get(1)), s.round(r.get(2)), s.round(r.get(3)), s.round(r.get(4)), 0.0]))
+            .collect();
+        let keep = limit as usize;
+        if start.is_some() {
+            bars.truncate(keep);
+        } else if bars.len() > keep {
+            bars.drain(..bars.len() - keep);
+        }
+        // A tree of numbers always serialises.
+        let body = Bytes::from(serde_json::to_vec(&Value::Array(bars)).unwrap_or_default());
+        let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        if answers.len() >= CACHED {
+            answers.clear();
+        }
+        answers.insert(key, (generation, body.clone()));
+        Ok(body)
+    }
+}
+
+fn json(body: Bytes) -> Response {
+    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct Ask {
     symbol: String,
@@ -469,57 +610,33 @@ pub struct Ask {
 }
 
 /// `GET /api/index/candles?symbol=TOTAL2&interval=1h&end=&limit=`: an index's
-/// bars as `[open time, open, high, low, close, volume]`, oldest first, the
-/// forming one with them — from `start` on when it is given, else the newest
-/// up to `end`, as the exchanges answer.
-pub async fn candles(State(state): State<AppState>, Query(ask): Query<Ask>) -> ApiResult<Json<Value>> {
+/// bars, as the exchanges answer theirs (see `Indices::bars`).
+pub async fn candles(State(state): State<AppState>, Query(ask): Query<Ask>) -> ApiResult<Response> {
     let s = series(&ask.symbol).ok_or_else(|| ApiError::bad_request("no such index"))?;
-    let step = step_of(&ask.interval).ok_or_else(|| ApiError::bad_request("no such bar length"))?;
-    let limit = ask.limit.unwrap_or(500).clamp(1, MAX_BARS);
-    // The moments the bars asked for can hold: a bar more either side, cut to `limit` below.
-    let (from, to) = match (ask.start, ask.end) {
-        (Some(start), end) => (start, end.unwrap_or(i64::MAX / 2).min(start + (limit + 1) * step.span())),
-        (None, end) => {
-            let end = end.unwrap_or_else(now_ms);
-            (end - (limit + 1) * step.span(), end + step.span())
+    Ok(json(state.indices.bars(s, &ask.interval, ask.start, ask.end, ask.limit.unwrap_or(500)).await?))
+}
+
+#[derive(Deserialize)]
+pub struct Latest {
+    symbols: String,
+    interval: String,
+}
+
+/// `GET /api/index/latest?symbols=TOTAL,VIX&interval=1d`: each index's last
+/// two bars, the forming one last, by symbol — every index a watchlist shows,
+/// in one request. A symbol that is no index is left out.
+pub async fn latest(State(state): State<AppState>, Query(ask): Query<Latest>) -> ApiResult<Response> {
+    let mut body = b"{".to_vec();
+    for (i, s) in ask.symbols.split(',').filter_map(series).take(LATEST_AT_MOST).enumerate() {
+        let bars = state.indices.bars(s, &ask.interval, None, None, 2).await?;
+        if i > 0 {
+            body.push(b',');
         }
-    };
-    let intraday = matches!(step, Step::Fixed(ms, _) if ms < DAY);
-    // Bars of points in time — each its first and last value and its extremes —
-    // or of a day's bars, which carry their own.
-    let points = |table: &str, value: &str, symbol: &str| {
-        format!(
-            "SELECT b, (array_agg(v ORDER BY at))[1], max(v), min(v), (array_agg(v ORDER BY at DESC))[1]
-             FROM (SELECT {} AS b, at, {value} AS v FROM {table} WHERE at >= $1 AND at < $2 {symbol}) s
-             WHERE v IS NOT NULL GROUP BY b ORDER BY b",
-            step.opening("at")
-        )
-    };
-    let client = state.pool.get().await?;
-    let rows = match s.source {
-        Source::Cap(expr) => client.query(&points("market_cap", expr, ""), &[&from, &to]).await?,
-        Source::Quoted if intraday => client.query(&points("index_tick", "value", "AND symbol = $3"), &[&from, &to, &s.symbol]).await?,
-        Source::Quoted => {
-            let sql = format!(
-                "SELECT {} AS b, (array_agg(open ORDER BY open_time))[1], max(high), min(low), (array_agg(close ORDER BY open_time DESC))[1]
-                 FROM index_bar WHERE symbol = $3 AND open_time >= $1 AND open_time < $2 GROUP BY b ORDER BY b",
-                step.opening("open_time")
-            );
-            client.query(&sql, &[&from, &to, &s.symbol]).await?
-        }
-    };
-    let mut bars: Vec<Value> = rows
-        .iter()
-        .filter(|r| ask.start.is_none_or(|start| r.get::<_, i64>(0) >= start) && ask.end.is_none_or(|end| r.get::<_, i64>(0) <= end))
-        .map(|r| Value::from(vec![r.get::<_, i64>(0) as f64, s.round(r.get(1)), s.round(r.get(2)), s.round(r.get(3)), s.round(r.get(4)), 0.0]))
-        .collect();
-    let keep = limit as usize;
-    if ask.start.is_some() {
-        bars.truncate(keep);
-    } else if bars.len() > keep {
-        bars.drain(..bars.len() - keep);
+        body.extend_from_slice(format!("\"{}\":", s.symbol).as_bytes());
+        body.extend_from_slice(&bars);
     }
-    Ok(Json(Value::Array(bars)))
+    body.push(b'}');
+    Ok(json(Bytes::from(body)))
 }
 
 #[cfg(test)]

@@ -32,6 +32,8 @@ pub struct AppState {
     pub relay: Arc<relay::Relay>,
     /// What one visitor may ask of the server; see `limits`.
     pub limits: Arc<limits::Limits>,
+    /// The series this server works out itself.
+    pub indices: Arc<indices::Indices>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -132,6 +134,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/liquidations/{ticker}/live", get(liquidations::live))
         .route("/open-interest", get(open_interest::candles))
         .route("/index/candles", get(indices::candles))
+        .route("/index/latest", get(indices::latest))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
         .layer(middleware::from_fn_with_state(state.clone(), limits::middleware))
