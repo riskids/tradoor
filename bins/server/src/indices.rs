@@ -3,15 +3,19 @@
 //! them, and the VIX.
 //!
 //! CoinGecko's free `/global` gives what every coin it follows is worth
-//! together and the share each of the ten largest holds. It moves about every
-//! ten minutes; read every minute and kept (`market_cap`), it is drawn as
-//! candles of any length — from when the recording began, CoinGecko keeping
-//! its own history for paying subscribers.
+//! together and the share each of the ten largest holds, but moves only about
+//! every ten minutes. Its `/coins/markets` moves every minute: the 250 largest
+//! coins' worth, read beside it, carries CoinGecko's figures from one update to
+//! the next — each part moved as its own coins have since. Kept a row a minute
+//! (`market_cap`), it is drawn as candles of any length, from when the
+//! recording began, CoinGecko keeping its own history for paying subscribers.
 //! The stablecoins' worth, for TOTALES, is read every ten minutes. The VIX is
 //! Cboe's: its daily bars since 1990 from the CSV it publishes, read every
-//! hour, and the day's own bar from its delayed quote, read every minute
-//! (`index_bar`). It has no bars shorter than a day.
+//! hour, and its delayed quote every minute — the day's own bar until the
+//! history carries it (`index_bar`), and each new value as a point
+//! (`index_tick`), from which its bars shorter than a day are drawn.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,11 +32,13 @@ use crate::api::{ApiError, ApiResult, AppState};
 use crate::dns::Doh;
 
 const MINUTE: i64 = 60_000;
-const DAY: i64 = 24 * 60 * MINUTE;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 24 * HOUR;
 /// The epoch began on a Thursday; weeks here begin on Monday, as the exchanges' do.
 const MONDAY: i64 = 4 * DAY;
 
 const GLOBAL: &str = "https://api.coingecko.com/api/v3/global";
+const COINS: &str = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1";
 const STABLECOINS: &str = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=stablecoins&per_page=250&page=1";
 const VIX_HISTORY: &str = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv";
 const VIX_QUOTE: &str = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json";
@@ -43,6 +49,8 @@ const STABLE_EVERY: u32 = 10;
 const HISTORY_EVERY: u32 = 60;
 /// Bars one request returns at most.
 const MAX_BARS: i64 = 2000;
+/// Minutes of the coins' worth kept, to pair CoinGecko's next figures with the minute they are of.
+const RECENT: usize = 30;
 
 /// One series: its symbol, what it is, and where its numbers come from.
 struct Series {
@@ -57,8 +65,8 @@ struct Series {
 enum Source {
     /// Worked out from each `market_cap` row: an expression of its columns.
     Cap(&'static str),
-    /// Daily bars kept in `index_bar`.
-    Daily,
+    /// Daily bars kept in `index_bar`, and the value through the day in `index_tick`.
+    Quoted,
 }
 
 /// Capitalisations in billions of dollars, so a chart's scale reads `2,756.79`
@@ -73,7 +81,7 @@ const SERIES: [Series; 10] = [
     Series { symbol: "BTC_D", name: "Bitcoin dominance, %", quote: "%", decimals: 2, source: Source::Cap("btc / total * 100") },
     Series { symbol: "ETH_D", name: "Ether dominance, %", quote: "%", decimals: 2, source: Source::Cap("eth / total * 100") },
     Series { symbol: "USDT_D", name: "Tether dominance, %", quote: "%", decimals: 2, source: Source::Cap("usdt / total * 100") },
-    Series { symbol: "VIX", name: "Cboe Volatility Index, daily", quote: "", decimals: 2, source: Source::Daily },
+    Series { symbol: "VIX", name: "Cboe Volatility Index, delayed", quote: "", decimals: 2, source: Source::Quoted },
 ];
 
 fn series(symbol: &str) -> Option<&'static Series> {
@@ -93,12 +101,21 @@ pub struct Indices {
     http: reqwest::Client,
     /// The stablecoins' worth as last read, carried into each row until the next.
     stable: Mutex<Option<f64>>,
+    caps: Mutex<Caps>,
+}
+
+/// CoinGecko's latest figures with the coins' worth then, and the last
+/// minutes' worth to pair its next ones with.
+#[derive(Default)]
+struct Caps {
+    anchor: Option<Anchor>,
+    recent: VecDeque<(i64, Coins)>,
 }
 
 impl Indices {
     pub fn start(pool: deadpool_postgres::Pool, doh: &Arc<Doh>) -> anyhow::Result<Arc<Self>> {
         let http = reqwest::Client::builder().dns_resolver(doh.resolver()).user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(30)).build()?;
-        let indices = Arc::new(Self { pool, http, stable: Mutex::new(None) });
+        let indices = Arc::new(Self { pool, http, stable: Mutex::new(None), caps: Mutex::new(Caps::default()) });
         tokio::spawn(indices.clone().run());
         Ok(indices)
     }
@@ -144,14 +161,40 @@ impl Indices {
         Ok(())
     }
 
+    /// This minute's market cap: CoinGecko's figures, moved since they were
+    /// made as the coins have — or as they are, while the coins do not answer.
     async fn read_market_cap(&self) -> anyhow::Result<()> {
-        let v: Value = serde_json::from_str(&self.text(GLOBAL).await?)?;
-        let (at, cap) = market_cap(&v["data"]).ok_or_else(|| anyhow!("no market cap in CoinGecko's answer"))?;
+        let (global, list) = tokio::join!(self.text(GLOBAL), self.text(COINS));
+        let global = global.ok().and_then(|b| serde_json::from_str::<Value>(&b).ok()).and_then(|v| market_cap(&v["data"]));
+        let coins = list.ok().and_then(|b| serde_json::from_str::<Value>(&b).ok()).and_then(|v| coins_of(&v));
+        let minute = now_ms().div_euclid(MINUTE) * MINUTE;
+        let (at, cap) = {
+            let mut caps = self.caps.lock().await;
+            if let Some(c) = coins {
+                caps.recent.push_back((minute, c));
+                while caps.recent.len() > RECENT {
+                    caps.recent.pop_front();
+                }
+            }
+            if let Some((at, cap)) = global {
+                if caps.anchor.is_none_or(|a| a.at != at) {
+                    // New figures, paired with the coins' worth nearest their time.
+                    if let Some(&(_, then)) = caps.recent.iter().min_by_key(|(m, _)| (m - at).abs()) {
+                        caps.anchor = Some(Anchor { at, cap, coins: then });
+                    }
+                }
+            }
+            match (caps.anchor, coins) {
+                (Some(anchor), Some(c)) => (minute, anchor.now(&c)),
+                _ => global.ok_or_else(|| anyhow!("neither of CoinGecko's answers came"))?,
+            }
+        };
         let stable = *self.stable.lock().await;
         let client = self.pool.get().await?;
         client
             .execute(
-                "INSERT INTO market_cap (at, total, btc, eth, usdt, top10, stable) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (at) DO NOTHING",
+                "INSERT INTO market_cap (at, total, btc, eth, usdt, top10, stable) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (at) DO UPDATE SET total = EXCLUDED.total, btc = EXCLUDED.btc, eth = EXCLUDED.eth, usdt = EXCLUDED.usdt, top10 = EXCLUDED.top10, stable = EXCLUDED.stable",
                 &[&at, &cap.total, &cap.btc, &cap.eth, &cap.usdt, &cap.top10, &stable],
             )
             .await?;
@@ -180,11 +223,16 @@ impl Indices {
         Ok(())
     }
 
-    /// The day's bar from the delayed quote, until Cboe's history carries the day.
+    /// The delayed quote: a point at its own time, and the day's bar until
+    /// Cboe's history carries the day.
     async fn read_vix_quote(&self) -> anyhow::Result<()> {
         let v: Value = serde_json::from_str(&self.text(VIX_QUOTE).await?)?;
         let bar = cboe_quote(&v["data"]).ok_or_else(|| anyhow!("no VIX quote in Cboe's answer"))?;
         let client = self.pool.get().await?;
+        // A quote unchanged since — a weekend's, a night's — is the same point again.
+        if let Some(at) = v["data"]["last_trade_time"].as_str().and_then(eastern_time) {
+            client.execute("INSERT INTO index_tick (symbol, at, value) VALUES ('VIX', $1, $2) ON CONFLICT DO NOTHING", &[&at, &bar.close]).await?;
+        }
         client
             .execute(
                 "INSERT INTO index_bar (symbol, open_time, open, high, low, close, final) VALUES ('VIX', $1, $2, $3, $4, $5, false)
@@ -209,7 +257,7 @@ impl Indices {
                     );
                     client.query_one(&sql, &[&(now_ms() - DAY)]).await.ok().map(|r| (r.get::<_, Option<f64>>(0), r.get::<_, Option<f64>>(1)))
                 }
-                Source::Daily => client
+                Source::Quoted => client
                     .query_one(
                         "SELECT (array_agg(close ORDER BY open_time DESC))[1], (array_agg(close ORDER BY open_time DESC))[2] FROM index_bar WHERE symbol = $1",
                         &[&s.symbol],
@@ -240,7 +288,7 @@ impl Indices {
 }
 
 /// What CoinGecko's `/global` says, in dollars, and when it says it.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Cap {
     total: f64,
     btc: f64,
@@ -260,6 +308,50 @@ fn market_cap(data: &Value) -> Option<(i64, Cap)> {
     Some((at, Cap { total, btc: part("btc"), eth: part("eth"), usdt: part("usdt"), top10 }))
 }
 
+/// What `/coins/markets` says the 250 largest coins are worth, by the parts
+/// CoinGecko's figures are made of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Coins {
+    all: f64,
+    btc: f64,
+    eth: f64,
+    usdt: f64,
+    top10: f64,
+}
+
+fn coins_of(list: &Value) -> Option<Coins> {
+    let list = list.as_array()?;
+    let cap = |c: &Value| c["market_cap"].as_f64().filter(|v| *v > 0.0);
+    let of = |id: &str| list.iter().find(|c| c["id"] == id).and_then(cap).unwrap_or(0.0);
+    let mut caps: Vec<f64> = list.iter().filter_map(cap).collect();
+    caps.sort_by(|a, b| b.total_cmp(a));
+    let all: f64 = caps.iter().sum();
+    (all > 0.0).then(|| Coins { all, btc: of("bitcoin"), eth: of("ethereum"), usdt: of("tether"), top10: caps.iter().take(10).sum() })
+}
+
+/// CoinGecko's figures as of `at`, and the coins' worth then.
+#[derive(Clone, Copy, Debug)]
+struct Anchor {
+    at: i64,
+    cap: Cap,
+    coins: Coins,
+}
+
+impl Anchor {
+    /// The figures now: each part moved as its coins have since — the whole
+    /// as the 250 have, Bitcoin as Bitcoin has.
+    fn now(&self, c: &Coins) -> Cap {
+        let moved = |figure: f64, then: f64, now: f64| if then > 0.0 && now > 0.0 { figure * now / then } else { figure };
+        Cap {
+            total: moved(self.cap.total, self.coins.all, c.all),
+            btc: moved(self.cap.btc, self.coins.btc, c.btc),
+            eth: moved(self.cap.eth, self.coins.eth, c.eth),
+            usdt: moved(self.cap.usdt, self.coins.usdt, c.usdt),
+            top10: moved(self.cap.top10, self.coins.top10, c.top10),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct Bar {
     open_time: i64,
@@ -276,6 +368,20 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let yoe = y - era * 400;
     let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
     era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+
+/// New York's wall-clock `YYYY-MM-DDTHH:MM:SS` as a moment: Eastern Daylight
+/// Time from 2 a.m. on the second Sunday of March to 2 a.m. on the first
+/// Sunday of November, Eastern Standard Time otherwise.
+fn eastern_time(text: &str) -> Option<i64> {
+    let (date, time) = text.get(..19)?.split_once('T')?;
+    let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
+    let (year, month, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.split(':').map(|p| p.parse::<i64>().ok());
+    let local = days_from_civil(year, month, day) * DAY + t.next()?? * HOUR + t.next()?? * MINUTE + t.next()?? * 1000;
+    let sunday_from = |day: i64| day + (7 - (day + 4).rem_euclid(7)) % 7;
+    let summer = (sunday_from(days_from_civil(year, 3, 1)) + 7) * DAY + 2 * HOUR..sunday_from(days_from_civil(year, 11, 1)) * DAY + 2 * HOUR;
+    Some(local + if summer.contains(&local) { 4 * HOUR } else { 5 * HOUR })
 }
 
 /// `DATE,OPEN,HIGH,LOW,CLOSE` with dates as `MM/DD/YYYY`, oldest first.
@@ -378,28 +484,29 @@ pub async fn candles(State(state): State<AppState>, Query(ask): Query<Ask>) -> A
             (end - (limit + 1) * step.span(), end + step.span())
         }
     };
-    let (table, value, at) = match s.source {
-        Source::Cap(expr) => ("market_cap", expr.to_string(), "at"),
-        Source::Daily if matches!(step, Step::Fixed(ms, _) if ms < DAY) => return Err(ApiError::bad_request(format!("{} has daily bars only", s.symbol))),
-        Source::Daily => ("index_bar", String::new(), "open_time"),
-    };
-    let opening = step.opening(at);
-    // Each bar's first and last value in time, and its extremes; a daily table's bars carry their own.
-    let sql = match s.source {
-        Source::Cap(_) => format!(
+    let intraday = matches!(step, Step::Fixed(ms, _) if ms < DAY);
+    // Bars of points in time — each its first and last value and its extremes —
+    // or of a day's bars, which carry their own.
+    let points = |table: &str, value: &str, symbol: &str| {
+        format!(
             "SELECT b, (array_agg(v ORDER BY at))[1], max(v), min(v), (array_agg(v ORDER BY at DESC))[1]
-             FROM (SELECT {opening} AS b, at, {value} AS v FROM {table} WHERE at >= $1 AND at < $2) s
-             WHERE v IS NOT NULL GROUP BY b ORDER BY b"
-        ),
-        Source::Daily => format!(
-            "SELECT {opening} AS b, (array_agg(open ORDER BY open_time))[1], max(high), min(low), (array_agg(close ORDER BY open_time DESC))[1]
-             FROM {table} WHERE symbol = $3 AND open_time >= $1 AND open_time < $2 GROUP BY b ORDER BY b"
-        ),
+             FROM (SELECT {} AS b, at, {value} AS v FROM {table} WHERE at >= $1 AND at < $2 {symbol}) s
+             WHERE v IS NOT NULL GROUP BY b ORDER BY b",
+            step.opening("at")
+        )
     };
     let client = state.pool.get().await?;
     let rows = match s.source {
-        Source::Cap(_) => client.query(&sql, &[&from, &to]).await?,
-        Source::Daily => client.query(&sql, &[&from, &to, &s.symbol]).await?,
+        Source::Cap(expr) => client.query(&points("market_cap", expr, ""), &[&from, &to]).await?,
+        Source::Quoted if intraday => client.query(&points("index_tick", "value", "AND symbol = $3"), &[&from, &to, &s.symbol]).await?,
+        Source::Quoted => {
+            let sql = format!(
+                "SELECT {} AS b, (array_agg(open ORDER BY open_time))[1], max(high), min(low), (array_agg(close ORDER BY open_time DESC))[1]
+                 FROM index_bar WHERE symbol = $3 AND open_time >= $1 AND open_time < $2 GROUP BY b ORDER BY b",
+                step.opening("open_time")
+            );
+            client.query(&sql, &[&from, &to, &s.symbol]).await?
+        }
     };
     let mut bars: Vec<Value> = rows
         .iter()
@@ -454,6 +561,32 @@ mod tests {
         let (at, cap) = market_cap(&data).unwrap();
         assert_eq!(at, 1_792_235_000_000);
         assert_eq!(cap, Cap { total: 2000.0, btc: 1200.0, eth: 200.0, usdt: 100.0, top10: 1740.0 });
+    }
+
+    #[test]
+    fn the_coins_carry_coingecko_s_figures_between_its_updates() {
+        let list: Value = serde_json::from_str(
+            r#"[{"id": "bitcoin", "market_cap": 1600.0}, {"id": "ethereum", "market_cap": 300.0}, {"id": "tether", "market_cap": 100.0}, {"id": "dust", "market_cap": null}]"#,
+        )
+        .unwrap();
+        let then = coins_of(&list).unwrap();
+        assert_eq!(then, Coins { all: 2000.0, btc: 1600.0, eth: 300.0, usdt: 100.0, top10: 2000.0 });
+        let anchor = Anchor { at: 0, cap: Cap { total: 2100.0, btc: 1590.0, eth: 310.0, usdt: 100.0, top10: 2050.0 }, coins: then };
+        // Bitcoin up 10%, the rest still.
+        let now = Coins { all: 2160.0, btc: 1760.0, ..then };
+        let cap = anchor.now(&now);
+        assert!((cap.total - 2268.0).abs() < 1e-9 && (cap.btc - 1749.0).abs() < 1e-9, "{cap:?}");
+        assert_eq!((cap.eth, cap.usdt), (310.0, 100.0), "the parts that did not move stay as CoinGecko had them");
+    }
+
+    #[test]
+    fn new_york_s_clock_reads_as_utc() {
+        assert_eq!(eastern_time("2026-10-16T16:15:01"), Some(days_from_civil(2026, 10, 16) * DAY + 20 * HOUR + 15 * MINUTE + 1000), "October: daylight time, four hours behind");
+        assert_eq!(eastern_time("2026-12-01T09:30:00"), Some(days_from_civil(2026, 12, 1) * DAY + 14 * HOUR + 30 * MINUTE), "December: standard time, five behind");
+        assert_eq!(eastern_time("2026-03-08T01:59:00"), Some(days_from_civil(2026, 3, 8) * DAY + 6 * HOUR + 59 * MINUTE), "just before the clocks go forward");
+        assert_eq!(eastern_time("2026-03-08T03:00:00"), Some(days_from_civil(2026, 3, 8) * DAY + 7 * HOUR), "and after");
+        assert_eq!(eastern_time("2026-11-01T02:30:00"), Some(days_from_civil(2026, 11, 1) * DAY + 7 * HOUR + 30 * MINUTE), "back on standard time");
+        assert_eq!(eastern_time("yesterday"), None);
     }
 
     #[test]

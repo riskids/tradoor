@@ -175,7 +175,27 @@ export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom';
 
 export const DEFAULT_STUDIES = 'rsi:14,stochrsi:14:14:3:3';
 export const DEFAULT_TIMEFRAME = '1h';
-const DEFAULT_WATCHLIST = ['binance-perp:BTCUSDT', 'binance-perp:ETHUSDT', 'binance-perp:SOLUSDT', 'binance-spot:BTCUSDT', 'bybit-perp:BTCUSDT'];
+/** The coins, then the market around them: the index perpetuals, the VIX, and the crypto market's own measures. */
+const DEFAULT_WATCHLIST = [
+  'binance-perp:BTCUSDT',
+  'binance-perp:ETHUSDT',
+  'binance-perp:SOLUSDT',
+  'binance-spot:BTCUSDT',
+  'bybit-perp:BTCUSDT',
+  '#Macro',
+  'hyperliquid-perp:SP500USD',
+  'hyperliquid-perp:XYZ100USD',
+  'index:VIX',
+  'index:TOTAL',
+  'index:TOTAL2',
+  'index:TOTAL3',
+  'index:TOTALES',
+  'index:OTHERS',
+  'index:BTC_D',
+  'index:ETH_D',
+  'index:USDT_D',
+  'index:OTHERS_D',
+];
 
 export const uid = (prefix: string): string => `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 

@@ -176,10 +176,11 @@ Without it the panel only reads the coins already recorded.
 
 Search TOTAL, TOTAL2, TOTAL3, TOTALES, OTHERS, BTC.D, ETH.D, USDT.D,
 OTHERS.D or VIX (TradingView's `CRYPTOCAP:TOTAL2` works too): the server works
-these out itself under the Index venue. The market caps are CoinGecko's free
-figures, in billions of dollars, recorded from when the server first ran — about
-every ten minutes, as often as CoinGecko updates them. The VIX is Cboe's, daily
-since 1990. The S&P 500 and the Nasdaq-100 are trade.xyz's perpetuals on
+these out itself under the Index venue, and a new browser's watchlist lists
+them under Macro. The market caps are CoinGecko's free figures, in billions of
+dollars, a minute at a time from when the server first ran. The VIX is
+Cboe's, delayed: daily since 1990, and by the minute from when the server first
+ran. The S&P 500 and the Nasdaq-100 are trade.xyz's perpetuals on
 Hyperliquid, `SP500USD` and `XYZ100USD` (or search SPX, NASDAQ), live like any
 other market.
 
