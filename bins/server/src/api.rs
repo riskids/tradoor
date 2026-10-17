@@ -146,7 +146,9 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
 
     let mut app = Router::new().nest("/api", api).nest("/data", data);
     if let Some(web) = web_dir {
-        app = app.fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))));
+        // The build's own `.br` and `.gz` beside each file, sent as they are.
+        let index = ServeFile::new(web.join("index.html")).precompressed_br().precompressed_gzip();
+        app = app.fallback_service(ServeDir::new(&web).precompressed_br().precompressed_gzip().fallback(index));
     }
     app.layer(middleware::from_fn(security_headers)).layer(TraceLayer::new_for_http())
 }
