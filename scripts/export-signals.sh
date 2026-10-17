@@ -16,9 +16,10 @@ cd "${TRADOOR_DIR:-/var/www/tradoor}"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
-# One query's rows as CSV with a header.
+# One query's rows as CSV with a header. Its stdin is closed: run through
+# `ssh 'bash -s'`, it is the rest of this script.
 dump() {
-  docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -v ON_ERROR_STOP=1 -c "$1"' sh "COPY ($2) TO STDOUT WITH (FORMAT csv, HEADER)" > "$out/$1.csv"
+  docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -v ON_ERROR_STOP=1 -c "$1"' sh "COPY ($2) TO STDOUT WITH (FORMAT csv, HEADER)" < /dev/null > "$out/$1.csv"
   echo "$1: $(($(wc -l < "$out/$1.csv") - 1)) rows" >&2
 }
 
