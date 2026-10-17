@@ -1,6 +1,6 @@
 //! Three drives: three pushes to one rising line, each a little past the last,
 //! a real pullback between them — and then Stochastic RSI turning down out of
-//! overbought. The bullish pattern is the same thing upside down: three lower
+//! overbought, with RSI already cooled. The bullish pattern is the same thing upside down: three lower
 //! lows along a falling line, and the turn up out of oversold.
 //!
 //! Only closed bars are read, and a pivot is only taken once the bars after it
@@ -46,8 +46,19 @@ impl Rules {
 const CLEAR_ATR: f64 = 0.5;
 /// How far a bar between the drives may poke through their line, in ATRs.
 const LINE_ATR: f64 = 0.5;
-/// How far the third drive may sit from the line through the first two, in ATRs.
+/// How far price may be from the line through two drives for a setup's third
+/// drive, in ATRs; the score measures a pattern's fit against it too.
 const ALIGN_ATR: f64 = 1.0;
+/// How far a pattern's third drive may sit from that line, in ATRs: further,
+/// and it won less than half again as often in the replays.
+const FIT_ATR: f64 = 0.6;
+/// RSI at the third drive past which the push is too strong to turn on: the
+/// replays lost more often than they won past it.
+const DRIVE_RSI: f64 = 75.0;
+/// RSI at the bar a scan first sees the turn on, past which price has not
+/// cooled enough to enter: those turns won some four times in ten, those
+/// under it seven.
+const ENTRY_RSI: f64 = 65.0;
 /// How far a close after the third drive may go through the line before the
 /// pattern is broken, in ATRs.
 const BREAK_ATR: f64 = 1.0;
@@ -217,6 +228,8 @@ pub enum Ended {
     Waited,
     /// Two days since the turn.
     Lapsed,
+    /// Turned with RSI still over 65 (under 35 for the bullish side).
+    Hot,
 }
 
 impl Ended {
@@ -227,6 +240,7 @@ impl Ended {
             Ended::Played => "played",
             Ended::Waited => "waited",
             Ended::Lapsed => "lapsed",
+            Ended::Hot => "hot",
         }
     }
 }
@@ -282,7 +296,7 @@ pub enum Plan {
     Fixed,
     /// 38.2, 61.8 and 100% back down the third drive's leg; the stop at its 1.272 extension.
     Fib,
-    /// The same take-profits; the stop an ATR past the third drive.
+    /// The same take-profits; the stop an ATR and a half past the third drive.
     FibAtr,
     /// 3, 6 and 9% from the entry; the stop 3.5% from the entry.
     FromEntry,
@@ -305,6 +319,9 @@ impl Plan {
 const FIB_TAKES: [f64; 3] = [0.382, 0.618, 1.0];
 /// The extension of the leg past which the third drive has failed.
 const FIB_STOP: f64 = 0.272;
+/// ATRs past the third drive the live plan's stop sits: an ATR stopped out
+/// trades that went on to their take-profits.
+const STOP_ATR: f64 = 1.5;
 
 /// A trade's prices under `plan`: from the entry, the third drive's extreme,
 /// where its leg began, and the ATR there.
@@ -316,7 +333,7 @@ pub fn plan_levels(plan: Plan, side: Side, entry: f64, extreme: f64, pullback: f
     match plan {
         Plan::Fixed => Levels { tp: fixed, sl: extreme * (1.0 - dir * STOP_PAST) },
         Plan::Fib => Levels { tp: fib, sl: extreme - dir * FIB_STOP * leg },
-        Plan::FibAtr => Levels { tp: fib, sl: extreme - dir * atr },
+        Plan::FibAtr => Levels { tp: fib, sl: extreme - dir * STOP_ATR * atr },
         Plan::FromEntry => Levels { tp: fixed, sl: entry * (1.0 - dir * STOP_PAST) },
     }
 }
@@ -756,6 +773,10 @@ impl Prepared {
         let third = self.pivots[zi];
         let z = third.index;
         let atr_z = self.atr_at(z)?;
+        // A third drive pushed on too hard is a trend, not the end of one.
+        if self.rsi[z].is_some_and(|r| r > DRIVE_RSI) {
+            return None;
+        }
         let mut best: Option<Shape> = None;
         let earlier = &self.pivots[zi.saturating_sub(LOOK_BACK)..zi];
         for (bi, b) in earlier.iter().enumerate() {
@@ -779,7 +800,7 @@ impl Prepared {
                 let line = |i: usize| a.value + (b.value - a.value) * (i as f64 - a.index as f64) / (b.index - a.index) as f64;
                 // The third drive reaches the line, give or take.
                 let off = (third.value - line(z)) / atr_z;
-                if off.abs() > ALIGN_ATR {
+                if off.abs() > FIT_ATR {
                     continue;
                 }
                 // The line holds between the drives: they are pushes to it, not a
@@ -835,6 +856,10 @@ impl Prepared {
             Some(t) if last - t > KEEP_BARS => return Err(Ended::Lapsed),
             None if last - z > WAIT_BARS => return Err(Ended::Waited),
             _ => {}
+        }
+        // Turned with RSI still high at the bar it would be entered on.
+        if turn.is_some() && self.rsi[entered].is_some_and(|r| r > ENTRY_RSI) {
+            return Err(Ended::Hot);
         }
 
         let (ra, rb, rz) = (self.rsi[a].unwrap_or(50.0), self.rsi[b].unwrap_or(50.0), self.rsi[z].unwrap_or(50.0));
@@ -918,8 +943,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, &p)| {
-                // Corners stay clean, so each peak is one bar.
-                let close = if peaks.contains(&i) { p } else { p + if i % 2 == 0 { 0.15 } else { -0.15 } };
+                // Corners and the bars beside them stay clean, so each peak is one bar.
+                let close = if peaks.iter().any(|&q| i.abs_diff(q) <= 2) { p } else { p + if i % 2 == 0 { 0.9 } else { -0.9 } };
                 Candle { open_time: i as i64 * H4, open: close, high: close + 0.5, low: close - 0.5, close, volume: 100.0, quote_volume: None }
             })
             .collect()
@@ -983,7 +1008,7 @@ mod tests {
         let up = super::outcome(Side::Bull, 100.0, up_levels, &[bar(103.5, 99.0, 103.0), bar(106.5, 102.0, 106.0)]);
         assert_eq!(up.result, Hit::Open, "the bullish way up: two taken, still running");
         assert!(up_levels.sl < 96.0);
-        // The live plan: take-profits back down the third drive's leg, the stop an ATR past its high.
+        // The live plan: take-profits back down the third drive's leg, the stop an ATR and a half past its high.
         let live = levels(Side::Bear, 108.0, 112.0, 100.0, 2.0);
         assert_eq!(live, plan_levels(Plan::FibAtr, Side::Bear, 108.0, 112.0, 100.0, 2.0));
     }
@@ -1005,6 +1030,34 @@ mod tests {
         // The third push overshoots the line by five points: a breakout, not a drive.
         let corners = [(0, 95.0), (60, 110.0), (75, 100.0), (90, 115.0), (105, 105.0), (120, 125.0), (126, 118.0)];
         assert!(find(&legs(&corners), None, Side::Bear).is_none());
+    }
+
+    #[test]
+    fn a_third_drive_well_short_of_the_line_is_not_one() {
+        // Short of the line by three quarters of an ATR: under a cooled RSI, still not a drive on it.
+        let corners = [(0, 95.0), (60, 110.0), (75, 100.0), (90, 115.0), (105, 105.0), (120, 118.0), (126, 113.0)];
+        let bars = legs(&corners);
+        assert!(Prepared::new(&bars, None, Side::Bear).unwrap().rsi[120].is_some_and(|r| r <= DRIVE_RSI));
+        assert!(find(&bars, None, Side::Bear).is_none());
+    }
+
+    #[test]
+    fn a_third_drive_pushed_too_hard_is_not_one() {
+        // The same line, the pullback held a while and the third push made in eight bars instead of fifteen.
+        let bars = legs(&[(0, 95.0), (60, 110.0), (75, 100.0), (90, 115.0), (105, 105.0), (112, 105.0), (120, 120.0), (126, 114.0)]);
+        assert!(Prepared::new(&bars, None, Side::Bear).unwrap().rsi[120].is_some_and(|r| r > DRIVE_RSI), "RSI over 75 at the third drive");
+        assert!(find(&bars, None, Side::Bear).is_none());
+        assert_eq!(ended(&bars, Side::Bear, 120 * H4, Rules::FOUR_HOURS), None, "never a pattern, so none that ended");
+    }
+
+    #[test]
+    fn a_turn_with_rsi_still_high_ends_it() {
+        // A slow drift down from the third drive: Stochastic RSI turns, RSI stays over 65.
+        let bars = three_up(&[(130, 117.0)]);
+        assert!(find(&bars, None, Side::Bear).is_none());
+        assert_eq!(ended(&bars, Side::Bear, 120 * H4, Rules::FOUR_HOURS), Some(Ended::Hot));
+        // The fall that cools it is entered.
+        assert!(find(&three_up(&[(126, 114.0)]), None, Side::Bear).and_then(|f| f.turn).is_some());
     }
 
     #[test]
@@ -1062,9 +1115,11 @@ mod tests {
         let touch = touches.iter().find(|t| t.setup.drives.map(|d| d.index) == [60, 90]).expect("price reached the line of the first two drives");
         assert!((118..=120).contains(&touch.at), "on its way to the third drive, at {}", touch.at);
         let line = touch.setup.line(bars[touch.at].open_time);
-        assert!((touch.entry - line).abs() <= touch.setup.atr && touch.entry >= touch.setup.clear, "within an ATR of the line, past the second drive");
+        assert!((touch.entry - line).abs() <= touch.setup.atr + 1e-9 && touch.entry >= touch.setup.clear, "within an ATR of the line, past the second drive");
         assert_eq!(touch.became, Became::Turned, "and it became three drives that turned");
-        assert_eq!(touch.outcome.result, Hit::Stop, "under the live plan the stop is an ATR over the touch, and the third drive went on past it");
+        assert_eq!(touch.outcome.result, Hit::Tp3, "under the live plan the stop is an ATR and a half over the touch: room for the third drive, then all the way down");
+        let tight = Levels { sl: touch.entry + touch.setup.atr, ..levels(Side::Bear, touch.entry, touch.entry, touch.pullback, touch.setup.atr) };
+        assert_eq!(play(Side::Bear, touch.entry, tight, &bars[touch.at..], true).result, Hit::Stop, "an ATR over it, the third drive went past the stop");
         let fixed = plan_levels(Plan::Fixed, Side::Bear, touch.entry, touch.entry, touch.pullback, touch.setup.atr);
         assert_eq!(play(Side::Bear, touch.entry, fixed, &bars[touch.at..], true).result, Hit::Tp3, "with 3.5% of room it rode all the way down");
     }
@@ -1077,7 +1132,7 @@ mod tests {
         assert!(close(at(Plan::Fixed).tp, [104.76, 101.52, 98.28]) && (at(Plan::Fixed).sl - 115.92).abs() < 1e-9);
         assert!(close(at(Plan::Fib).tp, [107.416, 104.584, 100.0]), "38.2, 61.8 and 100% back down the leg: {:?}", at(Plan::Fib).tp);
         assert!((at(Plan::Fib).sl - 115.264).abs() < 1e-9, "the 1.272 extension of the leg");
-        assert!((at(Plan::FibAtr).sl - 114.0).abs() < 1e-9, "an ATR past the third drive");
+        assert!((at(Plan::FibAtr).sl - 115.0).abs() < 1e-9, "an ATR and a half past the third drive");
         assert!((at(Plan::FromEntry).sl - 111.78).abs() < 1e-9, "3.5% from the entry");
         let up = plan_levels(Plan::Fib, Side::Bull, 92.0, 88.0, 100.0, 2.0);
         assert!(close(up.tp, [92.584, 95.416, 100.0]) && (up.sl - 84.736).abs() < 1e-9, "the bullish way up: {up:?}");

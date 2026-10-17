@@ -50,7 +50,7 @@ const BARS: u32 = 500;
 const HISTORY_BARS: u32 = 1000;
 /// The rules' version. A change to `drives` bumps it, and the history is
 /// replayed under the new rules after the next scan.
-const VERSION: i32 = 9;
+const VERSION: i32 = 10;
 /// How old a replay may grow before it is run again.
 const REPLAY_EVERY_MS: i64 = 7 * 24 * 3_600_000;
 const STEP: i64 = 4 * 3_600_000;
@@ -1671,7 +1671,7 @@ mod tests {
         assert!(text.contains(&format!("   https://tradoor.example/?market=binance-perp:YGGUSDT&tf=4h&touched={}\n", 130 * STEP)), "{text}");
         assert!(text.starts_with("📐 Three drives · 4h — 1 at the line\n"), "{text}");
         assert!(text.contains("🔴 YGGUSDT (Binance Perp) — bearish: a third high at the line\n   drives 0.026600 → 0.028700 · line 0.029330 · now 0.029250"), "{text}");
-        assert!(text.contains("· SL 0.029750\n"), "the stop an ATR over the touch: {text}");
+        assert!(text.contains("· SL 0.030000\n"), "the stop an ATR and a half over the touch: {text}");
         let tp1 = lv.unwrap().tp[0];
         assert!((tp1 - (0.02925 - 0.382 * 0.00225)).abs() < 1e-12, "the first take-profit 38.2% back down the leg from the pullback");
         assert!(text.contains("Not confirmed until the four-hour bars close"), "{text}");

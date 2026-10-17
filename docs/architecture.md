@@ -189,13 +189,15 @@ four-hour close it reads the last five hundred closed bars of the two hundred
 coins with the most turnover on Binance's and Bybit's USDT perpetuals and
 looks for three drives either way: three swing highs (a pivot of five bars
 before and two after), each clearing the last by half an ATR, the first a fresh
-high over as long a stretch as the drives are apart; the third within an ATR of
-the line through the first two, nothing between them poking more than half an
-ATR through it, and a real pullback between each — two ATRs, and at least 38%
-of the push before. It turns when Stochastic RSI (14 14 3 3, the chart's own)
-crosses down having been over 80 in the three bars before; a pattern waits two
-days for that and stays news two days after, and a close past the third drive
-ends it — a wick past it is a retest. So does price reaching the first
+high over as long a stretch as the drives are apart; the third within 0.6 of
+an ATR of the line through the first two, with RSI (14) at it no more than 75,
+nothing between them poking more than half an ATR through it, and a real
+pullback between each — two ATRs, and at least 38% of the push before. It turns
+when Stochastic RSI (14 14 3 3, the chart's own) crosses down having been over
+80 in the three bars before, and is entered only if RSI at the bar a scan first
+sees the turn on has cooled to 65 or less — a turn with RSI still higher ends it
+(`hot`); a pattern waits two days for the turn and stays news two days after,
+and a close past the third drive ends it — a wick past it is a retest. So does price reaching the first
 take-profit (38.2% back down the third drive's leg) by the bar a scan first
 sees the turn on: the move is made, with nothing left to enter it on. Each scan
 says why the patterns it no longer sees went (`signal.ended_why`), for the
@@ -267,7 +269,7 @@ the replay share the setup code (`Prepared::setup_at`).
 
 The record says how they went, each signal as a trade under the live plan
 (`drives::LIVE`, plan C below): take-profits 38.2, 61.8 and 100% back down the
-third drive's leg, a stop an ATR past the third drive's extreme, half the
+third drive's leg, a stop an ATR and a half past the third drive's extreme, half the
 position closed at the first and the stop then moved to the entry, a quarter
 at each of the others, and what is still open after four days closed at that
 close. A trade's prices are kept with it when it is entered. A bar reaching the stop and a
@@ -292,7 +294,7 @@ counts the patterns first seen from the bar they began (`LIMIT_SINCE`).
 The replay also runs every signal under four plans side by side
 (`drives::Plan`) — A 3/6/9% with the stop 3.5% past the third drive; B take-profits at 38.2, 61.8 and 100% back
 down the third drive's leg and the stop at its 1.272 extension; C the same
-take-profits and the stop an ATR past the third drive, the live one; D 3/6/9% with the stop
+take-profits and the stop 1.5 ATR past the third drive, the live one; D 3/6/9% with the stop
 3.5% from the entry — and keeps each plan's tallies with the run, by kind,
 side and group and by half of the period, for the Record's comparison. The same rules are replayed weekly, and whenever `VERSION` in `signals`
 changes, over the last thousand bars (some 166 days) of every coin: as of each
@@ -301,6 +303,16 @@ shows both by side, score and divergence, with the latest live patterns, and
 the limit entries replayed and live — their score bands fifteen lower, as they
 are set before the turn adds its fifteen. A restart under a new `VERSION` scans
 the bar again.
+
+The fit within 0.6 ATR, the two RSI bounds and the stop at 1.5 ATR (`VERSION`
+10) came from replaying the rules over some five hundred days of the coins'
+bars with `signal-research` below: of the patterns that turned, those inside
+all three won about seven in ten against six, in each quarter of the period and
+on both sides, and those outside them lost more often than they won; the wider
+stop added a few points more without giving up the average. The two weeks of
+the live record before the change, held out of that search, bore it out —
+twenty-two of the twenty-five that met them won, fourteen of the thirty-three
+that did not.
 
 For weighing the rules away from the server there are two tools. Run on the
 server, `scripts/export-signals.sh` writes the record's tables — patterns,

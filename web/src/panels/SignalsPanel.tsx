@@ -29,8 +29,8 @@ import { patchPanel, targetChart } from '../workspace/store';
 const POLL_MS = 60_000;
 const SIDES = [
   { value: 'all', label: 'All', tip: 'Both ways' },
-  { value: 'bear', label: 'Bear', tip: 'Three higher highs, then Stochastic RSI turning down from over 80' },
-  { value: 'bull', label: 'Bull', tip: 'Three lower lows, then Stochastic RSI turning up from under 20' },
+  { value: 'bear', label: 'Bear', tip: 'Three higher highs on one line, RSI 75 or less at the third, then Stochastic RSI turning down from over 80 with RSI cooled to 65' },
+  { value: 'bull', label: 'Bull', tip: 'Three lower lows on one line, RSI 25 or more at the third, then Stochastic RSI turning up from under 20 with RSI recovered to 35' },
 ] as const;
 
 /** A price to five figures: a pattern's levels carry no exchange's tick. */
@@ -81,6 +81,7 @@ const ENDED: Record<string, string> = {
   played: 'reached TP1 before the turn',
   waited: 'no turn in two days',
   lapsed: 'two days since it turned',
+  hot: 'turned with RSI still over 65 (under 35, bullish)',
   unread: 'its coin left the 200 screened',
   replaced: 'an older pattern on the coin listed instead',
 };
@@ -102,7 +103,7 @@ const usd = (v: number) => `${v < 0 ? '−' : '+'}$${formatTurnover(Math.abs(v))
 const pushesText = (deltas: SignalPush[] | null) =>
   deltas ? `Delta on the push into each drive: ${deltas.map((p) => `${usd(p.usd)} (${Math.round((1 + p.share) * 50)}% bought)`).join(', ')}` : 'No delta: Bybit does not say who took each trade';
 /** The trade the record counts, said once. */
-const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL an ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days · a take-profit counts only when price reaches it after the entry; Win is closed in profit';
+const TRADE = 'Plan C: TP at 38.2 / 61.8 / 100% back down the third drive\'s leg, SL 1.5 ATR past the third drive · half off at TP1 and the stop to the entry, a quarter at each of the others · four days · a take-profit counts only when price reaches it after the entry; Win is closed in profit';
 /** The limit entry, said once. */
 const LIMIT = 'A limit set when a scan first sees the pattern, half way back from the low since the third drive toward it (the high, for the bullish side), waiting two days; off if price reaches TP1 first. The same plan C once filled.';
 
@@ -287,7 +288,7 @@ export function SignalsPanel(props: { panel: SignalsPanelState }) {
                   </Show>
                 </span>
                 <span class="sig-age num dim">{since(t.touchedAt, now())}</span>
-                <span class="sig-limit num" data-tip="Entered where price reached the line: the trade the record counts, its take-profits back down the leg into the line and its stop an ATR past the touch">
+                <span class="sig-limit num" data-tip="Entered where price reached the line: the trade the record counts, its take-profits back down the leg into the line and its stop 1.5 ATR past the touch">
                   <span class="tag entry">ENTRY</span> {price(t.touchPrice)} · {levelsText(t.levels)}
                 </span>
               </button>
@@ -452,7 +453,7 @@ function Pushes(props: { deltas: SignalPush[] | null }) {
 const PLANS: Record<SignalPlanRow['plan'], [string, string, string]> = {
   fixed: ['A', 'TP 3/6/9%', 'SL HH+3.5%'],
   fib: ['B', 'TP Fib .382/.618/1', 'SL Fib 1.272'],
-  'fib-atr': ['C', 'TP Fib .382/.618/1', 'SL HH+1 ATR'],
+  'fib-atr': ['C', 'TP Fib .382/.618/1', 'SL HH+1.5 ATR'],
   'from-entry': ['D', 'TP 3/6/9%', 'SL entry+3.5%'],
 };
 const CUTS = [
@@ -673,7 +674,7 @@ const TOUCH_OUTCOME: Record<SignalOutcome, string> = {
   tp3: 'All three take-profits',
   tp2: 'Two take-profits',
   tp1: 'The first take-profit',
-  stop: 'The stop, an ATR past the touch, before the first take-profit',
+  stop: 'The stop, 1.5 ATR past the touch, before the first take-profit',
   expired: 'Nothing in four days',
 };
 

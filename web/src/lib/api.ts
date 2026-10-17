@@ -284,7 +284,7 @@ export interface Signal {
   /** The length of bar it was found on: four hours, or the day's or week's — the strong kind. */
   timeframe: '4h' | '1d' | '1w';
   /** Why it left the list, once it has. */
-  endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'unread' | 'replaced' | 'gone' | null;
+  endedWhy: 'outdone' | 'broken' | 'played' | 'waited' | 'lapsed' | 'hot' | 'unread' | 'replaced' | 'gone' | null;
 }
 
 /** A limit entry: half way back from the furthest price since the third drive
