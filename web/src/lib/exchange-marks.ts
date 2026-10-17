@@ -114,6 +114,11 @@ export const MARKS: Record<ExchangeId, ExchangeMark> = {
       { t: [6.1, 6.1, 0.62], fill: '#F9D3A8', d: 'M15.75 0A16.03 16.03 0 0 0 .1 17.9h3.65c4.73 0 8.81-3.28 9.81-7.89L15.75 0Z' },
     ],
   },
+  // The series the tradoor server works out: three rising bars.
+  index: {
+    box: 32,
+    paths: [DISC, { fill: '#FFF', d: 'M8.5 19h3.5v5.5H8.5zM14.25 13.5h3.5v11h-3.5zM20 8h3.5v16.5H20z' }],
+  },
   lighter: {
     box: 32,
     paths: [DISC, { t: [10.6, 5.9, 0.78], fill: '#FFF', d: 'M5.989 20.388 0 25.498V5.888L5.989.502v19.886Zm7.811.012-5.989 5.098V17.85l5.989-5.37v7.92Z' }],

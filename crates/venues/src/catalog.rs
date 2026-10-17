@@ -16,6 +16,9 @@ pub struct Product {
     /// `BTC-USDT-SWAP`, `BTC/USD`, Hyperliquid's `kPEPE`, Lighter's market number.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native: Option<String>,
+    /// What it is, where its symbol does not say: an index's or a stock's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Decimals of the exchange's tick size, when it publishes one.
     pub price_decimals: Option<u8>,
     pub quote_volume_24h: Option<f64>,
@@ -60,6 +63,7 @@ pub(crate) fn product(venue: crate::Venue, base: &str, quote: &str, native: &str
         market: market.to_string(),
         venue: venue.id(),
         native: (native != symbol).then(|| native.to_string()),
+        name: None,
         symbol,
         base: base.to_ascii_uppercase(),
         quote: quote.to_ascii_uppercase(),

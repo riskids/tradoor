@@ -58,7 +58,9 @@ export interface Product {
   symbol: string;
   base: string;
   quote: string;
-  kind: 'spot' | 'perp';
+  kind: 'spot' | 'perp' | 'index';
+  /** What it is, where the symbol does not say: an index's or a stock's name. */
+  name?: string;
   priceDecimals: number | null;
   quoteVolume24h: number | null;
   lastPrice: number | null;

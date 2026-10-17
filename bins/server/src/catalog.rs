@@ -1,7 +1,8 @@
 //! The market catalogue a symbol search offers: every tradable spot and
-//! perpetual market on Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken and
-//! Lighter, with 24h stats, and each exchange's own name for it where that is
-//! not this app's.
+//! perpetual market on Binance, Bybit, OKX, Bitget, Hyperliquid (trade.xyz's
+//! stocks and indices with its coins), Kraken and Lighter, with 24h stats, and
+//! each exchange's own name for it where that is not this app's — and the
+//! series this server works out itself (`indices`).
 //!
 //! Fetched here rather than by each browser because the raw lists are several
 //! megabytes; the browser gets one compact, compressed response it can search
@@ -27,6 +28,8 @@ pub struct Catalog {
     http: reqwest::Client,
     binance_spot_rest: String,
     state: Mutex<Option<Cached>>,
+    /// The series this server works out, listed under the `index` venue.
+    indices: std::sync::OnceLock<Arc<crate::indices::Indices>>,
 }
 
 struct Cached {
@@ -55,7 +58,12 @@ struct Response<'a> {
 impl Catalog {
     pub fn new(binance_spot_rest: String, doh: &std::sync::Arc<crate::dns::Doh>) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder().dns_resolver(doh.resolver()).user_agent(concat!("tradoor/", env!("CARGO_PKG_VERSION"))).timeout(Duration::from_secs(30)).build()?;
-        Ok(Self { http, binance_spot_rest, state: Mutex::new(None) })
+        Ok(Self { http, binance_spot_rest, state: Mutex::new(None), indices: std::sync::OnceLock::new() })
+    }
+
+    /// Lists the series this server works out, from the next refresh on.
+    pub fn list_indices(&self, indices: Arc<crate::indices::Indices>) {
+        let _ = self.indices.set(indices);
     }
 
     async fn text(&self, url: &str) -> Result<String, String> {
@@ -95,7 +103,14 @@ impl Catalog {
                 let (list, tickers) = self.pair(bitget::instruments_url(venue), bitget::tickers_url(venue)).await?;
                 bitget::parse_products(venue, &list, tickers.as_deref()).map_err(err)
             }
-            Exchange::Hyperliquid => hyperliquid::parse_products(&self.post(hyperliquid::INFO, hyperliquid::META_AND_CTXS).await?).map_err(err),
+            Exchange::Hyperliquid => {
+                let (coins, xyz) = tokio::join!(self.post(hyperliquid::INFO, hyperliquid::META_AND_CTXS), self.post(hyperliquid::INFO, hyperliquid::XYZ_META_AND_CTXS));
+                hyperliquid::parse_products(&coins?, xyz.ok().as_deref()).map_err(err)
+            }
+            Exchange::Index => Ok(match self.indices.get() {
+                Some(indices) => indices.products().await,
+                None => Vec::new(),
+            }),
             Exchange::Kraken if venue == Venue::KrakenSpot => {
                 let (list, tickers) = self.pair(kraken::spot_pairs_url(), kraken::spot_tickers_url()).await?;
                 kraken::parse_spot(&list, tickers.as_deref()).map_err(err)

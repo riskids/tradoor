@@ -22,6 +22,8 @@ pub fn stream_urls(venue: Venue) -> &'static [&'static str] {
         Venue::KrakenSpot => &["wss://ws.kraken.com/v2"],
         Venue::KrakenPerp => &["wss://futures.kraken.com/ws/v1"],
         Venue::LighterPerp => &["wss://mainnet.zklighter.elliot.ai/stream"],
+        // Worked out here; nothing trades on it.
+        Venue::Index => &[],
     }
 }
 

@@ -18,6 +18,7 @@ mod drawings;
 mod flow;
 mod footprint;
 mod import;
+mod indices;
 mod limits;
 mod liquidations;
 mod open_interest;
@@ -157,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
             let token = cli.telegram_token.trim().to_string();
             let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
             let catalog = Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?);
+            catalog.list_indices(indices::Indices::start(pool.clone(), &doh)?);
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
             let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), admins));
             footprint::Footprint::start(pool.clone(), doh.clone(), catalog.clone());

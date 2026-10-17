@@ -562,6 +562,7 @@ export class StreamHub {
   private readonly connections = new Map<string, Connection>();
   private extra: Awaited<ReturnType<typeof loadMore>> | null = null;
   private poller: InstanceType<Awaited<ReturnType<typeof loadMore>>['Poller']> | null = null;
+  private indexPoller: InstanceType<Awaited<ReturnType<typeof loadMore>>['Poller']> | null = null;
 
   subscribe(venue: Venue, spec: StreamSpec, listener: StreamListener): () => void {
     const socket = socketOf(venue, spec);
@@ -580,8 +581,17 @@ export class StreamHub {
       };
     }
     if (venue === 'lighter-perp' && spec.kind === 'kline' && this.extra) {
-      this.poller ??= new this.extra.Poller();
+      this.poller ??= this.extra.lighterPoller();
       return this.poller.add(spec.symbol, this.extra.lighterResolution(spec.interval), listener);
+    }
+    // An index is the server's own: its bars are asked for, and it has nothing else to stream.
+    if (venue === 'index' && this.extra) {
+      if (spec.kind !== 'kline') {
+        listener.state('stalled', false);
+        return () => {};
+      }
+      this.indexPoller ??= this.extra.indexPoller();
+      return this.indexPoller.add(spec.symbol, spec.interval, listener);
     }
     let conn = this.connections.get(socket);
     if (!conn) {

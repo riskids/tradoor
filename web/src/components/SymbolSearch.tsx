@@ -8,7 +8,7 @@ import { call } from '../engine/client';
 import { catalog, errorText, type Product } from '../lib/api';
 import { formatPct, formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { ExchangeLogo, exchangeOfVenue, LIVE_EXCHANGES, type ExchangeId } from '../lib/exchanges';
-import { isChartMarket, isMarket, ratioOf, venueLabel } from '../lib/markets';
+import { isChartMarket, isMarket, ratioOf, symbolOf, venueLabel } from '../lib/markets';
 import { popularity, rank, type Kind, type Sort } from '../lib/symbol-rank';
 
 const EXCHANGE_IDS = LIVE_EXCHANGES.map((e) => e.id);
@@ -198,9 +198,9 @@ export function SymbolSearch(props: {
                 <For each={rows()}>
                   {(p, i) => (
                     <div class="row" classList={{ cur: i() + first() === cursor() }} data-cur={i() + first() === cursor() ? '' : undefined} onMouseMove={() => setCursor(i() + first())} onClick={() => props.onSelect(p.market)}>
-                      <span class="sym">{p.symbol}</span>
+                      <span class="sym">{symbolOf(p.market)}</span>
                       <span class="dim grow">
-                        {p.base}/{p.quote}
+                        {p.name ?? `${p.base}/${p.quote}`}
                         <Show when={p.market === props.current}>
                           <span class="primary"> · on screen</span>
                         </Show>

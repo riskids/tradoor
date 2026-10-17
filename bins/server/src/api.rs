@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, limits, liquidations, open_interest, relay, signals, telegram, workspaces};
+use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, indices, limits, liquidations, open_interest, relay, signals, telegram, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -131,6 +131,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/liquidations/{ticker}", get(liquidations::stats))
         .route("/liquidations/{ticker}/live", get(liquidations::live))
         .route("/open-interest", get(open_interest::candles))
+        .route("/index/candles", get(indices::candles))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
         .layer(middleware::from_fn_with_state(state.clone(), limits::middleware))

@@ -45,7 +45,8 @@ export const serverTicker = (symbol: string): string => `${symbol.replace(/(USDT
  */
 export function liquidationVenues(market: string, products: readonly Product[] | null): LiquidationVenue[] {
   const ref = parseMarket(market);
-  if (!ref) return [];
+  // An index has no positions anywhere to close out.
+  if (!ref || ref.venue === 'index') return [];
   const own = products?.find((p) => p.market === market);
   if (!products || !own) return PERP_VENUES.map((venue) => ({ venue, market: `${venue}:${ref.symbol}` }));
   const coin = coinOf(own.base);

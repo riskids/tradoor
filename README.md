@@ -172,6 +172,17 @@ TRADOOR_ADMINS=<browser id>,<another browser id>
 
 Without it the panel only reads the coins already recorded.
 
+## Indices, the S&P 500 and the Nasdaq
+
+Search TOTAL, TOTAL2, TOTAL3, TOTALES, OTHERS, BTC.D, ETH.D, USDT.D,
+OTHERS.D or VIX (TradingView's `CRYPTOCAP:TOTAL2` works too): the server works
+these out itself under the Index venue. The market caps are CoinGecko's free
+figures, in billions of dollars, recorded from when the server first ran — about
+every ten minutes, as often as CoinGecko updates them. The VIX is Cboe's, daily
+since 1990. The S&P 500 and the Nasdaq-100 are trade.xyz's perpetuals on
+Hyperliquid, `SP500USD` and `XYZ100USD` (or search SPX, NASDAQ), live like any
+other market.
+
 ## Security
 
 There are no accounts: a browser's random id is what makes its drawings and

@@ -11,6 +11,10 @@ pub enum Exchange {
     Hyperliquid,
     Kraken,
     Lighter,
+    /// Series this server works out itself — the crypto market's total
+    /// capitalisation and its parts, and indices such as the VIX — rather
+    /// than markets anyone trades.
+    Index,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -42,10 +46,11 @@ pub enum Venue {
     KrakenSpot,
     KrakenPerp,
     LighterPerp,
+    Index,
 }
 
 impl Venue {
-    pub const ALL: [Venue; 12] = [
+    pub const ALL: [Venue; 13] = [
         Self::BinanceSpot,
         Self::BinancePerp,
         Self::BybitSpot,
@@ -58,6 +63,7 @@ impl Venue {
         Self::KrakenSpot,
         Self::KrakenPerp,
         Self::LighterPerp,
+        Self::Index,
     ];
 
     pub fn id(self) -> &'static str {
@@ -74,6 +80,7 @@ impl Venue {
             Self::KrakenSpot => "kraken-spot",
             Self::KrakenPerp => "kraken-perp",
             Self::LighterPerp => "lighter-perp",
+            Self::Index => "index",
         }
     }
 
@@ -91,6 +98,7 @@ impl Venue {
             Self::KrakenSpot => "Kraken Spot",
             Self::KrakenPerp => "Kraken Perp",
             Self::LighterPerp => "Lighter Perp",
+            Self::Index => "Index",
         }
     }
 
@@ -103,12 +111,14 @@ impl Venue {
             Self::HyperliquidPerp => Exchange::Hyperliquid,
             Self::KrakenSpot | Self::KrakenPerp => Exchange::Kraken,
             Self::LighterPerp => Exchange::Lighter,
+            Self::Index => Exchange::Index,
         }
     }
 
     pub fn kind(self) -> Kind {
         match self {
-            Self::BinanceSpot | Self::BybitSpot | Self::OkxSpot | Self::BitgetSpot | Self::KrakenSpot => Kind::Spot,
+            // An index is no perpetual: nothing is funded or liquidated on it.
+            Self::BinanceSpot | Self::BybitSpot | Self::OkxSpot | Self::BitgetSpot | Self::KrakenSpot | Self::Index => Kind::Spot,
             _ => Kind::Perp,
         }
     }
@@ -167,6 +177,7 @@ mod tests {
         assert!(MarketRef::parse("binance-perp:../etc").is_none());
         assert!(MarketRef::parse("binance-perp:btcusdt").is_none());
         assert_eq!(MarketRef::parse("kraken-spot:BTCUSD").unwrap().venue, Venue::KrakenSpot);
+        assert_eq!(MarketRef::parse("index:TOTAL2").map(|m| m.dir()), Some("index/TOTAL2".to_string()));
         assert!(MarketRef::parse("kucoin-spot:BTCUSDT").is_none());
         for v in Venue::ALL {
             assert_eq!(Venue::parse(v.id()), Some(v));

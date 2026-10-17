@@ -15,6 +15,16 @@ export const DOLLARS = new Set(['USDT', 'USDC', 'USD', 'FDUSD', 'BUSD']);
 /** Coins pegged to a currency: USDC/USDT trades billions and is no chart to browse — it is found when typed. */
 const STABLE = new Set([...DOLLARS, 'TUSD', 'DAI', 'USDE', 'USDS', 'USD1', 'PYUSD', 'RLUSD', 'USDP', 'BFUSD', 'XUSD', 'EUR', 'EURI', 'EURC']);
 
+/**
+ * What an index perpetual is also called: trade.xyz's SP500 is the S&P 500,
+ * its XYZ100 the Nasdaq-100. Found after a market spelled so: SPX is first the
+ * coin SPX6900.
+ */
+const ALIASES: Record<string, string> = { SPX: 'SP500', US500: 'SP500', SPX500: 'SP500', NASDAQ: 'XYZ100', NDX: 'XYZ100', NAS100: 'XYZ100', US100: 'XYZ100', NQ: 'XYZ100', ES: 'SP500' };
+
+/** TradingView's prefixes that name no exchange of ours: `CRYPTOCAP:TOTAL2`, `TVC:VIX`. */
+const PREFIXES = new Set(['CRYPTO', 'INDEX', 'CRYPTOCAP', 'TVC', 'CBOE', 'SP', 'NASDAQ']);
+
 /** A coin under every name it trades as: Binance's 1000SHIB is Bybit's SHIB1000. */
 const coinOf = (base: string): string => base.replace(/^1(?:000)+(?=[A-Z])/, '').replace(/(?<=[A-Z])1(?:000)+$/, '');
 
@@ -69,10 +79,11 @@ export function rank(
     }
     if (exchanges.includes(word.toLowerCase())) exchange = word.toLowerCase();
     else if (word === 'PERP' || word === 'SPOT') kind = word.toLowerCase() as Kind;
-    // TradingView's index and other prefixes name no exchange of ours.
-    else if (word !== 'CRYPTO' && word !== 'INDEX') terms.push(word.replace(/[^A-Z0-9]/g, ''));
+    // TradingView's prefixes name no exchange of ours — unless it is the whole query.
+    else if (!PREFIXES.has(word) || query.trim().toUpperCase() === word) terms.push(word.replace(/\./g, '_').replace(/[^A-Z0-9_]/g, ''));
   }
   const needle = terms.join('');
+  const alias = ALIASES[needle];
   const scored: [number, number, Product][] = [];
   for (const p of products) {
     if (kind !== 'all' && p.kind !== kind) continue;
@@ -81,6 +92,7 @@ export function rank(
     if (needle) {
       if (p.symbol === needle) score = 100;
       else if (p.base === needle) score = 90;
+      else if (alias && p.base === alias) score = 80;
       else if (p.symbol.startsWith(needle)) score = 70;
       else if (p.base.startsWith(needle)) score = 60;
       else if (p.symbol.includes(needle)) score = 30;

@@ -7,7 +7,7 @@
  */
 import { parseMarket, type Venue } from './markets';
 
-const SAME: ReadonlySet<Venue> = new Set(['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bitget-spot', 'bitget-perp']);
+const SAME: ReadonlySet<Venue> = new Set(['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bitget-spot', 'bitget-perp', 'index']);
 
 let table: Promise<Map<string, string>> | null = null;
 

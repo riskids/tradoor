@@ -16,7 +16,9 @@ export type Venue =
   | 'hyperliquid-perp'
   | 'kraken-spot'
   | 'kraken-perp'
-  | 'lighter-perp';
+  | 'lighter-perp'
+  /** Series the tradoor server works out: the crypto market cap and its parts, the VIX. */
+  | 'index';
 
 export const VENUES: readonly Venue[] = [
   'binance-spot',
@@ -31,9 +33,10 @@ export const VENUES: readonly Venue[] = [
   'kraken-spot',
   'kraken-perp',
   'lighter-perp',
+  'index',
 ];
 
-const EXCHANGE_NAME: Record<string, string> = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', bitget: 'Bitget', hyperliquid: 'Hyperliquid', kraken: 'Kraken', lighter: 'Lighter' };
+const EXCHANGE_NAME: Record<string, string> = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', bitget: 'Bitget', hyperliquid: 'Hyperliquid', kraken: 'Kraken', lighter: 'Lighter', index: 'Index' };
 
 /** `Binance` for spot, `Binance Perp` for the perpetuals. */
 export const VENUE_LABEL = Object.fromEntries(VENUES.map((v) => [v, EXCHANGE_NAME[v.split('-')[0]!] + (v.endsWith('perp') ? ' Perp' : '')])) as Record<Venue, string>;
@@ -43,7 +46,7 @@ export interface MarketRef {
   symbol: string;
 }
 
-const MARKET = /^([a-z]+-(?:spot|perp)):([A-Z0-9_]+)$/;
+const MARKET = /^([a-z]+(?:-(?:spot|perp))?):([A-Z0-9_]+)$/;
 const KNOWN = new Set<string>(VENUES);
 
 export function parseMarket(ref: string): MarketRef | null {
@@ -75,7 +78,10 @@ export const ratioOf = (a: string, b: string): string => `${a}/${b}`;
 export function symbolOf(ref: string): string {
   const legs = ratioLegs(ref);
   if (legs) return `${symbolOf(legs[0])}/${symbolOf(legs[1])}`;
-  return parseMarket(ref)?.symbol ?? ref;
+  const m = parseMarket(ref);
+  if (!m) return ref;
+  // An index is named as TradingView names it: `BTC_D` is BTC.D.
+  return m.venue === 'index' ? m.symbol.replace(/_/g, '.') : m.symbol;
 }
 
 export function venueLabel(ref: string): string {

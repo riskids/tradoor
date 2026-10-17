@@ -106,7 +106,8 @@ The file format is described in [format.md](format.md).
 | Route | |
 |---|---|
 | `GET /api/health` | `{ok, db}` |
-| `GET /api/markets` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid, Kraken, Lighter) with 24h stats and each exchange's own name for it, cached 30 minutes |
+| `GET /api/markets` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid with trade.xyz's, Kraken, Lighter) with 24h stats and each exchange's own name for it, and the server's own indices, cached 30 minutes |
+| `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
@@ -138,6 +139,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
+| `market_cap`, `index_bar` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, as often as it moves (about every ten minutes); the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
 | `ingest_run` | recorder and backfill history |
@@ -183,6 +185,31 @@ of its time it lapses and its streams close. Its threshold until the reader sets
 three times its usual minute over the last day. Anyone can read the coins being
 followed, and drag the chips into the order they like (kept with the panel);
 only an admin chooses them, at most ten at once.
+
+Beside the exchanges' markets the server works out a few series itself, under
+the `index` venue (`indices`; `index:TOTAL`): the crypto market's capitalisation
+as TradingView's CRYPTOCAP names it — TOTAL, TOTAL2 (less Bitcoin), TOTAL3 (less
+Ether too), TOTALES (less stablecoins), OTHERS (less the ten largest) — in
+billions of dollars, so a scale reads `2,756.79` rather than thirteen digits;
+the shares BTC.D, ETH.D, USDT.D and OTHERS.D in percent; and the VIX. The caps
+come from CoinGecko's free `/global`, read every minute and kept as often as it
+moves, about every ten minutes (`market_cap`), so their bars begin when the
+recording did and a bar shorter than that is a point — CoinGecko keeps its own
+history for paying subscribers. The VIX comes from Cboe: its daily bars since
+1990 from the CSV it publishes, read hourly, and the day's own bar from its
+delayed quote every minute (`index_bar`); it has daily, weekly and monthly bars
+only. A chart or a watchlist row asks for an index's bars like any market's,
+of the server (`/api/index/candles`, never relayed), and its forming bar every
+fifteen seconds (`Poller`). A symbol is `[A-Z0-9_]`, so BTC.D is `BTC_D`,
+shown and searched with its dot; TradingView's `CRYPTOCAP:` and `TVC:` prefixes
+are read past. Alerts on an index are watched by the page alone.
+
+The S&P 500 and the Nasdaq-100 are trade.xyz's perpetuals on Hyperliquid
+(HIP-3) — `SP500USD`, `XYZ100USD`, beside its stocks, commodities and
+currencies — listed with Hyperliquid's coins and asked for by their own names
+(`xyz:SP500`) on the same API and streams. They trade around the clock, so a
+weekend's price is the market's guess at Monday's open. A search for SPX,
+NASDAQ or NDX finds them, after any market spelled so.
 
 Signal is the server's screener (`signals`, `drives`). A minute after each
 four-hour close it reads the last five hundred closed bars of the two hundred

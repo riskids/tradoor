@@ -115,6 +115,7 @@ const PAGE_LIMIT: Record<Venue, number> = {
   'kraken-spot': 720,
   'kraken-perp': 2000,
   'lighter-perp': 500,
+  index: 2000,
 };
 
 const pageLimit = (ref: MarketRef): number => PAGE_LIMIT[ref.venue];

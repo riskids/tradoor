@@ -74,6 +74,15 @@ export async function venueRows(ref: MarketRef, native: string, interval: string
       if (body.code !== 200) throw new Error(body.message || 'Lighter refused the candle request');
       return inRange((body.c ?? []).map((k) => [k.t, k.o, k.h, k.l, k.c, k.v]), range);
     }
+    case 'index': {
+      // Worked out by the tradoor server, and asked of it: never relayed.
+      let url = `/api/index/candles?symbol=${ref.symbol}&interval=${interval}&limit=${limit}&end=${end}`;
+      if (range.start !== undefined) url += `&start=${range.start}`;
+      const res = await fetch(url);
+      const body = (await res.json()) as Row[] | { error?: string };
+      if (!Array.isArray(body)) throw new Error(body.error || `the index answered ${res.status}`);
+      return body;
+    }
     default:
       throw new Error(`no candle loader for ${ref.venue}`);
   }

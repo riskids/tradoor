@@ -74,3 +74,21 @@ Deno.test("the day's movers: dollar markets of a million or more, one per coin",
   const quiet = rank(LIST, '', 'all', null, 'gainers', popularity(LIST));
   assertEquals(quiet, [], 'nothing here turns over a million');
 });
+
+Deno.test("indices and index perpetuals are found under TradingView's names", () => {
+  const list: Product[] = [
+    ...LIST,
+    { ...market('binance-perp', 'SPXUSDT', 'SPX', 'USDT', 80), name: undefined },
+    { ...market('hyperliquid-perp', 'SP500USD', 'SP500', 'USD', 60), name: 'S&P 500 · trade.xyz' },
+    { ...market('hyperliquid-perp', 'XYZ100USD', 'XYZ100', 'USD', 70), name: 'Nasdaq-100 · trade.xyz' },
+    { ...market('index', 'BTC_D', 'BTC_D', '%', null), kind: 'index' },
+    { ...market('index', 'TOTAL2', 'TOTAL2', 'USD', null), kind: 'index' },
+  ];
+  const first = (q: string) => rank(list, q, 'all', null, 'popular', popularity(list), ['index'])[0]?.market;
+  assertEquals(first('NASDAQ'), 'hyperliquid-perp:XYZ100USD');
+  assertEquals(first('BTC.D'), 'index:BTC_D', 'a dot spelled as TradingView does');
+  assertEquals(first('CRYPTOCAP:TOTAL2'), 'index:TOTAL2', "TradingView's prefix names no exchange");
+  const spx = rank(list, 'SPX', 'all', null, 'popular', popularity(list)).map((p) => p.market);
+  assertEquals(spx.slice(0, 2), ['binance-perp:SPXUSDT', 'hyperliquid-perp:SP500USD'], 'the coin spelled so first, then the index');
+  assertEquals(rank(list, '', 'all', 'index', 'popular', popularity(list)).length, 2, 'the Index exchange lists them all');
+});

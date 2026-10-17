@@ -182,14 +182,40 @@ export const PROTOCOLS: Record<string, () => Protocol> = {
 
 export const lighterResolution = (interval: string): string => INTERVALS['lighter-perp']?.[interval] ?? interval;
 
-const POLL_MS = 3_000;
+export const lighterPoller = (): Poller => new Poller(lighterBars, 3_000);
+/** The server reads its sources every minute or so; a quarter of that is soon enough. */
+export const indexPoller = (): Poller => new Poller(indexBars, 15_000);
+
+/** A bar as a poll reads it: `[open time, open, high, low, close, volume]`. */
+type Bar = [number, number, number, number, number, number];
+
+/** Lighter's last two bars of a length, the forming one last. */
+async function lighterBars(id: string, resolution: string): Promise<Bar[]> {
+  const now = Date.now();
+  const res = await fetch(`https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=${id}&resolution=${resolution}&start_timestamp=${now - 3 * 86_400_000}&end_timestamp=${now}&count_back=2`);
+  const body = (await res.json()) as { c?: { t: number; o: number; h: number; l: number; c: number; v: number }[] };
+  return (body.c ?? []).slice(-2).map((k) => [k.t, k.o, k.h, k.l, k.c, k.v]);
+}
+
+/** An index's last two bars from the tradoor server, which works them out. */
+async function indexBars(symbol: string, interval: string): Promise<Bar[]> {
+  const res = await fetch(`/api/index/candles?symbol=${symbol}&interval=${interval}&limit=2`);
+  if (!res.ok) throw new Error(`index ${res.status}`);
+  return (await res.json()) as Bar[];
+}
 
 /**
- * Bars for an exchange with no candle stream — Lighter: the forming bar asked
- * for every few seconds. One timer per market and length, however many listen.
+ * Bars for a venue with no candle stream — Lighter, and the indices this
+ * server works out: the forming bar asked for every few seconds. One timer
+ * per market and length, however many listen.
  */
 export class Poller {
   private readonly topics = new Map<string, { listeners: Set<StreamListener>; timer: ReturnType<typeof setInterval> }>();
+
+  constructor(
+    private readonly bars: (id: string, resolution: string) => Promise<Bar[]>,
+    private readonly every: number,
+  ) {}
 
   add(id: string, resolution: string, listener: StreamListener): () => void {
     const key = `${id}|${resolution}`;
@@ -197,18 +223,15 @@ export class Poller {
     if (!entry) {
       const listeners = new Set<StreamListener>();
       const tick = async () => {
-        const now = Date.now();
         try {
-          const res = await fetch(`https://mainnet.zklighter.elliot.ai/api/v1/candles?market_id=${id}&resolution=${resolution}&start_timestamp=${now - 3 * 86_400_000}&end_timestamp=${now}&count_back=2`);
-          const body = (await res.json()) as { c?: { t: number; o: number; h: number; l: number; c: number; v: number }[] };
-          const rows = (body.c ?? []).slice(-2);
+          const rows = await this.bars(id, resolution);
           for (const l of listeners) l.state('live', false);
-          for (const k of rows) for (const l of listeners) l.message({ kind: 'kline', openTime: k.t, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, lastTradeId: 0, closed: false });
+          for (const k of rows) for (const l of listeners) l.message({ kind: 'kline', openTime: k[0], open: k[1], high: k[2], low: k[3], close: k[4], volume: k[5], lastTradeId: 0, closed: false });
         } catch {
           for (const l of listeners) l.state('retrying', false);
         }
       };
-      entry = { listeners, timer: setInterval(() => void tick(), POLL_MS) };
+      entry = { listeners, timer: setInterval(() => void tick(), this.every) };
       this.topics.set(key, entry);
       void tick();
     }

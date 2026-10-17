@@ -8,7 +8,7 @@ import { Dynamic, For } from 'solid-js/web';
 import { MARKS, type ExchangeMark } from './exchange-marks';
 import { parseMarket, ratioLegs, venueLabel, type Venue } from './markets';
 
-export type ExchangeId = 'binance' | 'bybit' | 'okx' | 'bitget' | 'hyperliquid' | 'kraken' | 'lighter' | 'gate' | 'htx' | 'bitmex' | 'bitfinex' | 'aster' | 'deribit';
+export type ExchangeId = 'binance' | 'bybit' | 'okx' | 'bitget' | 'hyperliquid' | 'kraken' | 'lighter' | 'index' | 'gate' | 'htx' | 'bitmex' | 'bitfinex' | 'aster' | 'deribit';
 
 interface LogoProps {
   size?: number;
@@ -51,6 +51,7 @@ export const EXCHANGES: Record<ExchangeId, ExchangeDef> = {
   hyperliquid: { id: 'hyperliquid', name: 'Hyperliquid', live: true, Logo: logo('hyperliquid') },
   kraken: { id: 'kraken', name: 'Kraken', live: true, Logo: logo('kraken') },
   lighter: { id: 'lighter', name: 'Lighter', live: true, Logo: logo('lighter') },
+  index: { id: 'index', name: 'Index', live: true, Logo: logo('index') },
   gate: { id: 'gate', name: 'Gate', live: false, Logo: logo('gate') },
   htx: { id: 'htx', name: 'HTX', live: false, Logo: logo('htx') },
   bitmex: { id: 'bitmex', name: 'BitMEX', live: false, Logo: logo('bitmex') },
@@ -68,7 +69,13 @@ export function ExchangeLogo(props: { exchange: ExchangeDef; size?: number }) {
   return <Dynamic component={props.exchange.Logo} size={props.size} />;
 }
 
-/** Logo, optionally the exchange's name, and PERP or SPOT — for a ratio, each
+/** PERP, SPOT or INDEX: what a market is, as its row says it. */
+export const kindLabel = (market: string): string => {
+  const venue = parseMarket(market)?.venue;
+  return venue === 'index' ? 'INDEX' : venue?.endsWith('perp') ? 'PERP' : 'SPOT';
+};
+
+/** Logo, optionally the exchange's name, and its kind — for a ratio, each
  *  of its markets' logos either side of the stroke. */
 export function VenueTag(props: { market: string; name?: boolean; size?: number }) {
   const legs = () => ratioLegs(props.market);
@@ -89,10 +96,10 @@ function OneVenue(props: { market: string; name?: boolean; size?: number }) {
   const ref = () => parseMarket(props.market);
   const exchange = () => exchangeOfVenue(ref()?.venue ?? 'binance');
   return (
-    <span class="venue" data-tip={ref() ? `${exchange().name} ${ref()!.venue.endsWith('perp') ? 'perpetual' : 'spot'}` : undefined}>
+    <span class="venue" data-tip={ref() ? (ref()!.venue === 'index' ? 'Worked out by the tradoor server' : `${exchange().name} ${ref()!.venue.endsWith('perp') ? 'perpetual' : 'spot'}`) : undefined}>
       <ExchangeLogo exchange={exchange()} size={props.size} />
       {props.name ? <span class="venue-name">{exchange().name}</span> : null}
-      <span class="kind">{ref()?.venue.endsWith('perp') ? 'PERP' : 'SPOT'}</span>
+      <span class="kind">{kindLabel(props.market)}</span>
     </span>
   );
 }

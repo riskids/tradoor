@@ -16,8 +16,8 @@ import { catalog, type Catalog } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
 import { formatPct, formatPrice, formatVolume, priceDecimals } from '../lib/format';
 import { Icon } from '../lib/icons';
-import { ExchangeLogo, exchangeOfVenue } from '../lib/exchanges';
-import { isPerp, parseMarket, symbolOf, venueLabel } from '../lib/markets';
+import { ExchangeLogo, exchangeOfVenue, kindLabel } from '../lib/exchanges';
+import { parseMarket, symbolOf, venueLabel } from '../lib/markets';
 import { blockOf, FLAG_COLORS, FLAGS, freshName, isSection, move, SECTION_NAME_MAX, sectionEnd, sectionName, sectionStops, visible } from '../lib/watchlist';
 import type { WatchlistPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setLinkMarket, setPanelMarket, targetChart, timeframeOf } from '../workspace/store';
@@ -365,7 +365,7 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                 <span class="sym">
                   <ExchangeLogo exchange={exchangeOfVenue(parseMarket(item)?.venue ?? 'binance')} size={13} />
                   <span class="name">{symbolOf(item)}</span>
-                  <span class="kind">{isPerp(item) ? 'PERP' : 'SPOT'}</span>
+                  <span class="kind">{kindLabel(item)}</span>
                 </span>
                 <span class="num r muted">{rows[item] ? formatPrice(rows[item]!.last, digits(item, rows[item]!.last)) : '—'}</span>
                 <span class="num r chg" classList={{ bull: (changePct(rows[item]) ?? 0) > 0, bear: (changePct(rows[item]) ?? 0) < 0, dim: changePct(rows[item]) === null }}>
