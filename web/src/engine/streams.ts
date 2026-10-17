@@ -224,6 +224,10 @@ const PROTOCOLS: Record<string, () => Protocol> = {
 let more: Promise<typeof import('./streams-more')> | null = null;
 const loadMore = () => (more ??= import('./streams-more'));
 
+/** The other exchanges' protocols, fetched now rather than with the first
+ *  market on one: a watchlist's indices and index perpetuals need them. */
+export const loadOtherStreams = (): void => void loadMore();
+
 /** The socket a venue's spec travels on. */
 export function socketOf(venue: Venue, spec: StreamSpec): string {
   if (venue.startsWith('okx')) return spec.kind === 'kline' ? 'okx-business' : 'okx-public';

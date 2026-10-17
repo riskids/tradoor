@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
@@ -106,6 +106,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
     let api = Router::new()
         .route("/health", get(health))
         .route("/markets", get(markets))
+        .route("/catalog", get(catalog_wire))
         .route("/history", get(history))
         .route("/drawings", get(drawings::list).post(drawings::create).delete(drawings::clear))
         .route("/drawings/{id}", delete(drawings::delete_one).patch(drawings::update))
@@ -183,6 +184,20 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 async fn markets(State(state): State<AppState>) -> Response {
     let body = state.catalog.get().await;
     ([(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=300")], body.as_ref().clone()).into_response()
+}
+
+/// The compact catalogue (see `catalog`): compressed once per refresh, sent so
+/// to a browser that takes brotli — every current one — and plain otherwise,
+/// for the compression layer to gzip.
+async fn catalog_wire(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let wire = state.catalog.wire().await;
+    let takes_brotli = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|e| e.trim().starts_with("br")));
+    let kept = [(header::CONTENT_TYPE, "application/json"), (header::VARY, "accept-encoding"), (header::CACHE_CONTROL, "public, max-age=300")];
+    if takes_brotli && !wire.brotli.is_empty() {
+        (kept, [(header::CONTENT_ENCODING, "br")], wire.brotli).into_response()
+    } else {
+        (kept, wire.json).into_response()
+    }
 }
 
 /// What history is on disk, per market and base — read from the manifests the

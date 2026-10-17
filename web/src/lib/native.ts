@@ -5,6 +5,7 @@
  * Solid-free, so the chart's worker reads it too; each side fetches the
  * catalogue once.
  */
+import { listing } from './catalog-wire';
 import { parseMarket, type Venue } from './markets';
 
 const SAME: ReadonlySet<Venue> = new Set(['binance-spot', 'binance-perp', 'bybit-spot', 'bybit-perp', 'bitget-spot', 'bitget-perp', 'index']);
@@ -12,8 +13,7 @@ const SAME: ReadonlySet<Venue> = new Set(['binance-spot', 'binance-perp', 'bybit
 let table: Promise<Map<string, string>> | null = null;
 
 function load(): Promise<Map<string, string>> {
-  table ??= fetch('/api/markets')
-    .then((r) => (r.ok ? (r.json() as Promise<{ products: { market: string; native?: string }[] }>) : { products: [] }))
+  table ??= listing()
     .then((c) => new Map(c.products.flatMap((p) => (p.native ? [[p.market, p.native] as [string, string]] : []))))
     .catch(() => {
       table = null; // tried again next time

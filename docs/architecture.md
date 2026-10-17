@@ -21,6 +21,16 @@ page never drops a frame of the chart.
 
 ## A chart, from request to pixels
 
+The page starts the chart engine — its worker and WebAssembly — and the other
+exchanges' streams as soon as its script runs, alongside its first requests,
+rather than once the layout has loaded and a chart asks (`warmEngine`,
+`loadOtherStreams`). And the built page names what its first screen needs
+beyond the entry's own imports — the worker, the WebAssembly, those streams
+and the default layout's panels — so the browser fetches them all at once with
+the entry (`web/preload.ts`): each deploy renames them, so a returning visitor
+loads them afresh after it, and waits on the slowest rather than on them in a
+row.
+
 1. `openSeries(market, base, interval)` reads `/data/{venue}/{SYMBOL}/manifest.json`.
    When the market is archived at the chart's base (1m for minutes, 1h for hours,
    1d for everything longer) the series is `archive`; otherwise `exchange`.
@@ -106,7 +116,8 @@ The file format is described in [format.md](format.md).
 | Route | |
 |---|---|
 | `GET /api/health` | `{ok, db}` |
-| `GET /api/markets` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid with trade.xyz's, Kraken, Lighter) with 24h stats and each exchange's own name for it, and the server's own indices, cached 30 minutes |
+| `GET /api/catalog` | every market on twelve venues (Binance, Bybit, OKX, Bitget, Hyperliquid with trade.xyz's, Kraken, Lighter) with 24h stats and each exchange's own name for it, and the server's own indices: each venue's markets as rows of `columns`, a row stopping at its last value, brotli-compressed once per refresh (some 135 KB) and read again in the background every half hour |
+| `GET /api/markets` | the same as one object a market (2.4 MB, 350 KB gzipped), for pages loaded before `catalog` |
 | `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
 | `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
 | `GET /api/history` | archived markets and what each base covers |

@@ -88,6 +88,10 @@ function engine(): Worker {
   return worker;
 }
 
+/** Starts the chart engine — its worker and WebAssembly — before any chart
+ *  asks for it, alongside the page's own first requests. */
+export const warmEngine = (): void => void engine();
+
 export function send(msg: ToWorker, transfer: Transferable[] = []): void {
   engine().postMessage(msg, transfer);
 }

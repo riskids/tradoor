@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
+import { preload } from './preload.ts';
 import { site } from './site.ts';
 
 declare const process: { env: Record<string, string | undefined> };
@@ -9,7 +10,7 @@ declare const process: { env: Record<string, string | undefined> };
 const server = process.env.TRADOOR_API ?? 'http://127.0.0.1:8080';
 
 export default defineConfig({
-  plugins: [solid(), site()],
+  plugins: [solid(), site(), preload()],
   server: {
     port: 5173,
     // ws: the exchange stream relay for networks that block the exchanges.

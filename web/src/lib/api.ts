@@ -2,6 +2,7 @@
  *  do not come through here — they are files under /data and exchange REST. */
 import type { DrawingPoint } from '../engine/protocol';
 import type { Style } from './drawing-style';
+import { listing, type Listing } from './catalog-wire';
 import { ownerId } from './owner';
 
 export class ApiError extends Error {
@@ -81,17 +82,13 @@ export interface Catalog {
   byMarket: Map<string, Product>;
 }
 
-let catalogCache: { at: number; value: Promise<Catalog> } | null = null;
+let indexed: { of: Promise<Listing>; value: Promise<Catalog> } | null = null;
 
 /** Every market on every venue, fetched once and searched locally. */
 export function catalog(): Promise<Catalog> {
-  if (catalogCache && Date.now() - catalogCache.at < 30 * 60_000) return catalogCache.value;
-  const value = json<Omit<Catalog, 'byMarket'>>('/api/markets').then((c) => ({ ...c, byMarket: new Map(c.products.map((p) => [p.market, p])) }));
-  catalogCache = { at: Date.now(), value };
-  value.catch(() => {
-    if (catalogCache?.value === value) catalogCache = null;
-  });
-  return value;
+  const of = listing();
+  if (indexed?.of !== of) indexed = { of, value: of.then((c) => ({ ...c, byMarket: new Map<string, Product>(c.products.map((p) => [p.market, p])) })) };
+  return indexed.value;
 }
 
 export interface Drawing {
