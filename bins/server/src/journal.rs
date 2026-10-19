@@ -16,6 +16,10 @@
 //! The minutes come from the market's own exchange: Binance, Bybit,
 //! Hyperliquid, OKX and Bitget. A trade on another venue, or on an index, is
 //! kept by hand.
+//!
+//! A journal is kept for an account: a browser signed in with Telegram, whose
+//! journal then follows it to any device it signs in on. One not signed in
+//! draws positions as before, and none is written down.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
@@ -210,6 +214,9 @@ pub async fn sync_drawing(client: &tokio_postgres::Client, owner: &str, drawing:
     let timeframe = drawing["timeframe"].as_str().unwrap_or("");
     let drawn_at = drawing["createdAt"].as_i64().unwrap_or_else(now_ms);
     let Some(plan) = plan_of(kind, &points, &style, drawn_at, timeframe) else { return Ok(()) };
+    if !signed_in(client, owner).await? {
+        return Ok(());
+    }
     let now = now_ms();
     let held = client
         .query_opt("SELECT id, start_at, entry, stop, target, auto FROM journal_trade WHERE drawing_id = $1 AND owner = $2", &[&id, &owner])
@@ -231,11 +238,12 @@ pub async fn sync_drawing(client: &tokio_postgres::Client, owner: &str, drawing:
         return Ok(());
     }
     // Undone deletes come back as new drawings, made just now: the trade they
-    // left behind — the same prices on the same market — is theirs again.
+    // left behind — the same prices on the same market — is theirs again. One
+    // added by hand (no timeframe) was never a drawing's, and stays the hand's.
     let back = client
         .execute(
             "UPDATE journal_trade SET drawing_id = $1, updated_at = $8 WHERE id = (
-                 SELECT id FROM journal_trade WHERE owner = $2 AND drawing_id IS NULL AND market = $3 AND side = $4
+                 SELECT id FROM journal_trade WHERE owner = $2 AND drawing_id IS NULL AND timeframe <> '' AND market = $3 AND side = $4
                      AND entry = $5 AND stop = $6 AND target = $7 ORDER BY id DESC LIMIT 1)",
             &[&id, &owner, &market, &plan.side.id(), &plan.entry, &plan.stop, &plan.target, &now],
         )
@@ -274,7 +282,8 @@ async fn round(pool: &deadpool_postgres::Pool, http: &reqwest::Client, catalog: 
     let rows = client
         .query(
             "SELECT id, market, side, entry, stop, target, status, opened_at, checked_until FROM journal_trade
-             WHERE auto AND status IN ('planned', 'open') ORDER BY checked_until LIMIT $1",
+             WHERE auto AND status IN ('planned', 'open') AND EXISTS (SELECT 1 FROM account a WHERE a.owner = journal_trade.owner)
+             ORDER BY checked_until LIMIT $1",
             &[&TRADES_PER_ROUND],
         )
         .await?;
@@ -451,6 +460,18 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
     })
 }
 
+/// What a browser not signed in is told when it would write to the journal.
+const SIGN_IN_FIRST: &str = "sign in with Telegram to keep a journal";
+
+/// Whether this browser id is an account's: one signed in with Telegram.
+async fn signed_in(client: &tokio_postgres::Client, owner: &str) -> Result<bool, tokio_postgres::Error> {
+    Ok(client.query_one("SELECT EXISTS (SELECT 1 FROM account WHERE owner = $1)", &[&owner]).await?.get(0))
+}
+
+async fn account_only(client: &tokio_postgres::Client, owner: &str) -> ApiResult<()> {
+    if signed_in(client, owner).await? { Ok(()) } else { Err(ApiError::forbidden(SIGN_IN_FIRST)) }
+}
+
 /// `GET /api/journal`: this browser's trades, newest first, tagged with what
 /// they read as: an open journal asks again every half minute, and while
 /// nothing has changed the tag it sends back is answered 304, with no body.
@@ -527,6 +548,7 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Json(body
     }
     let closed_at = finite(b, "closedAt")?.map(|v| v as i64).or(done.then_some(now));
     let client = state.pool.get().await?;
+    account_only(&client, &owner).await?;
     let held: i64 = client.query_one("SELECT count(*) FROM journal_trade WHERE owner = $1", &[&owner]).await?.get(0);
     if held >= MAX_PER_OWNER {
         return Err(ApiError::bad_request(format!("a browser may keep at most {MAX_PER_OWNER} trades")));
@@ -570,6 +592,7 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let owner = owner(&headers)?;
     let b = body.as_object().ok_or_else(|| ApiError::bad_request("body must be a JSON object"))?;
     let client = state.pool.get().await?;
+    account_only(&client, &owner).await?;
     let row = client
         .query_opt("SELECT entry, stop, start_at FROM journal_trade WHERE id = $1 AND owner = $2", &[&id, &owner])
         .await?
@@ -635,6 +658,7 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
 pub async fn delete_one(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
     let client = state.pool.get().await?;
+    account_only(&client, &owner).await?;
     match client.execute("DELETE FROM journal_trade WHERE id = $1 AND owner = $2", &[&id, &owner]).await? {
         0 => Err(ApiError::not_found(format!("trade {id} not found"))),
         _ => Ok(Json(json!({ "id": id }))),
@@ -668,6 +692,7 @@ pub async fn save_review(State(state): State<AppState>, headers: HeaderMap, Path
     }
     let now = now_ms();
     let client = state.pool.get().await?;
+    account_only(&client, &owner).await?;
     client
         .execute(
             "INSERT INTO journal_review (owner, week, answers, saved_at) VALUES ($1, $2, $3, $4)

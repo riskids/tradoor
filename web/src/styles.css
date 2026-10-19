@@ -807,6 +807,9 @@ table.venues tr.off td { color: var(--dim); }
 .jr-tabs button { padding: 3px 9px; font-size: 11px; }
 .jr-body { flex: 1; min-height: 0; overflow: auto; }
 .jr-empty { max-width: 520px; margin: 48px auto; padding: 0 16px; line-height: 1.6; }
+.jr-gate { display: flex; flex-direction: column; gap: 12px; max-width: 520px; margin: 48px auto; padding: 0 16px; line-height: 1.6; }
+.jr-gate h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.jr-gate > p { margin: 0; }
 .jr-dash { display: flex; flex-direction: column; gap: 10px; padding: 10px; }
 .jr-periods { padding: 0; }
 .jr-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }

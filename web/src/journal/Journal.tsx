@@ -3,11 +3,14 @@
  * on a chart lands here as a trade, and price decides how it went (see
  * bins/server/src/journal.rs). Three tabs, as rsalianto's journal has them:
  * the dashboard of what the trades add up to, their history — each opened to
- * set its strategy and notes or close it by hand — and the weekly review.
+ * set its strategy and notes or close it by hand — and the weekly review. It
+ * is kept for an account: until the browser signs in with Telegram, it shows
+ * how, and nothing is written down.
  */
 import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { setJournalOpen } from '../app/ui';
-import { catalog, errorText } from '../lib/api';
+import { AccountCard } from '../components/Account';
+import { api, catalog, errorText, type AccountStatus } from '../lib/api';
 import { formatPrice } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { isMarket, symbolOf, venueLabel } from '../lib/markets';
@@ -61,8 +64,11 @@ export function Journal() {
   const [selected, setSelected] = createSignal<number | null>(null);
   const [adding, setAdding] = createSignal(false);
   const [decimals, setDecimals] = createSignal(new Map<string, number>());
+  const [account, setAccount] = createSignal<AccountStatus | null>(null);
+  const signedIn = () => !!account()?.account;
 
   const load = async () => {
+    if (!signedIn()) return;
     try {
       setTrades(await journalApi.trades());
       setError(null);
@@ -72,8 +78,17 @@ export function Journal() {
       setLoaded(true);
     }
   };
+  const readAccount = async () => {
+    try {
+      setAccount(await api.account());
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+    await load();
+  };
   onMount(() => {
-    void load();
+    void readAccount();
     // Asked again only while the page is in view and price still has a trade
     // to decide; back in view, at once.
     const timer = setInterval(() => {
@@ -111,42 +126,53 @@ export function Journal() {
     <section class="journal">
       <header class="jr-head">
         <span class="jr-title">Journal</span>
-        <nav class="chips jr-tabs">
-          <For each={TABS}>
-            {([id, label]) => (
-              <button classList={{ on: tab() === id }} onClick={() => setTab(id)}>
-                {label}
-              </button>
-            )}
-          </For>
-        </nav>
+        <Show when={signedIn()}>
+          <nav class="chips jr-tabs">
+            <For each={TABS}>
+              {([id, label]) => (
+                <button classList={{ on: tab() === id }} onClick={() => setTab(id)}>
+                  {label}
+                </button>
+              )}
+            </For>
+          </nav>
+        </Show>
         <span class="grow" />
-        <button class="tb" data-tip="Add a trade by hand" onClick={() => setAdding(true)}>
-          <Icon name="plus" size={12} /> Trade
-        </button>
+        <Show when={signedIn()}>
+          <button class="tb" data-tip="Add a trade by hand" onClick={() => setAdding(true)}>
+            <Icon name="plus" size={12} /> Trade
+          </button>
+        </Show>
         <button class="iconbtn" aria-label="Close the journal" data-tip="Back to the charts (Esc)" onClick={() => setJournalOpen(false)}>
           <Icon name="close" size={15} />
         </button>
       </header>
       <Show when={error()}>{(e) => <div class="banner">▲ {e()}</div>}</Show>
       <div class="jr-body">
-        <Show when={loaded() && trades().length === 0 && tab() !== 'review'}>
-          <div class="jr-empty">
-            <p>No trades yet.</p>
-            <p class="muted">Draw a Long or Short position on a chart (Alt+L, Alt+S): it lands here, and price decides how it went — open at the entry, then the target or the stop. Or add one by hand.</p>
-          </div>
+        <Show when={account()} fallback={<p class="jr-empty muted">Reading…</p>}>
+          <Show when={signedIn()} fallback={<SignInFirst onSignedIn={() => void readAccount()} />}>
+            <Show when={loaded() && trades().length === 0 && tab() !== 'review'}>
+              <div class="jr-empty">
+                <p>No trades yet.</p>
+                <p class="muted">
+                  Draw a Long or Short position on a chart (Alt+L, Alt+S): it lands here, and price decides how it went — open at the entry, then the target or the stop. Or
+                  add one by hand.
+                </p>
+              </div>
+            </Show>
+            <Switch>
+              <Match when={tab() === 'dashboard' && trades().length > 0}>
+                <Dashboard trades={trades()} />
+              </Match>
+              <Match when={tab() === 'history' && trades().length > 0}>
+                <History trades={trades()} price={price} onSelect={setSelected} />
+              </Match>
+              <Match when={tab() === 'review'}>
+                <ReviewTab trades={trades()} />
+              </Match>
+            </Switch>
+          </Show>
         </Show>
-        <Switch>
-          <Match when={tab() === 'dashboard' && trades().length > 0}>
-            <Dashboard trades={trades()} />
-          </Match>
-          <Match when={tab() === 'history' && trades().length > 0}>
-            <History trades={trades()} price={price} onSelect={setSelected} />
-          </Match>
-          <Match when={tab() === 'review'}>
-            <ReviewTab trades={trades()} />
-          </Match>
-        </Switch>
       </div>
       <Show when={current()}>
         {(t) => (
@@ -173,6 +199,20 @@ export function Journal() {
         />
       </Show>
     </section>
+  );
+}
+
+/** Before the journal opens, signing in: it is kept for a Telegram account. */
+function SignInFirst(props: { onSignedIn(): void }) {
+  return (
+    <div class="jr-gate">
+      <h2>Sign in with Telegram to keep a journal</h2>
+      <p class="muted">
+        Once you are signed in, every Long or Short position you draw on a chart lands here, and price decides how it went — open at the entry, then the target or the stop.
+        The journal is kept with your account, so it follows you to any device you sign in on.
+      </p>
+      <AccountCard onSignedIn={props.onSignedIn} />
+    </div>
   );
 }
 

@@ -120,8 +120,8 @@ The file format is described in [format.md](format.md).
 | `GET /api/markets` | the same as one object a market (2.4 MB, 350 KB gzipped), for pages loaded before `catalog` |
 | `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
 | `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
-| `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades, tagged (`ETag`; asked with an unchanged tag, 304); add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
-| `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers |
+| `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades — written only for an account, signed in with Telegram (403 otherwise) — tagged (`ETag`; asked with an unchanged tag, 304); add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
+| `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers, for an account only |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
@@ -153,7 +153,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
-| `journal_trade`, `journal_review` | the trading journal per browser id: every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
+| `journal_trade`, `journal_review` | the trading journal per account's browser id: every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
 | `market_cap`, `index_hour`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year), and each cap series rolled up by the hour; the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
@@ -263,7 +263,10 @@ rsalianto's journal: a dashboard of what the trades add up to (net P&L, win
 rate, total R, profit factor, expectancy, drawdown, streak; the equity curve,
 a P&L calendar, and by pair, side and strategy), the history — each trade
 opened to set its strategy and notes, close it by hand or open its chart —
-and the weekly review's nine questions beside the week's figures.
+and the weekly review's nine questions beside the week's figures. A journal
+is kept for an account: a browser not signed in with Telegram is shown how to
+sign in, its positions are not written down, and the API turns its writes away
+(403); the watcher walks only accounts' trades.
 
 Signal is the server's screener (`signals`, `drives`). A minute after each
 four-hour close it reads the last five hundred closed bars of the two hundred

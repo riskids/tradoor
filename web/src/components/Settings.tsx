@@ -1,12 +1,13 @@
 import { createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
-import { api, errorText, type AccountStatus, type TelegramStatus } from '../lib/api';
-import { freshOwnerId, OWNER_PATTERN, ownerId, switchOwner } from '../lib/owner';
+import { api, errorText, type TelegramStatus } from '../lib/api';
+import { OWNER_PATTERN, ownerId, switchOwner } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { Icon, type IconName } from '../lib/icons';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
 import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
 import { formatDateTime } from '../lib/timezone';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
+import { AccountCard, clock } from './Account';
 
 function Swatch(props: { name: string; label: string; fallback: string }) {
   const value = () => doc.theme[props.name] ?? props.fallback;
@@ -53,12 +54,6 @@ const CLEARING = [
   { value: 'keep', label: 'Keep every message' },
 ];
 
-/** The clock the reader reads the page in, which their Telegram messages follow. */
-const clock = () => {
-  const zone = timeZone() === LOCAL_ZONE ? deviceZone() : timeZone();
-  return { zone, offsetMinutes: offsetMinutes(timeZone(), Date.now()) };
-};
-
 /** A labelled line of a card: what it is on the left, its control on the right. */
 function Row(props: { label: string; tip?: string; children: JSX.Element }) {
   return (
@@ -71,147 +66,15 @@ function Row(props: { label: string; tip?: string; children: JSX.Element }) {
   );
 }
 
-/**
- * Signing in with Telegram: everything stays keyed by the browser id, and the
- * account is how a browser gets its id back. The link is minted before it is
- * needed, so the button is a plain link — one opened after waiting on the
- * server is a popup, and a popup is blocked — and while it is out the sign-in
- * is asked after until the reader says yes in the chat.
- */
 function AccountSection() {
-  const [status, setStatus] = createSignal<AccountStatus | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
-  const [invite, setInvite] = createSignal<{ url: string; code: string } | null>(null);
-  const [waiting, setWaiting] = createSignal(false);
-  const [note, setNote] = createSignal<string | null>(null);
-
-  const mint = async () => {
-    try {
-      setInvite(await api.signIn(clock()));
-    } catch {
-      setInvite(null); // The bot may not have answered yet; the card says so.
-    }
-  };
-  const load = async () => {
-    try {
-      const next = await api.account();
-      setStatus(next);
-      setError(null);
-      if (!next.account && next.telegram && next.bot && !invite()) void mint();
-    } catch (e) {
-      setError(errorText(e));
-    }
-  };
-  void load();
-
-  const ask = async () => {
-    const code = invite()?.code;
-    if (!code || !waiting()) return;
-    try {
-      const got = await api.signedIn(code);
-      if (got.state === 'done') {
-        setWaiting(false);
-        // Another id: the account's things are under it, and the page loads them.
-        if (got.owner !== ownerId()) switchOwner(got.owner);
-        else void load();
-      } else if (got.state === 'gone') {
-        setWaiting(false);
-        setNote('Not signed in: the link was declined or has expired. Try again.');
-        setInvite(null);
-        void mint();
-      }
-    } catch (e) {
-      setError(errorText(e));
-    }
-  };
-  const timer = setInterval(() => void ask(), 2_000);
-  // A link is good for ten minutes: a fresh one before it lapses.
-  const fresh = setInterval(() => {
-    if (!waiting() && !status()?.account) void mint();
-  }, 8 * 60_000);
-  onCleanup(() => {
-    clearInterval(timer);
-    clearInterval(fresh);
-  });
-
-  const signOut = () => {
-    if (!confirm('Sign out of this browser? Everything stays with your account; this browser starts empty until you sign in again.')) return;
-    switchOwner(freshOwnerId());
-  };
-
   return (
     <>
       <h2>Account</h2>
       <p class="lead">
-        Your drawings, layout, watchlists and alerts are kept on the server. Sign in with Telegram and they follow you — after clearing this browser's history, or on
-        another device, sign in again to have them back.
+        Your drawings, journal, layout, watchlists and alerts are kept on the server. Sign in with Telegram and they follow you — after clearing this browser's history,
+        or on another device, sign in again to have them back.
       </p>
-      <Show when={status()} fallback={<div class="dim">{error() ?? 'Reading…'}</div>}>
-        {(s) => (
-          <Show
-            when={s().account}
-            fallback={
-              <div class="set-card">
-                <div class="set-account">
-                  <span class="avatar out">
-                    <Icon name="user" size={18} />
-                  </span>
-                  <div class="who">
-                    <b>Not signed in</b>
-                    <span class="dim">This browser keeps its things under its own id only.</span>
-                  </div>
-                </div>
-                <Show when={s().telegram} fallback={<div class="dim">This server has no Telegram bot set up, so signing in is not on offer here.</div>}>
-                  <div class="set-actions">
-                    <Show when={invite()} fallback={<span class="dim">{s().bot ? 'Making a link…' : 'The bot has not answered yet.'}</span>}>
-                      {(link) => (
-                        <a
-                          class="btn primary big"
-                          href={link().url}
-                          target="_blank"
-                          rel="noopener"
-                          onClick={() => {
-                            setNote(null);
-                            setWaiting(true);
-                          }}
-                        >
-                          <Icon name="send" size={13} />
-                          <span>Sign in with Telegram</span>
-                        </a>
-                      )}
-                    </Show>
-                    <Show when={waiting()}>
-                      <span class="warn">Waiting — press “Yes, sign in” in the Telegram chat.</span>
-                    </Show>
-                  </div>
-                  <p class="note">
-                    No password and no phone number: the tradoor bot asks you to confirm in Telegram, and your alerts then come to that chat. If you already have an account,
-                    this browser switches to it; anything made here before signing in stays behind.
-                  </p>
-                </Show>
-              </div>
-            }
-          >
-            {(a) => (
-              <div class="set-card">
-                <div class="set-account">
-                  <span class="avatar">{(a().name ?? '?').replace(/^@/, '').slice(0, 1).toUpperCase()}</span>
-                  <div class="who">
-                    <b>{a().name ?? 'Telegram account'}</b>
-                    <span class="dim">Signed in with Telegram · since {formatDateTime(a().since).slice(0, 10)}</span>
-                  </div>
-                  <button class="btn" onClick={signOut}>
-                    Sign out of this browser
-                  </button>
-                </div>
-                <p class="note">Sign in on any other browser or device to have the same drawings, layout, watchlists and alerts there.</p>
-              </div>
-            )}
-          </Show>
-        )}
-      </Show>
-      <Show when={error()}>{(e) => <div class="warn">▲ {e()}</div>}</Show>
-      <Show when={note()}>{(n) => <div class="dim">{n()}</div>}</Show>
+      <AccountCard />
     </>
   );
 }

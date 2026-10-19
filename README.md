@@ -181,8 +181,9 @@ stop — on Binance, Bybit, Hyperliquid, OKX and Bitget; trades elsewhere, and
 those added by hand, are closed by hand. Its risk is the position's own
 settings (1% of a 1,000 account until set). A dashboard, the history with each
 trade's strategy and notes, and a weekly review, as rsalianto's journal has
-them. It is kept on the server under the browser id, like drawings: sign in
-with Telegram to have it on another device.
+them. It is kept for a Telegram account: sign in (in the Journal, or in
+Settings) and it is written down, and follows you to any device you sign in on;
+until then positions are drawn as before, and none is recorded.
 
 ## Indices, the S&P 500 and the Nasdaq
 
