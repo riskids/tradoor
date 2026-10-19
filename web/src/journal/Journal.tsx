@@ -74,8 +74,19 @@ export function Journal() {
   };
   onMount(() => {
     void load();
-    const timer = setInterval(() => void load(), REFRESH_MS);
-    onCleanup(() => clearInterval(timer));
+    // Asked again only while the page is in view and price still has a trade
+    // to decide; back in view, at once.
+    const timer = setInterval(() => {
+      if (!document.hidden && trades().some((t) => t.auto && t.tracked && isLive(t))) void load();
+    }, REFRESH_MS);
+    const shown = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', shown);
+    onCleanup(() => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', shown);
+    });
     // Each market's tick, so a dragged anchor's 81,234.56789 reads as the exchange quotes it.
     void catalog()
       .then((c) => setDecimals(new Map(c.products.flatMap((p) => (p.priceDecimals === null ? [] : [[p.market, p.priceDecimals] as [string, number]])))))

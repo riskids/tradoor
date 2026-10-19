@@ -4,7 +4,8 @@
  * the server keeps: every long or short position drawn on a chart, and those
  * added by hand. Price decides how each went until a status is set by hand.
  */
-import { json } from '../lib/api';
+import { ApiError, json } from '../lib/api';
+import { ownerId } from '../lib/owner';
 
 export type Side = 'long' | 'short';
 export type Status = 'planned' | 'open' | 'win' | 'loss' | 'closed' | 'breakeven' | 'cancelled';
@@ -62,8 +63,27 @@ export interface NewTrade {
 
 export type TradePatch = Partial<Pick<Trade, 'strategy' | 'notes' | 'fees' | 'risk'>> & { status?: 'closed' | 'breakeven' | 'cancelled'; exit?: number; closedAt?: number; auto?: true };
 
+/** The list last read, and the tag the server gave it. */
+let held: { tag: string; trades: Trade[] } | null = null;
+
+/** Every trade, newest first: the array read last time while none has changed
+ *  (the server answers the tag it gave 304), so nothing is drawn again. */
+async function trades(): Promise<Trade[]> {
+  const headers: Record<string, string> = { 'x-tradoor-owner': ownerId() };
+  if (held) headers['if-none-match'] = held.tag;
+  const res = await fetch('/api/journal', { headers }).catch(() => {
+    throw new ApiError(0, 'the tradoor server is not reachable');
+  });
+  if (res.status === 304 && held) return held.trades;
+  const body = (await res.json().catch(() => null)) as { trades?: Trade[]; error?: unknown } | null;
+  if (!res.ok || !body?.trades) throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : `request failed (${res.status})`);
+  const tag = res.headers.get('etag');
+  held = tag ? { tag, trades: body.trades } : null;
+  return body.trades;
+}
+
 export const journalApi = {
-  trades: () => json<{ trades: Trade[] }>('/api/journal').then((r) => r.trades),
+  trades,
   create: (t: NewTrade) => json<{ trade: Trade }>('/api/journal', { method: 'POST', body: t }).then((r) => r.trade),
   update: (id: number, patch: TradePatch) => json<{ trade: Trade }>(`/api/journal/${id}`, { method: 'PATCH', body: patch }).then((r) => r.trade),
   remove: (id: number) => json<{ id: number }>(`/api/journal/${id}`, { method: 'DELETE' }),

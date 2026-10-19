@@ -120,7 +120,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/markets` | the same as one object a market (2.4 MB, 350 KB gzipped), for pages loaded before `catalog` |
 | `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
 | `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
-| `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades; add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
+| `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades, tagged (`ETag`; asked with an unchanged tag, 304); add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
 | `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |

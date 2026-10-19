@@ -18,12 +18,14 @@
 //! kept by hand.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Map, Value};
 use tradoor_core::{Candle, ChartTimeframe, Interval};
@@ -449,12 +451,27 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
     })
 }
 
-/// `GET /api/journal`: this browser's trades, newest first.
-pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+/// `GET /api/journal`: this browser's trades, newest first, tagged with what
+/// they read as: an open journal asks again every half minute, and while
+/// nothing has changed the tag it sends back is answered 304, with no body.
+pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let owner = owner(&headers)?;
     let client = state.pool.get().await?;
     let rows = client.query(&format!("SELECT {COLUMNS} FROM journal_trade WHERE owner = $1 ORDER BY start_at DESC, id DESC"), &[&owner]).await?;
-    Ok(Json(json!({ "trades": rows.iter().map(row_json).collect::<Vec<_>>() })))
+    let body = json!({ "trades": rows.iter().map(row_json).collect::<Vec<_>>() }).to_string();
+    let tag = tag_of(&body);
+    // A proxy that recompresses the answer weakens the tag: `W/"…"` still matches.
+    let held = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim().trim_start_matches("W/") == tag));
+    if held {
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, tag)]).into_response());
+    }
+    Ok(([(header::CONTENT_TYPE, "application/json".to_owned()), (header::CACHE_CONTROL, "no-store".to_owned()), (header::ETAG, tag)], body).into_response())
+}
+
+fn tag_of(body: &str) -> String {
+    let mut h = DefaultHasher::new();
+    h.write(body.as_bytes());
+    format!("\"{:016x}\"", h.finish())
 }
 
 fn finite(b: &Map<String, Value>, key: &str) -> ApiResult<Option<f64>> {

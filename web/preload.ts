@@ -24,7 +24,9 @@ export function preload(): Plugin {
           ...files.filter((f) => MODULES.test(f)).map((f): HtmlTagDescriptor => ({ tag: 'link', attrs: { rel: 'modulepreload', href: `/${f}` }, injectTo: 'head' })),
           // Fetched by the worker, so only the browser's cache carries it over; a
           // preload the page itself never uses is warned of, a prefetch is not.
-          ...files.filter((f) => WASM.test(f)).map((f): HtmlTagDescriptor => ({ tag: 'link', attrs: { rel: 'prefetch', href: `/${f}`, as: 'fetch', crossorigin: 'anonymous' }, injectTo: 'head' })),
+          // No `crossorigin`: Cloudflare refuses a prefetch that sends an Origin
+          // (503, `cf-speculation-refused: prefetch refused: not eligible`).
+          ...files.filter((f) => WASM.test(f)).map((f): HtmlTagDescriptor => ({ tag: 'link', attrs: { rel: 'prefetch', href: `/${f}`, as: 'fetch' }, injectTo: 'head' })),
         ];
       },
     },
