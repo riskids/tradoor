@@ -38,7 +38,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, MAGNET_KEY, mobileMenu, overlay, panelSteps, setOverlay, TOOL_KEYS } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, journalOpen, MAGNET_KEY, mobileMenu, overlay, panelSteps, setJournalOpen, setOverlay, TOOL_KEYS } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -49,6 +49,7 @@ const Settings = lazy(() => import('../components/Settings').then((m) => ({ defa
 const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
 const ReferralDialog = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralDialog })));
 const ReferralCard = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralCard })));
+const Journal = lazy(() => import('../journal/Journal').then((m) => ({ default: m.Journal })));
 
 const splitList = (s: string): string[] => s.split(',').filter(Boolean);
 
@@ -138,6 +139,8 @@ function stepWatchlist(panel: Panel, step: number): boolean {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
+  // The journal over the charts keeps the keys to itself.
+  if (journalOpen()) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     setOverlay(overlay()?.kind === 'palette' ? null : { kind: 'palette' });
@@ -456,6 +459,9 @@ export function App() {
         <button class="item" data-tip="Open a chart beside the focused panel" onClick={() => addNear('chart', 'right')}>
           <Icon name="plus" size={12} /> <span>Chart</span>
         </button>
+        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => setJournalOpen(!journalOpen())}>
+          <Icon name="pencil" size={12} /> <span>Journal</span>
+        </button>
         <span class="item dim">
           <span>{doc.name}</span>
         </span>
@@ -478,14 +484,17 @@ export function App() {
           <span>?</span>
         </button>
       </header>
-      <main style={{ display: 'flex', 'flex-direction': 'column', 'min-height': '0', overflow: 'hidden' }}>
+      <main style={{ display: 'flex', 'flex-direction': 'column', 'min-height': '0', overflow: 'hidden', position: 'relative' }}>
         <Show when={engineError()}>{(message) => <div class="banner">▲ Charts cannot be drawn: {message()}</div>}</Show>
         <Layout />
+        <Show when={journalOpen()}>
+          <Journal />
+        </Show>
       </main>
       <StatusBar />
       <Overlays />
-      {/* Offered once, and never over a dialog or the phone's menu. */}
-      <Show when={referralCard() && !overlay() && !mobileMenu()}>
+      {/* Offered once, and never over a dialog, the phone's menu or the journal. */}
+      <Show when={referralCard() && !overlay() && !mobileMenu() && !journalOpen()}>
         <ReferralCard />
       </Show>
       <Toasts />

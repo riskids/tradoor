@@ -187,7 +187,9 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Query(sco
         return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "too many new browser ids from this address; wait a while".into()));
     }
     let row = insert(&client, &owner, &market, timeframe, chart, &input).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "drawing": row_json(&row) }))))
+    let drawing = row_json(&row);
+    journal(&client, &owner, &drawing).await;
+    Ok((StatusCode::CREATED, Json(json!({ "drawing": drawing }))))
 }
 
 /// Move, relabel or restyle one drawing. Its kind and its market never change.
@@ -234,7 +236,17 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
             &[&id, &points, &label, &style, &owner],
         )
         .await?;
-    Ok(Json(json!({ "drawing": row_json(&row) })))
+    let drawing = row_json(&row);
+    journal(&client, &owner, &drawing).await;
+    Ok(Json(json!({ "drawing": drawing })))
+}
+
+/// A long or short position is a trade in the journal too: kept in step with
+/// it here. A journal that cannot be written does not cost the drawing.
+async fn journal(client: &tokio_postgres::Client, owner: &str, drawing: &Value) {
+    if let Err(e) = crate::journal::sync_drawing(client, owner, drawing).await {
+        tracing::warn!(error = %e, "keeping a position's trade in the journal");
+    }
 }
 
 pub async fn delete_one(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<Json<Value>> {

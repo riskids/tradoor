@@ -56,6 +56,8 @@ export const TOOL_KEYS: Record<string, string> = {
 export const [mobile, setMobile] = createSignal(false);
 /** Whether that menu is open. */
 export const [mobileMenu, setMobileMenu] = createSignal(false);
+/** Whether the trading journal covers the workspace. */
+export const [journalOpen, setJournalOpen] = createSignal(false);
 
 /** Alt + this key turns the magnet through off, weak and strong. */
 export const MAGNET_KEY = 'KeyG';

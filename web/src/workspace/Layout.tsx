@@ -3,7 +3,7 @@
  * by dragging a tab onto another group's centre or edge.
  */
 import { createEffect, createSignal, For, lazy, Match, on, onCleanup, Show, Switch, type JSX } from 'solid-js';
-import { dragging, mobileMenu, setDragging, setMobile, setMobileMenu, setOverlay } from '../app/ui';
+import { dragging, mobileMenu, setDragging, setJournalOpen, setMobile, setMobileMenu, setOverlay } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { unread } from '../lib/alerts';
 import { Icon } from '../lib/icons';
@@ -178,6 +178,14 @@ function MobileShell() {
             </For>
           </Show>
           <hr />
+          <button
+            onClick={() => {
+              setJournalOpen(true);
+              setMobileMenu(false);
+            }}
+          >
+            Journal
+          </button>
           <button onClick={overlay('palette')}>Commands</button>
           <button onClick={overlay('settings')}>Settings</button>
           <button onClick={overlay('help')}>Shortcuts</button>

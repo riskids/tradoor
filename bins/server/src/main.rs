@@ -19,6 +19,7 @@ mod flow;
 mod footprint;
 mod import;
 mod indices;
+mod journal;
 mod limits;
 mod liquidations;
 mod open_interest;
@@ -164,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
             let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), admins));
             footprint::Footprint::start(pool.clone(), doh.clone(), catalog.clone());
+            journal::start(pool.clone(), &doh, catalog.clone());
             let site = Some(cli.site_url.trim().to_string()).filter(|s| !s.is_empty());
             signals::start(pool.clone(), &doh, catalog.clone(), telegram.clone(), site);
             let state = api::AppState {

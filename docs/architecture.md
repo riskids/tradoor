@@ -120,6 +120,8 @@ The file format is described in [format.md](format.md).
 | `GET /api/markets` | the same as one object a market (2.4 MB, 350 KB gzipped), for pages loaded before `catalog` |
 | `GET /api/index/candles?symbol=&interval=&start=&end=&limit=` | an index's bars — TOTAL and its parts, the dominances, the VIX — as `[open, o, h, l, c, 0]`, oldest first, the forming one with them |
 | `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
+| `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades; add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
+| `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
@@ -151,6 +153,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
+| `journal_trade`, `journal_review` | the trading journal per browser id: every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
 | `market_cap`, `index_hour`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year), and each cap series rolled up by the hour; the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
@@ -237,6 +240,30 @@ currencies — listed with Hyperliquid's coins and asked for by their own names
 (`xyz:SP500`) on the same API and streams. They trade around the clock, so a
 weekend's price is the market's guess at Monday's open. A search for SPX,
 NASDAQ or NDX finds them, after any market spelled so.
+
+The trading journal (`journal`, `web/src/journal`) is the Journal button in
+the top bar (the phone's menu has it too): a view over the workspace, its
+charts left running under it. Every long or short position drawn on a chart
+is a trade in it — the drawing's entry, stop and target, and the coins its
+risk settings buy (1% of a 1,000 account, as the chart draws it, until set) —
+written by the drawings API as the drawing is (`sync_drawing`) and moved with
+it. Deleting the drawing leaves the trade, untied; an undo that draws the same
+position again takes it back. Price decides how each went: a watcher reads
+each market's closed minutes from where it left off — Binance, Bybit,
+Hyperliquid, OKX and Bitget; another venue or an index is kept by hand — and
+walks every planned or open trade through them: open once price reaches the
+entry, then a win at the target or a loss at the stop, a minute reaching both
+counting as the stop. A box that reaches the bar forming when it was drawn is
+a trade taken then and weighed from that moment, however far back its left
+edge sits; one wholly on bars already past is a setup looked back on, weighed
+from its left edge. A status set by hand — closed at a price, break-even,
+cancelled — takes the trade out of price's hands until it is given back, and
+moving a drawing weighs its trade again from the start. The view itself is
+rsalianto's journal: a dashboard of what the trades add up to (net P&L, win
+rate, total R, profit factor, expectancy, drawdown, streak; the equity curve,
+a P&L calendar, and by pair, side and strategy), the history — each trade
+opened to set its strategy and notes, close it by hand or open its chart —
+and the weekly review's nine questions beside the week's figures.
 
 Signal is the server's screener (`signals`, `drives`). A minute after each
 four-hour close it reads the last five hundred closed bars of the two hundred

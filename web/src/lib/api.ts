@@ -44,7 +44,8 @@ async function send(path: string, init?: { method?: string; body?: unknown }): P
   if (status >= 400) throw new ApiError(status, typeof body?.error === 'string' ? body.error : `request failed (${status})`);
 }
 
-async function json<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+/** A call answered with JSON; exported for the lazily loaded parts (the journal) to ask in the same way. */
+export async function json<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const { status, body } = await request<T>(path, init);
   if (status >= 400 || body === null) {
     const error = (body as { error?: unknown } | null)?.error;
