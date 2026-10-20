@@ -16,10 +16,10 @@ import { fits, fullEntry, MAX_LEGS, parseLegs, runTo, serializeLegs, type DrawnL
 import { book, FILL_LABEL, journalApi, localInput, money, pnl, rMultiple, rText, stamp, STATUS_LABEL, type LegKind, type Trade, type TradePatch } from '../journal/model';
 import { StrategyPicker } from '../journal/strategies';
 
-const LEG_GROUPS: { kind: LegKind; title: string; add: string; tip: string }[] = [
-  { kind: 'take', title: 'Partial take profit', add: 'Add TP', tip: 'Part of the position taken off on the way to the target' },
-  { kind: 'cut', title: 'Partial cut loss', add: 'Add cut', tip: 'Part of the position cut on the way to the stop' },
-  { kind: 'add', title: 'Average entry', add: 'Add entry', tip: 'More bought (sold, for a short) at another price, averaging the entry' },
+const LEG_GROUPS: { kind: LegKind; title: string; tip: string }[] = [
+  { kind: 'take', title: 'Partial take profit', tip: 'A partial take profit: part of the position off on the way to the target' },
+  { kind: 'cut', title: 'Partial cut loss', tip: 'A partial cut loss: part of the position cut on the way to the stop' },
+  { kind: 'add', title: 'Average entry', tip: 'An added entry: more bought (sold, for a short) at another price, averaging the entry' },
 ];
 const WHERE: Record<LegKind, string> = {
   take: 'between the entry and the target',
@@ -71,11 +71,15 @@ export function PositionTicket(props: {
   const legs = createMemo(() => parseLegs(props.style.legs));
   const live = createMemo(() => legs().filter((l) => fits(l, entry(), stop(), target())));
   const setLegs = (list: DrawnLeg[]) => props.set('legs', serializeLegs(list));
-  // A new leg starts on its own side, apart from the others: a take halfway to the target, an
-  // add a third of the way to the stop, a cut two thirds of it.
+  // A new leg starts past the last of its kind, apart from the others: a take halfway on to the
+  // target, a cut two thirds on to the stop, an add a third of it. The first take or cut moves
+  // half the size, later ones a quarter; an add doubles it.
   const addLeg = (kind: LegKind) => {
     const [end, part] = kind === 'take' ? [target(), 1 / 2] : kind === 'add' ? [stop(), 1 / 3] : [stop(), 2 / 3];
-    setLegs([...legs(), { kind, price: round(entry() + (end - entry()) * part), percent: kind === 'add' ? 100 : 50 }]);
+    const same = legs().filter((l) => l.kind === kind);
+    const from = same.reduce((far, l) => (Math.abs(l.price - entry()) > Math.abs(far - entry()) ? l.price : far), entry());
+    const percent = kind === 'add' ? 100 : same.length === 0 ? 50 : 25;
+    setLegs([...legs(), { kind, price: round(from + (end - from) * part), percent }]);
   };
   const editLeg = (i: number, change: Partial<DrawnLeg>) => setLegs(legs().map((l, j) => (j === i ? { ...l, ...change } : l)));
   const removeLeg = (i: number) => setLegs(legs().filter((_, j) => j !== i));
@@ -120,150 +124,156 @@ export function PositionTicket(props: {
     return t !== null && t.status !== 'planned' && t.status !== 'open';
   };
 
+  // Focusing a number selects it, so what is typed replaces it.
   const numberInput = (value: number, onChange: (v: number) => void, step: string | number = 'any', label?: string) => (
     <input
       class="dinput num"
       type="number"
+      inputmode="decimal"
       step={step}
       value={value}
       aria-label={label}
+      onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => {
         const v = Number(e.currentTarget.value);
         if (Number.isFinite(v)) onChange(v);
       }}
     />
   );
-  const field = (label: string, input: JSX.Element, hint?: () => string) => (
+  const field = (label: string, input: JSX.Element, hint?: () => string, tone?: string) => (
     <label class="tfield">
       <span class="tlabel">{label}</span>
       <div class="trow">{input}</div>
-      <Show when={hint?.()}>{(h) => <span class="thint num">{h()}</span>}</Show>
+      <Show when={hint?.()}>{(h) => <span class={`thint num ${tone ?? ''}`}>{h()}</span>}</Show>
     </label>
   );
-  const distance = (price: number) => `${ticks(price).toLocaleString('en-US')} ticks · ${movePct(price) > 0 ? '+' : ''}${movePct(price).toFixed(2)}%`;
+  const pctText = (price: number) => `${movePct(price) > 0 ? '+' : ''}${movePct(price).toFixed(2)}%`;
+  const legName = (kind: LegKind) => (kind === 'take' ? 'TP' : kind === 'cut' ? 'Cut' : 'Add');
+  // The legs in one list: takes, then cuts, then adds, each numbered in its kind.
+  const listed = createMemo(() =>
+    LEG_GROUPS.flatMap((g) =>
+      legs()
+        .map((l, i) => ({ l, i }))
+        .filter((x) => x.l.kind === g.kind)
+        .map((x, n) => ({ ...x, n: n + 1, g })),
+    ),
+  );
 
   return (
     <div class="ticket">
-      <Show
-        when={signedIn() !== false}
-        fallback={<p class="tnote">Strategy, notes and the journal are kept for a Telegram account: sign in from the Journal in the top bar, and every position you draw is written down.</p>}
-      >
+      <Show when={signedIn() !== false} fallback={<p class="tnote">Strategy and notes go to the journal once you sign in with Telegram (Journal, in the top bar).</p>}>
         <StrategyPicker value={strategy()} onChange={setStrategy} />
       </Show>
 
-      <div class="ticket-cols">
-        <div class="ticket-col">
-          {field('Entry price', numberInput(round(entry()), (v) => props.setPrice(0, v), tick(), 'Entry price'))}
-          {field('Stop loss', numberInput(round(stop()), (v) => props.setPrice(1, v), tick(), 'Stop loss'), () => distance(stop()))}
-          {field('Take profit', numberInput(round(target()), (v) => props.setPrice(2, v), tick(), 'Take profit'), () => distance(target()))}
+      <div class="tgrid">
+        {field('Entry', numberInput(round(entry()), (v) => props.setPrice(0, v), tick(), 'Entry price'))}
+        {field('Stop loss', numberInput(round(stop()), (v) => props.setPrice(1, v), tick(), 'Stop loss'), () => pctText(stop()), 'bear')}
+        {field('Take profit', numberInput(round(target()), (v) => props.setPrice(2, v), tick(), 'Take profit'), () => `${pctText(target())} · ${rr().toFixed(2)}R`, 'bull')}
+      </div>
+      <div class="tgrid">
+        {field(
+          'Risk',
+          <>
+            {numberInput(props.num('risk', 1), (v) => v > 0 && props.set('risk', v), 'any', 'Risk')}
+            <select class="dinput tunit" aria-label="Risk in" value={props.str('riskUnit', '%')} onChange={(e) => props.set('riskUnit', e.currentTarget.value)}>
+              <option value="%">%</option>
+              <option value="cash">$</option>
+            </select>
+          </>,
+          () => (props.str('riskUnit', '%') === '%' ? `= ${riskAmount().toFixed(2)}` : ''),
+        )}
+        {field(
+          'Qty',
+          numberInput(
+            Number(qtyText(qty())),
+            // A size typed in sets the risk it takes, in cash.
+            (v) => v > 0 && props.merge({ riskUnit: 'cash', risk: Number((v * Math.abs(entry() - stop()) * lot()).toFixed(8)) }),
+            'any',
+            'Position size',
+          ),
+          () => `Margin ${margin().toFixed(2)}`,
+        )}
+        {field('Leverage', numberInput(props.num('leverage', 1), (v) => v > 0 && props.set('leverage', v), 'any', 'Leverage'))}
+      </div>
+      <details class="tmore">
+        <summary class="num">
+          Account {props.num('account', 1000).toLocaleString('en-US')} · Lot {lot()} · Qty precision {props.str('qtyDecimals', '') === '' ? 'default' : props.str('qtyDecimals', '')}
+        </summary>
+        <div class="tgrid">
+          {field('Account size', numberInput(props.num('account', 1000), (v) => v > 0 && props.set('account', v), 'any', 'Account size'))}
+          {field('Lot size', numberInput(lot(), (v) => v > 0 && props.set('lot', v), 'any', 'Lot size'))}
           {field(
-            'Risk',
-            <>
-              {numberInput(props.num('risk', 1), (v) => v > 0 && props.set('risk', v), 'any', 'Risk')}
-              <select class="dinput narrow" value={props.str('riskUnit', '%')} onChange={(e) => props.set('riskUnit', e.currentTarget.value)}>
-                <option value="%">%</option>
-                <option value="cash">Cash</option>
-              </select>
-            </>,
+            'Qty precision',
+            <select class="dinput" value={props.str('qtyDecimals', '')} onChange={(e) => props.set('qtyDecimals', e.currentTarget.value)}>
+              <option value="">Default</option>
+              <For each={[0, 1, 2, 3, 4, 5, 6, 7, 8]}>{(d) => <option value={d}>{d}</option>}</For>
+            </select>,
           )}
-          {field(
-            'Position size (qty)',
-            numberInput(
-              Number(qtyText(qty())),
-              // A size typed in sets the risk it takes, in cash.
-              (v) => v > 0 && props.merge({ riskUnit: 'cash', risk: Number((v * Math.abs(entry() - stop()) * lot()).toFixed(8)) }),
-              'any',
-              'Position size',
-            ),
-            () => `Margin ${margin().toFixed(2)} at ${props.num('leverage', 1)}×`,
-          )}
-          <div class="tpair">
-            {field('Account size', numberInput(props.num('account', 1000), (v) => v > 0 && props.set('account', v)))}
-            {field('Leverage', numberInput(props.num('leverage', 1), (v) => v > 0 && props.set('leverage', v)))}
-          </div>
-          <div class="tpair">
-            {field('Lot size', numberInput(lot(), (v) => v > 0 && props.set('lot', v)))}
-            {field(
-              'Qty precision',
-              <select class="dinput" value={props.str('qtyDecimals', '')} onChange={(e) => props.set('qtyDecimals', e.currentTarget.value)}>
-                <option value="">Default</option>
-                <For each={[0, 1, 2, 3, 4, 5, 6, 7, 8]}>{(d) => <option value={d}>{d}</option>}</For>
-              </select>,
-            )}
-          </div>
         </div>
+      </details>
 
-        <div class="ticket-rule" />
-
-        <div class="ticket-col">
+      <div class="tlegs">
+        <div class="tlegs-head">
+          <span class="tlabel tlegs-title">Partials &amp; averaging</span>
+          <span class="grow" />
           <For each={LEG_GROUPS}>
             {(g) => (
-              <div class="tlegs">
-                <div class="tlegs-head" data-tip={g.tip}>
-                  <span class="tlabel">{g.title}</span>
-                  <button class="tadd" disabled={legs().length >= MAX_LEGS} onClick={() => addLeg(g.kind)}>
-                    <Icon name="plus" size={11} /> {g.add}
-                  </button>
-                </div>
-                <For each={legs().map((l, i) => ({ l, i })).filter((x) => x.l.kind === g.kind)}>
-                  {(x, n) => {
-                    const ok = () => fits(x.l, entry(), stop(), target());
-                    const moved = () => (x.l.percent / 100) * coins();
-                    return (
-                      <div classList={{ tleg: true, bad: !ok() }} data-tip={ok() ? undefined : `Left out: a level here goes ${WHERE[g.kind]}`}>
-                        <span class="tleg-name">{g.kind === 'take' ? 'TP' : g.kind === 'cut' ? 'Cut' : 'Add'}{n() + 1}</span>
-                        {numberInput(round(x.l.price), (v) => editLeg(x.i, { price: v }), tick(), `${g.title} ${n() + 1} price`)}
-                        <span class="tpct">
-                          {numberInput(x.l.percent, (v) => v > 0 && v <= 1000 && editLeg(x.i, { percent: v }), 'any', `${g.title} ${n() + 1} percent`)}%
-                        </span>
-                        <button class="iconbtn" aria-label="Remove" onClick={() => removeLeg(x.i)}>
-                          <Icon name="close" size={12} />
-                        </button>
-                        <span class="thint num" data-tip={g.kind === 'add' ? 'Coins added' : 'Coins moved, and what they make against the entry'}>
-                          {g.kind === 'add' ? '+' : '−'}
-                          {qtyText(moved() / lot())}
-                          <Show when={g.kind !== 'add'}> · {money((x.l.price - entry()) * dir * moved())}</Show>
-                        </span>
-                      </div>
-                    );
-                  }}
-                </For>
-              </div>
+              <button class={`tadd ${g.kind}`} data-tip={g.tip} disabled={legs().length >= MAX_LEGS} onClick={() => addLeg(g.kind)}>
+                <Icon name="plus" size={10} /> {legName(g.kind)}
+              </button>
             )}
           </For>
-
-          <Show when={signedIn()}>
-            <Show
-              when={!settled()}
-              fallback={
-                <div class="tfield">
-                  <span class="tlabel">Result</span>
-                  <span class="num">
-                    {STATUS_LABEL[trade()!.status]} {stamp(trade()!.closedAt)} · {money(pnl(trade()!))} · {rText(rMultiple(trade()!))}
-                  </span>
-                </div>
-              }
-            >
-              <div class="tpair">
-                {field('Exit price (optional)', <input class="dinput num" type="number" step={tick()} placeholder="Close by hand" value={exitPrice()} onInput={(e) => setExitPrice(e.currentTarget.value)} />)}
-                {field('Exit date', <input class="dinput" type="datetime-local" value={exitAt()} onInput={(e) => setExitAt(e.currentTarget.value)} />)}
-              </div>
-            </Show>
-            <label class="tfield">
-              <span class="tlabel">Notes</span>
-              <textarea class="dinput tnotes" rows={3} maxLength={4000} placeholder="Setup, emotions, lessons learned…" value={notes()} onInput={(e) => setNotes(e.currentTarget.value)} />
-            </label>
-          </Show>
         </div>
+        <For each={listed()}>
+          {(x) => {
+            const ok = () => fits(x.l, entry(), stop(), target());
+            const moved = () => (x.l.percent / 100) * coins();
+            return (
+              <div classList={{ tleg: true, bad: !ok() }} data-tip={ok() ? undefined : `Left out: a level here goes ${WHERE[x.l.kind]}`}>
+                <span class={`tleg-name ${x.l.kind}`}>
+                  {legName(x.l.kind)}
+                  {x.n}
+                </span>
+                {numberInput(round(x.l.price), (v) => editLeg(x.i, { price: v }), tick(), `${x.g.title} ${x.n} price`)}
+                <span class="tpct">
+                  {numberInput(x.l.percent, (v) => v > 0 && v <= 1000 && editLeg(x.i, { percent: v }), 5, `${x.g.title} ${x.n} percent`)}%
+                </span>
+                <span class="thint num" data-tip={x.l.kind === 'add' ? 'Coins added' : 'Coins moved, and what they make against the entry'}>
+                  {x.l.kind === 'add' ? `+${qtyText(moved() / lot())}` : money((x.l.price - entry()) * dir * moved())}
+                </span>
+                <button class="iconbtn" aria-label="Remove" onClick={() => removeLeg(x.i)}>
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            );
+          }}
+        </For>
       </div>
+
+      <Show when={signedIn()}>
+        <textarea class="dinput tnotes" rows={2} maxLength={4000} aria-label="Notes" placeholder="Notes: setup, emotions, lessons learned…" value={notes()} onInput={(e) => setNotes(e.currentTarget.value)} />
+        <Show
+          when={!settled()}
+          fallback={
+            <p class="tnote num">
+              {STATUS_LABEL[trade()!.status]} {stamp(trade()!.closedAt)} · {money(pnl(trade()!))} · {rText(rMultiple(trade()!))}
+            </p>
+          }
+        >
+          <details class="tmore" open={exitPrice() !== ''}>
+            <summary>Close by hand</summary>
+            <div class="tgrid two">
+              {field('Exit price', <input class="dinput num" type="number" inputmode="decimal" step={tick()} placeholder="—" value={exitPrice()} onInput={(e) => setExitPrice(e.currentTarget.value)} />)}
+              {field('Exit date', <input class="dinput" type="datetime-local" value={exitAt()} onInput={(e) => setExitAt(e.currentTarget.value)} />)}
+            </div>
+          </details>
+        </Show>
+      </Show>
 
       <div class="dsummary num">
         <span data-tip={live().some((l) => l.kind !== 'take') ? 'At the stop, every add and cut on the way filled' : undefined}>
           {live().some((l) => l.kind !== 'take') ? 'Max loss' : 'Risk'} {(-made(stop())).toFixed(2)}
         </span>
-        <span>Qty {qtyText(qty())}</span>
-        <span>R:R {rr().toFixed(2)}</span>
-        <span>Margin {margin().toFixed(2)}</span>
         <span class="bull">Target {money(made(target()))}</span>
         <Show when={hasAdds()}>
           <span data-tip="With every add filled">Avg entry {round(fullEntry(entry(), coins(), live()))}</span>
