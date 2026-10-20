@@ -15,8 +15,11 @@ import { formatPrice } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { isMarket, symbolOf, venueLabel } from '../lib/markets';
 import { focusPanel, marketOf, setPanelMarket, setPanelTimeframe, targetChart } from '../workspace/store';
+import { StrategyPicker } from './strategies';
 import {
+  book,
   dailyPnl,
+  FILL_LABEL,
   equityCurve,
   groupBy,
   inWeek,
@@ -25,6 +28,7 @@ import {
   journalApi,
   lastWeeks,
   localDay,
+  localInput,
   money,
   plannedRR,
   pnl,
@@ -34,7 +38,6 @@ import {
   stamp,
   stats,
   STATUS_LABEL,
-  STRATEGIES,
   weekOf,
   when,
   type AnswerKey,
@@ -55,6 +58,8 @@ const TABS: [Tab, string][] = [
 const REFRESH_MS = 30_000;
 
 const tone = (v: number | null): string => (v === null || v === 0 ? '' : v > 0 ? 'bull' : 'bear');
+/** Fills that put coins in; the rest take them out. */
+const IN = new Set(['entry', 'add']);
 
 export function Journal() {
   const [trades, setTrades] = createSignal<Trade[]>([]);
@@ -179,7 +184,6 @@ export function Journal() {
           <Editor
             trade={t()}
             price={price}
-            strategies={[...new Set([...STRATEGIES, ...trades().map((x) => x.strategy).filter(Boolean)])]}
             onClose={() => setSelected(null)}
             onChange={replace}
             onRemove={(id) => {
@@ -542,7 +546,6 @@ function StatusBadge(props: { trade: Trade }) {
 function Editor(props: {
   trade: Trade;
   price: (market: string, v: number | null) => string;
-  strategies: string[];
   onClose: () => void;
   onChange: (t: Trade) => void;
   onRemove: (id: number) => void;
@@ -580,17 +583,20 @@ function Editor(props: {
     focusPanel(chart.id);
     setJournalOpen(false);
   };
+  const coin = () => symbolOf(t().market).replace(/(USDT|USDC|USD)$/, '') || 'units';
+  const qtyOf = (q: number) => `${Number(q.toPrecision(4))} ${coin()}`;
   const figures = (): [string, string, string?][] => [
     ['Entry', props.price(t().market, t().entry)],
     ['Stop', props.price(t().market, t().stop)],
     ['Target', props.price(t().market, t().target)],
     ['Planned RR', plannedRR(t()).toFixed(2)],
     ['Risk', money(t().risk).replace('+', '')],
-    ['Size', `${Number(t().qty.toPrecision(4))} ${symbolOf(t().market).replace(/(USDT|USDC|USD)$/, '') || 'units'}`],
+    ['Size', qtyOf(t().qty)],
     ['Drawn', stamp(t().startAt)],
     ['Opened', stamp(t().openedAt)],
     ['Closed', stamp(t().closedAt)],
-    ['Exit', props.price(t().market, t().exit)],
+    ...(t().fills.length > 1 ? ([['Avg entry', props.price(t().market, book(t()).avgEntry)], ['Held', qtyOf(book(t()).held)]] as [string, string][]) : []),
+    [t().fills.filter((f) => !IN.has(f.kind)).length > 1 ? 'Avg exit' : 'Exit', props.price(t().market, t().exit)],
     ['R', rText(rMultiple(t())), tone(rMultiple(t()))],
     ['P&L', money(pnl(t())), tone(pnl(t()))],
   ];
@@ -619,9 +625,43 @@ function Editor(props: {
               )}
             </For>
           </dl>
+          <Show when={t().fills.length > 1 || t().legs.length > 0}>
+            <ol class="jr-fills num">
+              <For each={t().fills}>
+                {(f) => {
+                  const b = book(t());
+                  const made = IN.has(f.kind) ? null : (f.price - b.avgEntry) * (t().side === 'long' ? 1 : -1) * f.qty;
+                  return (
+                    <li>
+                      <span class="dim">{stamp(f.at)}</span>
+                      <span>{FILL_LABEL[f.kind]}</span>
+                      <span>{IN.has(f.kind) ? '+' : '−'}{qtyOf(f.qty)}</span>
+                      <span>@ {props.price(t().market, f.price)}</span>
+                      <span class={tone(made)}>{made === null ? '' : money(made)}</span>
+                    </li>
+                  );
+                }}
+              </For>
+              <For each={t().legs.filter((_, i) => !t().fills.some((f) => f.leg === i))}>
+                {(l) => (
+                  <li class="dim">
+                    <span>{isLive(t()) ? 'waiting' : 'not reached'}</span>
+                    <span>{l.kind === 'take' ? 'Take profit' : l.kind === 'cut' ? 'Cut loss' : 'Add'}</span>
+                    <span>{Math.round(l.share * 100)}%</span>
+                    <span>@ {props.price(t().market, l.price)}</span>
+                    <span />
+                  </li>
+                )}
+              </For>
+            </ol>
+          </Show>
           <p class="dim jr-note">
             {t().drawingId !== null ? `Follows its ${t().timeframe} position on the chart: moving it moves the trade.` : t().timeframe ? 'Its position was deleted from the chart; the trade stays.' : 'Added by hand.'}{' '}
-            {t().auto ? (t().tracked ? 'Price decides it: open at the entry, closed at the target or the stop.' : 'This market’s prices are not read here: set how it went by hand.') : 'Its status was set by hand.'}
+            {t().auto
+              ? t().tracked
+                ? `Price decides it: open at the entry${t().legs.length > 0 ? ', its legs filled as price reaches them' : ''}, closed at the target or the stop.`
+                : 'This market’s prices are not read here: set how it went by hand.'
+              : 'Its status was set by hand.'}
           </p>
 
           <Show when={isLive(t()) || !t().auto}>
@@ -646,13 +686,7 @@ function Editor(props: {
             </div>
           </Show>
 
-          <label class="jr-label">
-            Strategy
-            <input class="jr-in" list="jr-strategies" value={strategy()} onInput={(e) => setStrategy(e.currentTarget.value)} />
-            <datalist id="jr-strategies">
-              <For each={props.strategies}>{(s) => <option value={s} />}</For>
-            </datalist>
-          </label>
+          <StrategyPicker value={strategy()} onChange={setStrategy} />
           <div class="jr-row">
             <label class="jr-label">
               Risk ($)
@@ -692,12 +726,6 @@ function Editor(props: {
 }
 
 // ---------------------------------------------------------------- by hand
-
-/** `2026-10-19T14:05` for a datetime-local input, in this browser's time. */
-const localInput = (ms: number): string => {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
-  return d.toISOString().slice(0, 16);
-};
 
 function AddTrade(props: { onClose: () => void; onAdd: (t: Trade) => void }) {
   const chart = targetChart();
@@ -809,13 +837,7 @@ function AddTrade(props: { onClose: () => void; onAdd: (t: Trade) => void }) {
               </label>
             </div>
           </Show>
-          <label class="jr-label">
-            Strategy
-            <input class="jr-in" list="jr-strategies-new" value={strategy()} onInput={(e) => setStrategy(e.currentTarget.value)} />
-            <datalist id="jr-strategies-new">
-              <For each={STRATEGIES}>{(s) => <option value={s} />}</For>
-            </datalist>
-          </label>
+          <StrategyPicker value={strategy()} onChange={setStrategy} />
           <label class="jr-label">
             Notes
             <textarea class="jr-in" rows={3} value={notes()} onInput={(e) => setNotes(e.currentTarget.value)} />

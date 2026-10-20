@@ -20,6 +20,7 @@ import {
 import { defaultStyle, factoryStyle, visibleOn, type Style } from '../lib/drawing-style';
 import { useDismiss } from '../lib/dismiss';
 import { ColorField } from './ColorField';
+import { PositionTicket } from './PositionTicket';
 
 export interface DrawingPatch {
   style: Style;
@@ -36,7 +37,8 @@ export function DrawingSettings(props: {
   /** The instrument's price decimals: one tick is 10^-precision. */
   precision: number;
   onPreview(patch: DrawingPatch): void;
-  onCommit(patch: DrawingPatch): void;
+  /** Saves the drawing; resolves once the server has it. */
+  onCommit(patch: DrawingPatch): Promise<void> | void;
   onCancel(): void;
 }) {
   const kind = props.drawing.kind;
@@ -56,6 +58,7 @@ export function DrawingSettings(props: {
     preview();
   };
   const set = (key: string, value: string | number | boolean) => setStyle({ ...style(), [key]: value });
+  const merge = (values: Style) => setStyle({ ...style(), ...values });
   const setLabel = (value: string) => {
     setLabelState(value.trim() === '' ? null : value);
     preview();
@@ -87,7 +90,14 @@ export function DrawingSettings(props: {
     props.onPreview(original);
     props.onCancel();
   };
-  const ok = () => props.onCommit(patch());
+  // A position's journal side, saved once the drawing is: its trade follows the drawing.
+  let saveJournal: (() => Promise<void>) | undefined;
+  const ok = () => {
+    const after = saveJournal;
+    void Promise.resolve(props.onCommit(patch()))
+      .then(() => after?.())
+      .catch(() => {});
+  };
 
   // Drag the dialog by its header, kept inside the window.
   const [pos, setPos] = createSignal<{ x: number; y: number } | null>(null);
@@ -122,7 +132,7 @@ export function DrawingSettings(props: {
   return (
     <div
       ref={panel}
-      class="dsettings"
+      classList={{ dsettings: true, wide: isPosition(kind) }}
       tabIndex={-1}
       style={pos() ? { left: `${pos()!.x}px`, top: `${pos()!.y}px`, right: 'auto' } : {}}
       onContextMenu={(e) => e.stopPropagation()}
@@ -147,7 +157,19 @@ export function DrawingSettings(props: {
 
       <div class="dbody">
         <Show when={tab() === 'inputs'}>
-          <PositionInputs kind={kind} style={style()} points={points()} precision={props.precision} set={set} setPrice={setPrice} num={num} str={str} />
+          <PositionTicket
+            drawingId={props.drawing.id}
+            kind={kind}
+            style={style()}
+            points={points()}
+            precision={props.precision}
+            set={set}
+            merge={merge}
+            setPrice={setPrice}
+            num={num}
+            str={str}
+            register={(save) => (saveJournal = save)}
+          />
         </Show>
 
         <Show when={tab() === 'style'}>
@@ -448,85 +470,5 @@ function LevelsEditor(props: { kind: string; raw: unknown; mainColor: string; on
         )}
       </For>
     </div>
-  );
-}
-
-/** TradingView's Inputs tab for a position: risk sizing and the three prices. */
-function PositionInputs(props: {
-  kind: string;
-  style: Style;
-  points: DrawingPoint[];
-  precision: number;
-  set(key: string, v: string | number): void;
-  setPrice(i: number, price: number): void;
-  num(key: string, fallback: number): number;
-  str(key: string, fallback?: string): string;
-}) {
-  const tick = () => 10 ** -props.precision;
-  const long = props.kind === 'long';
-  const entry = () => props.points[0]?.price ?? 0;
-  const stop = () => props.points[1]?.price ?? 0;
-  const target = () => props.points[2]?.price ?? 0;
-  const ticks = (price: number) => Math.round(Math.abs(price - entry()) / tick());
-  const round = (v: number) => Number(v.toFixed(props.precision));
-  const shown = (v: number) => round(v);
-  const riskAmount = () => (props.str('riskUnit', '%') === '%' ? (props.num('account', 1000) * props.num('risk', 1)) / 100 : props.num('risk', 10));
-  const qty = () => {
-    const per = Math.abs(entry() - stop()) * props.num('lot', 1);
-    return per > 0 ? riskAmount() / per : 0;
-  };
-  const rr = () => {
-    const r = Math.abs(entry() - stop());
-    return r > 0 ? Math.abs(target() - entry()) / r : 0;
-  };
-  const qtyText = () => {
-    const d = props.str('qtyDecimals', '');
-    return d === '' ? String(Number(qty().toPrecision(6))) : qty().toFixed(Number(d));
-  };
-  const margin = () => (qty() * props.num('lot', 1) * entry()) / props.num('leverage', 1);
-  const numberInput = (value: number, onChange: (v: number) => void, step: string | number = 'any') => (
-    <input
-      class="dinput num"
-      type="number"
-      step={step}
-      value={value}
-      onChange={(e) => {
-        const v = Number(e.currentTarget.value);
-        if (Number.isFinite(v)) onChange(v);
-      }}
-    />
-  );
-  return (
-    <>
-      <Row label="Account size">{numberInput(props.num('account', 1000), (v) => v > 0 && props.set('account', v))}</Row>
-      <Row label="Lot size">{numberInput(props.num('lot', 1), (v) => v > 0 && props.set('lot', v))}</Row>
-      <Row label="Risk">
-        {numberInput(props.num('risk', 1), (v) => v > 0 && props.set('risk', v))}
-        <select class="dinput narrow" value={props.str('riskUnit', '%')} onChange={(e) => props.set('riskUnit', e.currentTarget.value)}>
-          <option value="%">%</option>
-          <option value="cash">Cash</option>
-        </select>
-      </Row>
-      <Row label="Entry price">{numberInput(shown(entry()), (v) => props.setPrice(0, v), tick())}</Row>
-      <Row label="Leverage">{numberInput(props.num('leverage', 1), (v) => v > 0 && props.set('leverage', v))}</Row>
-      <div class="dsection">Profit level</div>
-      <Row label="Ticks">{numberInput(ticks(target()), (v) => props.setPrice(2, round(entry() + (long ? 1 : -1) * Math.abs(v) * tick())), 1)}</Row>
-      <Row label="Price">{numberInput(shown(target()), (v) => props.setPrice(2, v), tick())}</Row>
-      <div class="dsection">Stop level</div>
-      <Row label="Ticks">{numberInput(ticks(stop()), (v) => props.setPrice(1, round(entry() - (long ? 1 : -1) * Math.abs(v) * tick())), 1)}</Row>
-      <Row label="Price">{numberInput(shown(stop()), (v) => props.setPrice(1, v), tick())}</Row>
-      <Row label="QTY precision">
-        <select class="dinput" value={props.str('qtyDecimals', '')} onChange={(e) => props.set('qtyDecimals', e.currentTarget.value)}>
-          <option value="">Default</option>
-          <For each={[0, 1, 2, 3, 4, 5, 6, 7, 8]}>{(d) => <option value={d}>{d}</option>}</For>
-        </select>
-      </Row>
-      <div class="dsummary num">
-        <span>Risk {riskAmount().toFixed(2)}</span>
-        <span>Qty {qtyText()}</span>
-        <span>R:R {rr().toFixed(2)}</span>
-        <span>Margin {margin().toFixed(2)}</span>
-      </div>
-    </>
   );
 }

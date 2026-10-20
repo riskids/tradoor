@@ -68,7 +68,9 @@ export function parseLevels(raw: unknown, kind: string): Level[] {
 
 export function saveDefaultStyle(kind: string, style: Style): void {
   const all = templates();
-  all[kind] = style;
+  // A position's legs are prices of its own, no other position's.
+  const { legs: _legs, ...kept } = style;
+  all[kind] = kept;
   writePref(TEMPLATE_KEY, JSON.stringify(all));
 }
 

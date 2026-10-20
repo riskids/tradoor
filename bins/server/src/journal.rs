@@ -17,6 +17,12 @@
 //! Hyperliquid, OKX and Bitget. A trade on another venue, or on an index, is
 //! kept by hand.
 //!
+//! Besides its entry, stop and target a position may carry legs, drawn with
+//! it: part taken off on the way to the target, part cut on the way to the
+//! stop, or more added — each a price and a share of the size the entry buys.
+//! Price fills them as it reaches them, the stop's side first, and what the
+//! trade made is worked out from its fills against their average entry.
+//!
 //! A journal is kept for an account: a browser signed in with Telegram, whose
 //! journal then follows it to any device it signs in on. One not signed in
 //! draws positions as before, and none is written down.
@@ -31,6 +37,7 @@ use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tradoor_core::{Candle, ChartTimeframe, Interval};
 use tradoor_store::now_ms;
@@ -80,12 +87,166 @@ impl Side {
             Self::Short => "short",
         }
     }
+
+    fn dir(self) -> f64 {
+        match self {
+            Self::Long => 1.0,
+            Self::Short => -1.0,
+        }
+    }
 }
 
 const STATUSES: [&str; 7] = ["planned", "open", "win", "loss", "closed", "breakeven", "cancelled"];
 
+/// Legs one position may carry.
+const MAX_LEGS: usize = 12;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LegKind {
+    /// Part taken off on the way to the target.
+    Take,
+    /// Part cut on the way to the stop.
+    Cut,
+    /// More bought (sold, for a short) at another price.
+    Add,
+}
+
+/// A level drawn with a position: its price, and the share of the entry's
+/// size it moves — half is 0.5.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Leg {
+    pub kind: LegKind,
+    pub price: f64,
+    pub share: f64,
+}
+
+/// Coins into or out of a trade: at its entry, a leg, the stop, the target,
+/// or by hand.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Fill {
+    pub kind: String,
+    pub price: f64,
+    pub qty: f64,
+    pub at: i64,
+    /// The leg it filled, by its place in the trade's legs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leg: Option<usize>,
+}
+
+impl Fill {
+    fn new(kind: &str, price: f64, qty: f64, at: i64, leg: Option<usize>) -> Self {
+        Self { kind: kind.into(), price, qty, at, leg }
+    }
+
+    /// Into the position: the entry or an add; anything else takes coins out.
+    fn into_position(&self) -> bool {
+        self.kind == "entry" || self.kind == "add"
+    }
+}
+
+/// A trade's coins in and out, what those in cost and those out fetched.
+#[derive(Clone, Copy, Debug, Default)]
+struct Book {
+    bought: f64,
+    cost: f64,
+    sold: f64,
+    proceeds: f64,
+}
+
+impl Book {
+    fn of(fills: &[Fill]) -> Self {
+        let mut book = Self::default();
+        for f in fills {
+            if f.into_position() {
+                book.put(f.price, f.qty);
+            } else {
+                book.take(f.price, f.qty);
+            }
+        }
+        book
+    }
+
+    fn held(&self) -> f64 {
+        (self.bought - self.sold).max(0.0)
+    }
+
+    fn put(&mut self, price: f64, qty: f64) {
+        self.bought += qty;
+        self.cost += price * qty;
+    }
+
+    /// Out at `price`, no more than is held: the coins that went.
+    fn take(&mut self, price: f64, qty: f64) -> f64 {
+        let qty = qty.min(self.held());
+        self.sold += qty;
+        self.proceeds += price * qty;
+        qty
+    }
+
+    fn average_entry(&self) -> f64 {
+        if self.bought > 0.0 { self.cost / self.bought } else { 0.0 }
+    }
+
+    fn average_exit(&self) -> Option<f64> {
+        (self.sold > 0.0).then(|| self.proceeds / self.sold)
+    }
+
+    /// What the coins out made against the average entry; `dir` is 1 for a long, -1 for a short.
+    fn made(&self, dir: f64) -> f64 {
+        (self.proceeds - self.average_entry() * self.sold) * dir
+    }
+}
+
+/// The legs a position's settings list (`legs`: `t,price,percent|c,…|a,…`,
+/// the percent of the entry's size) that its prices allow: a take between the
+/// entry and the target, a cut between the entry and the stop, an add anywhere
+/// between the stop and the target but the entry.
+pub fn legs_of(style: &Map<String, Value>, entry: f64, stop: f64, target: f64) -> Vec<Leg> {
+    let Some(raw) = style.get("legs").and_then(Value::as_str) else { return Vec::new() };
+    let between = |p: f64, a: f64, b: f64| p > a.min(b) && p < a.max(b);
+    raw.split('|')
+        .filter_map(|part| {
+            let mut f = part.split(',').map(str::trim);
+            let kind = match f.next()? {
+                "t" => LegKind::Take,
+                "c" => LegKind::Cut,
+                "a" => LegKind::Add,
+                _ => return None,
+            };
+            let price: f64 = f.next()?.parse().ok()?;
+            let percent: f64 = f.next()?.parse().ok()?;
+            let fits = match kind {
+                LegKind::Take => between(price, entry, target),
+                LegKind::Cut => between(price, entry, stop),
+                LegKind::Add => between(price, stop, target) && price != entry,
+            };
+            (fits && percent > 0.0 && percent <= 1000.0).then_some(Leg { kind, price, share: percent / 100.0 })
+        })
+        .take(MAX_LEGS)
+        .collect()
+}
+
+/// What a position loses when price runs to its stop, every add and cut on
+/// the way filled: the most it risks.
+pub fn worst_loss(side: Side, entry: f64, stop: f64, qty: f64, legs: &[Leg]) -> f64 {
+    let mut book = Book::default();
+    book.put(entry, qty);
+    let mut on_the_way: Vec<&Leg> = legs.iter().filter(|l| (l.price - entry) * (stop - entry) > 0.0).collect();
+    on_the_way.sort_by(|a, b| (a.price - entry).abs().total_cmp(&(b.price - entry).abs()));
+    for l in on_the_way {
+        if l.kind == LegKind::Add {
+            book.put(l.price, l.share * qty);
+        } else {
+            book.take(l.price, l.share * qty);
+        }
+    }
+    book.take(stop, book.held());
+    -book.made(side.dir())
+}
+
 /// A position as drawn: from when price is weighed against it, its prices,
-/// and what it risks and buys.
+/// its legs, what it risks at most and what its entry buys.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
     pub side: Side,
@@ -93,6 +254,7 @@ pub struct Plan {
     pub entry: f64,
     pub stop: f64,
     pub target: f64,
+    pub legs: Vec<Leg>,
     pub risk: f64,
     pub qty: f64,
 }
@@ -133,8 +295,10 @@ pub fn plan_of(kind: &str, points: &[Point], style: &Map<String, Value>, drawn_a
     let right = points.iter().map(|p| p.time).fold(f64::NEG_INFINITY, f64::max) as i64;
     let bar = ChartTimeframe::parse(timeframe).and_then(|tf| Some(tf.source().interval.ms()? * i64::from(tf.source().group))).unwrap_or(31 * 24 * 60 * MINUTE);
     let start_at = if right >= drawn_at - bar { drawn_at } else { left };
-    let risk = risk_of(style);
-    Some(Plan { side, start_at: start_at.div_euclid(MINUTE) * MINUTE, entry, stop, target, risk, qty: risk / (entry - stop).abs() })
+    let qty = risk_of(style) / (entry - stop).abs();
+    let legs = legs_of(style, entry, stop, target);
+    let risk = worst_loss(side, entry, stop, qty, &legs);
+    Some(Plan { side, start_at: start_at.div_euclid(MINUTE) * MINUTE, entry, stop, target, legs, risk, qty })
 }
 
 /// How a trade stands against price.
@@ -144,6 +308,10 @@ pub struct Trade {
     pub entry: f64,
     pub stop: f64,
     pub target: f64,
+    /// The coins the entry buys; a leg moves a share of them.
+    pub qty: f64,
+    pub legs: Vec<Leg>,
+    pub fills: Vec<Fill>,
     pub status: String,
     pub opened_at: Option<i64>,
     pub closed_at: Option<i64>,
@@ -157,7 +325,6 @@ impl Trade {
     /// the entry is reached may reach the stop or the target too: the stop
     /// first, as the cautious reading, then the target.
     pub fn walk(&mut self, bars: &[Candle]) {
-        let long = self.side == Side::Long;
         let mut prev_close: Option<f64> = None;
         for k in bars {
             if k.open_time < self.checked_until {
@@ -171,20 +338,63 @@ impl Trade {
                 if within || gapped {
                     self.status = "open".into();
                     self.opened_at = Some(k.open_time);
+                    self.fills = vec![Fill::new("entry", self.entry, self.qty, k.open_time, None)];
                 }
             }
             if self.status == "open" {
-                let stopped = if long { k.low <= self.stop } else { k.high >= self.stop };
-                let taken = if long { k.high >= self.target } else { k.low <= self.target };
-                if stopped || taken {
-                    (self.status, self.exit) = if stopped { ("loss".into(), Some(self.stop)) } else { ("win".into(), Some(self.target)) };
-                    self.closed_at = Some(k.open_time);
+                // Opened before trades kept their fills: its entry, all of it.
+                if self.fills.is_empty() {
+                    self.fills.push(Fill::new("entry", self.entry, self.qty, self.opened_at.unwrap_or(k.open_time), None));
                 }
+                self.step(k);
             }
             self.checked_until = k.open_time + MINUTE;
             prev_close = Some(k.close);
             if self.status != "planned" && self.status != "open" {
                 return;
+            }
+        }
+    }
+
+    /// One minute of an open trade: the levels on the stop's side first,
+    /// nearest the entry first — adds, cuts, then the stop — as the cautious
+    /// reading, then those on the target's. A level not reached keeps those
+    /// past it waiting. Closed once nothing is held: a win on the target's
+    /// side, a loss on the stop's.
+    fn step(&mut self, k: &Candle) {
+        let mut book = Book::of(&self.fills);
+        let filled: Vec<usize> = self.fills.iter().filter_map(|f| f.leg).collect();
+        for (end, end_kind) in [(self.stop, "stop"), (self.target, "target")] {
+            let mut levels: Vec<(f64, Option<usize>)> = self
+                .legs
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| !filled.contains(i) && (l.price - self.entry) * (end - self.entry) > 0.0)
+                .map(|(i, l)| (l.price, Some(i)))
+                .collect();
+            levels.push((end, None));
+            levels.sort_by(|a, b| (a.0 - self.entry).abs().total_cmp(&(b.0 - self.entry).abs()));
+            for (price, leg) in levels {
+                let reached = if price < self.entry { k.low <= price } else { k.high >= price };
+                if !reached {
+                    break;
+                }
+                let (kind, qty) = match leg.map(|i| self.legs[i]) {
+                    Some(Leg { kind: LegKind::Add, share, .. }) => {
+                        book.put(price, share * self.qty);
+                        ("add", share * self.qty)
+                    }
+                    Some(Leg { kind: LegKind::Take, share, .. }) => ("take", book.take(price, share * self.qty)),
+                    Some(Leg { kind: LegKind::Cut, share, .. }) => ("cut", book.take(price, share * self.qty)),
+                    None => (end_kind, book.take(price, book.held())),
+                };
+                self.fills.push(Fill::new(kind, price, qty, k.open_time, leg));
+                if book.held() <= self.qty * 1e-9 {
+                    self.status = if end_kind == "target" { "win" } else { "loss" }.into();
+                    self.exit = book.average_exit();
+                    self.closed_at = Some(k.open_time);
+                    return;
+                }
             }
         }
     }
@@ -219,20 +429,25 @@ pub async fn sync_drawing(client: &tokio_postgres::Client, owner: &str, drawing:
     }
     let now = now_ms();
     let held = client
-        .query_opt("SELECT id, start_at, entry, stop, target, auto FROM journal_trade WHERE drawing_id = $1 AND owner = $2", &[&id, &owner])
+        .query_opt("SELECT id, start_at, entry, stop, target, auto, legs FROM journal_trade WHERE drawing_id = $1 AND owner = $2", &[&id, &owner])
         .await?;
+    let legs = serde_json::to_value(&plan.legs).unwrap_or_default();
     if let Some(row) = held {
-        let moved = row.get::<_, i64>(1) != plan.start_at || row.get::<_, f64>(2) != plan.entry || row.get::<_, f64>(3) != plan.stop || row.get::<_, f64>(4) != plan.target;
+        let moved = row.get::<_, i64>(1) != plan.start_at
+            || row.get::<_, f64>(2) != plan.entry
+            || row.get::<_, f64>(3) != plan.stop
+            || row.get::<_, f64>(4) != plan.target
+            || row.get::<_, Value>(6) != legs;
         // A moved plan, still price's to decide, is weighed again from its start.
         let again = moved && row.get::<_, bool>(5);
         client
             .execute(
-                "UPDATE journal_trade SET start_at = $2, entry = $3, stop = $4, target = $5, risk = $6, qty = $7, timeframe = $8, updated_at = $9,
+                "UPDATE journal_trade SET start_at = $2, entry = $3, stop = $4, target = $5, risk = $6, qty = $7, timeframe = $8, updated_at = $9, legs = $11,
                      status = CASE WHEN $10 THEN 'planned' ELSE status END, opened_at = CASE WHEN $10 THEN NULL ELSE opened_at END,
                      closed_at = CASE WHEN $10 THEN NULL ELSE closed_at END, exit = CASE WHEN $10 THEN NULL ELSE exit END,
-                     checked_until = CASE WHEN $10 THEN $2 ELSE checked_until END
+                     checked_until = CASE WHEN $10 THEN $2 ELSE checked_until END, fills = CASE WHEN $10 THEN '[]'::jsonb ELSE fills END
                  WHERE id = $1",
-                &[&row.get::<_, i64>(0), &plan.start_at, &plan.entry, &plan.stop, &plan.target, &plan.risk, &plan.qty, &timeframe, &now, &again],
+                &[&row.get::<_, i64>(0), &plan.start_at, &plan.entry, &plan.stop, &plan.target, &plan.risk, &plan.qty, &timeframe, &now, &again, &legs],
             )
             .await?;
         return Ok(());
@@ -253,9 +468,9 @@ pub async fn sync_drawing(client: &tokio_postgres::Client, owner: &str, drawing:
     }
     client
         .execute(
-            "INSERT INTO journal_trade (owner, drawing_id, market, side, timeframe, start_at, entry, stop, target, risk, qty, checked_until, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $6, $12, $12) ON CONFLICT (drawing_id) DO NOTHING",
-            &[&owner, &id, &market, &plan.side.id(), &timeframe, &plan.start_at, &plan.entry, &plan.stop, &plan.target, &plan.risk, &plan.qty, &now],
+            "INSERT INTO journal_trade (owner, drawing_id, market, side, timeframe, start_at, entry, stop, target, risk, qty, checked_until, created_at, updated_at, legs)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $6, $12, $12, $13) ON CONFLICT (drawing_id) DO NOTHING",
+            &[&owner, &id, &market, &plan.side.id(), &timeframe, &plan.start_at, &plan.entry, &plan.stop, &plan.target, &plan.risk, &plan.qty, &now, &legs],
         )
         .await?;
     Ok(())
@@ -281,7 +496,7 @@ async fn round(pool: &deadpool_postgres::Pool, http: &reqwest::Client, catalog: 
     let client = pool.get().await?;
     let rows = client
         .query(
-            "SELECT id, market, side, entry, stop, target, status, opened_at, checked_until FROM journal_trade
+            "SELECT id, market, side, entry, stop, target, status, opened_at, checked_until, qty, legs, fills FROM journal_trade
              WHERE auto AND status IN ('planned', 'open') AND EXISTS (SELECT 1 FROM account a WHERE a.owner = journal_trade.owner)
              ORDER BY checked_until LIMIT $1",
             &[&TRADES_PER_ROUND],
@@ -294,7 +509,22 @@ async fn round(pool: &deadpool_postgres::Pool, http: &reqwest::Client, catalog: 
             continue;
         }
         let Some(side) = Side::of(r.get(2)) else { continue };
-        let trade = Trade { side, entry: r.get(3), stop: r.get(4), target: r.get(5), status: r.get(6), opened_at: r.get(7), closed_at: None, exit: None, checked_until: r.get(8) };
+        let legs: Vec<Leg> = serde_json::from_value(r.get(10)).unwrap_or_default();
+        let fills: Vec<Fill> = serde_json::from_value(r.get(11)).unwrap_or_default();
+        let trade = Trade {
+            side,
+            entry: r.get(3),
+            stop: r.get(4),
+            target: r.get(5),
+            qty: r.get(9),
+            legs,
+            fills,
+            status: r.get(6),
+            opened_at: r.get(7),
+            closed_at: None,
+            exit: None,
+            checked_until: r.get(8),
+        };
         by_market.entry(market).or_default().push((r.get(0), trade));
     }
     let settled = now_ms().div_euclid(MINUTE) * MINUTE;
@@ -313,10 +543,12 @@ async fn round(pool: &deadpool_postgres::Pool, http: &reqwest::Client, catalog: 
             if (trade.status.clone(), trade.checked_until) == before {
                 continue;
             }
+            // Not if the drawing moved meanwhile, and the trade was set to be weighed again.
             client
                 .execute(
-                    "UPDATE journal_trade SET status = $2, opened_at = $3, closed_at = $4, exit = $5, checked_until = $6 WHERE id = $1 AND auto",
-                    &[id, &trade.status, &trade.opened_at, &trade.closed_at, &trade.exit, &trade.checked_until],
+                    "UPDATE journal_trade SET status = $2, opened_at = $3, closed_at = $4, exit = $5, checked_until = $6, fills = $7
+                     WHERE id = $1 AND auto AND checked_until = $8",
+                    &[id, &trade.status, &trade.opened_at, &trade.closed_at, &trade.exit, &trade.checked_until, &serde_json::to_value(&trade.fills).unwrap_or_default(), &before.1],
                 )
                 .await?;
         }
@@ -430,7 +662,8 @@ async fn minute_page(http: &reqwest::Client, m: &MarketRef, native: &str, from: 
 
 // ---------------------------------------------------------------- the API
 
-const COLUMNS: &str = "id, drawing_id, market, side, timeframe, start_at, entry, stop, target, risk, qty, status, opened_at, closed_at, exit, fees, auto, strategy, notes, created_at, updated_at";
+const COLUMNS: &str =
+    "id, drawing_id, market, side, timeframe, start_at, entry, stop, target, risk, qty, status, opened_at, closed_at, exit, fees, auto, strategy, notes, created_at, updated_at, legs, fills";
 
 fn row_json(r: &tokio_postgres::Row) -> Value {
     let market: String = r.get(2);
@@ -457,6 +690,8 @@ fn row_json(r: &tokio_postgres::Row) -> Value {
         "notes": r.get::<_, String>(18),
         "createdAt": r.get::<_, i64>(19),
         "updatedAt": r.get::<_, i64>(20),
+        "legs": r.get::<_, Value>(21),
+        "fills": r.get::<_, Value>(22),
     })
 }
 
@@ -594,10 +829,10 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let client = state.pool.get().await?;
     account_only(&client, &owner).await?;
     let row = client
-        .query_opt("SELECT entry, stop, start_at FROM journal_trade WHERE id = $1 AND owner = $2", &[&id, &owner])
+        .query_opt("SELECT entry, start_at, qty, opened_at, fills FROM journal_trade WHERE id = $1 AND owner = $2", &[&id, &owner])
         .await?
         .ok_or_else(|| ApiError::not_found(format!("trade {id} not found")))?;
-    let (entry, stop, start_at): (f64, f64, i64) = (row.get(0), row.get(1), row.get(2));
+    let (entry, start_at, qty, opened_at): (f64, i64, f64, Option<i64>) = (row.get(0), row.get(1), row.get(2), row.get(3));
     let now = now_ms();
     if let Some(strategy) = short_text(b, "strategy")? {
         client.execute("UPDATE journal_trade SET strategy = $2 WHERE id = $1", &[&id, &strategy]).await?;
@@ -612,12 +847,16 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
         if risk <= 0.0 {
             return Err(ApiError::bad_request("risk must be positive"));
         }
-        client.execute("UPDATE journal_trade SET risk = $2, qty = $2 / $3 WHERE id = $1", &[&id, &risk, &(entry - stop).abs()]).await?;
+        // The size scales with it, and every leg with the size.
+        client
+            .execute("UPDATE journal_trade SET qty = CASE WHEN risk > 0 THEN qty * $2 / risk ELSE $2 / abs(entry - stop) END, risk = $2 WHERE id = $1", &[&id, &risk])
+            .await?;
     }
     if b.get("auto").and_then(Value::as_bool) == Some(true) {
         client
             .execute(
-                "UPDATE journal_trade SET auto = true, status = 'planned', opened_at = NULL, closed_at = NULL, exit = NULL, checked_until = start_at WHERE id = $1",
+                "UPDATE journal_trade SET auto = true, status = 'planned', opened_at = NULL, closed_at = NULL, exit = NULL, checked_until = start_at, fills = '[]'::jsonb
+                 WHERE id = $1",
                 &[&id],
             )
             .await?;
@@ -625,20 +864,27 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     if let Some(status) = b.get("status").and_then(Value::as_str) {
         let closed_at = finite(b, "closedAt")?.map_or(now, |v| v as i64);
         match status {
-            "closed" => {
-                let exit = finite(b, "exit")?.filter(|v| *v > 0.0).ok_or_else(|| ApiError::bad_request("closing by hand needs the exit price"))?;
+            "closed" | "breakeven" => {
+                // What price took off on the way stays; the close is the hand's.
+                let mut fills: Vec<Fill> = serde_json::from_value(row.get(4)).unwrap_or_default();
+                fills.retain(|f| !matches!(f.kind.as_str(), "hand" | "stop" | "target"));
+                if fills.is_empty() {
+                    fills.push(Fill::new("entry", entry, qty, opened_at.unwrap_or(start_at), None));
+                }
+                let mut book = Book::of(&fills);
+                let price = if status == "closed" {
+                    finite(b, "exit")?.filter(|v| *v > 0.0).ok_or_else(|| ApiError::bad_request("closing by hand needs the exit price"))?
+                } else {
+                    book.average_entry()
+                };
+                let left = book.take(price, book.held());
+                if left > 0.0 {
+                    fills.push(Fill::new("hand", price, left, closed_at, None));
+                }
                 client
                     .execute(
-                        "UPDATE journal_trade SET auto = false, status = 'closed', exit = $2, closed_at = $3, opened_at = COALESCE(opened_at, $4) WHERE id = $1",
-                        &[&id, &exit, &closed_at, &start_at],
-                    )
-                    .await?;
-            }
-            "breakeven" => {
-                client
-                    .execute(
-                        "UPDATE journal_trade SET auto = false, status = 'breakeven', exit = entry, closed_at = $2, opened_at = COALESCE(opened_at, $3) WHERE id = $1",
-                        &[&id, &closed_at, &start_at],
+                        "UPDATE journal_trade SET auto = false, status = $2, exit = $3, closed_at = $4, opened_at = COALESCE(opened_at, $5), fills = $6 WHERE id = $1",
+                        &[&id, &status, &book.average_exit().unwrap_or(price), &closed_at, &start_at, &serde_json::to_value(&fills).unwrap_or_default()],
                     )
                     .await?;
             }
@@ -742,7 +988,82 @@ mod tests {
     }
 
     fn trade(side: Side, entry: f64, stop: f64, target: f64) -> Trade {
-        Trade { side, entry, stop, target, status: "planned".into(), opened_at: None, closed_at: None, exit: None, checked_until: 0 }
+        Trade { side, entry, stop, target, qty: 1.0, legs: Vec::new(), fills: Vec::new(), status: "planned".into(), opened_at: None, closed_at: None, exit: None, checked_until: 0 }
+    }
+
+    fn with_legs(mut t: Trade, qty: f64, legs: &str) -> Trade {
+        let style = json!({ "legs": legs });
+        t.qty = qty;
+        t.legs = legs_of(style.as_object().unwrap(), t.entry, t.stop, t.target);
+        t
+    }
+
+    fn kinds(t: &Trade) -> Vec<(&str, f64, f64)> {
+        t.fills.iter().map(|f| (f.kind.as_str(), f.price, f.qty)).collect()
+    }
+
+    #[test]
+    fn legs_are_read_where_the_prices_allow_them() {
+        let style = json!({ "legs": "t,110,50|c,95,25|a,97,100|t,95,50|c,105,50|a,100,50|a,130,50|x,1,1|t,115,0|t,112" });
+        let legs = legs_of(style.as_object().unwrap(), 100.0, 90.0, 120.0);
+        assert_eq!(
+            legs,
+            vec![Leg { kind: LegKind::Take, price: 110.0, share: 0.5 }, Leg { kind: LegKind::Cut, price: 95.0, share: 0.25 }, Leg { kind: LegKind::Add, price: 97.0, share: 1.0 }],
+            "a take past the entry towards the target, a cut towards the stop, an add between them but not at the entry"
+        );
+    }
+
+    #[test]
+    fn a_position_risks_most_with_its_adds_filled_and_least_with_its_cuts() {
+        let legs = |raw: &str| legs_of(json!({ "legs": raw }).as_object().unwrap(), 100.0, 90.0, 120.0);
+        assert_eq!(worst_loss(Side::Long, 100.0, 90.0, 1.0, &[]), 10.0);
+        assert_eq!(worst_loss(Side::Long, 100.0, 90.0, 1.0, &legs("a,95,100")), 15.0, "one more coin from 95 to 90");
+        assert_eq!(worst_loss(Side::Long, 100.0, 90.0, 1.0, &legs("c,95,50")), 7.5, "half cut at 95, half to 90");
+        assert_eq!(worst_loss(Side::Long, 100.0, 90.0, 1.0, &legs("t,110,50")), 10.0, "a take never comes on the way down");
+        let plan = plan_of("long", &pts(100.0, 90.0, 120.0, 0.0), json!({ "riskUnit": "cash", "risk": 10, "legs": "a,95,100" }).as_object().unwrap(), 30 * H, "1h").unwrap();
+        assert_eq!((plan.qty, plan.risk, plan.legs.len()), (1.0, 15.0, 1), "the entry's size from the risk set; the risk counted with the add");
+    }
+
+    #[test]
+    fn price_takes_part_off_on_the_way_and_the_target_takes_the_rest() {
+        let mut t = with_legs(trade(Side::Long, 100.0, 90.0, 120.0), 2.0, "t,110,50");
+        t.walk(&[bar(0, 101.0, 99.0), bar(MINUTE, 111.0, 104.0), bar(2 * MINUTE, 121.0, 108.0)]);
+        assert_eq!(kinds(&t), vec![("entry", 100.0, 2.0), ("take", 110.0, 1.0), ("target", 120.0, 1.0)]);
+        assert_eq!((t.status.as_str(), t.exit, t.closed_at), ("win", Some(115.0), Some(2 * MINUTE)), "the exit is the average of the two");
+        // Half taken, then stopped: a loss by how it ended, nothing made in all.
+        let mut t = with_legs(trade(Side::Long, 100.0, 90.0, 120.0), 2.0, "t,110,50");
+        t.walk(&[bar(0, 101.0, 99.0), bar(MINUTE, 111.0, 104.0), bar(2 * MINUTE, 105.0, 89.0)]);
+        assert_eq!(kinds(&t), vec![("entry", 100.0, 2.0), ("take", 110.0, 1.0), ("stop", 90.0, 1.0)]);
+        assert_eq!((t.status.as_str(), Book::of(&t.fills).made(1.0)), ("loss", 0.0));
+    }
+
+    #[test]
+    fn a_cut_and_an_add_fill_on_the_way_to_the_stop_nearest_first() {
+        // A short: adds at 104, cuts half of the entry's size at 107, stopped at 110.
+        let mut t = with_legs(trade(Side::Short, 100.0, 110.0, 80.0), 1.0, "c,107,50|a,104,100");
+        t.walk(&[bar(0, 101.0, 99.0), bar(MINUTE, 105.0, 101.0), bar(2 * MINUTE, 111.0, 103.0)]);
+        assert_eq!(kinds(&t), vec![("entry", 100.0, 1.0), ("add", 104.0, 1.0), ("cut", 107.0, 0.5), ("stop", 110.0, 1.5)]);
+        assert_eq!(t.status, "loss");
+        assert_eq!(Book::of(&t.fills).made(-1.0), -14.5, "two coins from an average of 102: 0.5 cut at 107, 1.5 stopped at 110");
+        // The add filled, then the target: both coins from the average of 98.
+        let mut t = with_legs(trade(Side::Long, 100.0, 90.0, 120.0), 1.0, "a,96,100");
+        t.walk(&[bar(0, 101.0, 99.0), bar(MINUTE, 99.0, 95.0), bar(2 * MINUTE, 121.0, 100.0)]);
+        assert_eq!((t.status.as_str(), Book::of(&t.fills).made(1.0)), ("win", 44.0));
+    }
+
+    #[test]
+    fn a_minute_reaching_every_level_reads_the_stops_side_first() {
+        let mut t = with_legs(trade(Side::Long, 100.0, 90.0, 120.0), 1.0, "t,110,50|a,95,100");
+        t.walk(&[bar(0, 101.0, 99.0), bar(MINUTE, 125.0, 85.0)]);
+        assert_eq!(kinds(&t), vec![("entry", 100.0, 1.0), ("add", 95.0, 1.0), ("stop", 90.0, 2.0)], "the take never comes");
+    }
+
+    #[test]
+    fn a_trade_opened_before_fills_were_kept_is_held_whole() {
+        let mut t = trade(Side::Long, 100.0, 90.0, 120.0);
+        (t.status, t.opened_at, t.checked_until) = ("open".into(), Some(0), MINUTE);
+        t.walk(&[bar(MINUTE, 121.0, 101.0)]);
+        assert_eq!(kinds(&t), vec![("entry", 100.0, 1.0), ("target", 120.0, 1.0)]);
     }
 
     #[test]

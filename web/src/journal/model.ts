@@ -10,6 +10,26 @@ import { ownerId } from '../lib/owner';
 export type Side = 'long' | 'short';
 export type Status = 'planned' | 'open' | 'win' | 'loss' | 'closed' | 'breakeven' | 'cancelled';
 
+/** Part taken off on the way to the target, part cut on the way to the stop, or more added. */
+export type LegKind = 'take' | 'cut' | 'add';
+
+/** A level drawn with a position: its price and the share of the entry's size it moves (half is 0.5). */
+export interface Leg {
+  kind: LegKind;
+  price: number;
+  share: number;
+}
+
+/** Coins into or out of a trade: at its entry, a leg, the stop, the target, or by hand. */
+export interface Fill {
+  kind: 'entry' | 'add' | 'take' | 'cut' | 'stop' | 'target' | 'hand';
+  price: number;
+  qty: number;
+  at: number;
+  /** The leg it filled, by its place in `legs`. */
+  leg?: number;
+}
+
 export interface Trade {
   id: number;
   /** The position drawing it follows; null once that is deleted, or for one added by hand. */
@@ -38,6 +58,9 @@ export interface Trade {
   notes: string;
   createdAt: number;
   updatedAt: number;
+  legs: Leg[];
+  /** What price, or the hand, has filled so far; empty for a trade that kept none. */
+  fills: Fill[];
 }
 
 export interface Review {
@@ -99,9 +122,39 @@ export const isClosed = (t: Trade): boolean => DONE.has(t.status) && t.exit !== 
 export const isLive = (t: Trade): boolean => t.status === 'planned' || t.status === 'open';
 const way = (t: Trade): number => (t.side === 'long' ? 1 : -1);
 
-/** What the trade made, in the quote, fees off; null until it is closed. */
+/** A trade's coins in and out: what is held, at what average entry, and what those out made. */
+export interface Book {
+  bought: number;
+  sold: number;
+  held: number;
+  avgEntry: number;
+  /** What the coins out made against the average entry. */
+  realized: number;
+}
+
+export function book(t: Pick<Trade, 'side' | 'fills'>): Book {
+  let bought = 0;
+  let cost = 0;
+  let sold = 0;
+  let proceeds = 0;
+  for (const f of t.fills) {
+    if (f.kind === 'entry' || f.kind === 'add') {
+      bought += f.qty;
+      cost += f.price * f.qty;
+    } else {
+      sold += f.qty;
+      proceeds += f.price * f.qty;
+    }
+  }
+  const avgEntry = bought > 0 ? cost / bought : 0;
+  return { bought, sold, held: Math.max(0, bought - sold), avgEntry, realized: (proceeds - avgEntry * sold) * (t.side === 'long' ? 1 : -1) };
+}
+
+/** What the trade made, in the quote, fees off; null until it is closed. From its fills, or a
+ *  trade that kept none, from its exit. */
 export function pnl(t: Trade): number | null {
   if (!isClosed(t)) return null;
+  if (t.fills.some((f) => f.kind !== 'entry' && f.kind !== 'add')) return book(t).realized - t.fees;
   return (t.exit! - t.entry) * way(t) * t.qty - t.fees;
 }
 
@@ -114,8 +167,12 @@ export function rMultiple(t: Trade): number | null {
 /** The reward the plan aims for over what it risks. */
 export const plannedRR = (t: Trade): number => Math.abs(t.target - t.entry) / Math.abs(t.entry - t.stop);
 
-/** What it makes now, at `price`, while open. */
-export const openPnl = (t: Trade, price: number): number => (price - t.entry) * way(t) * t.qty;
+/** What it makes now, at `price`, while open: what was taken off, and what is held. */
+export function openPnl(t: Trade, price: number): number {
+  if (t.fills.length === 0) return (price - t.entry) * way(t) * t.qty;
+  const b = book(t);
+  return b.realized + (price - b.avgEntry) * way(t) * b.held;
+}
 
 /** When it counts: closed, else opened, else drawn. */
 export const when = (t: Trade): number => t.closedAt ?? t.openedAt ?? t.startAt;
@@ -339,6 +396,23 @@ export function money(v: number | null): string {
 export function rText(v: number | null): string {
   if (v === null || !Number.isFinite(v)) return '—';
   return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}R`;
+}
+
+/** What each fill was. */
+export const FILL_LABEL: Record<Fill['kind'], string> = {
+  entry: 'Entry',
+  add: 'Added',
+  take: 'Took profit',
+  cut: 'Cut loss',
+  stop: 'Stopped',
+  target: 'Target',
+  hand: 'Closed by hand',
+};
+
+/** `2026-10-19T14:05` for a datetime-local input, in this browser's time. */
+export function localInput(ms: number): string {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
 }
 
 /** `10-19 14:05` in this browser's own time. */

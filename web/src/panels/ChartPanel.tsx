@@ -702,12 +702,12 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   const previewDrawing = (drawingId: number, patch: DrawingPatch) =>
     setDrawings((list) => list.map((d) => (d.id === drawingId ? { ...d, style: patch.style, label: patch.label, points: patch.points } : d)));
 
-  function commitDrawing(d: Drawing, patch: DrawingPatch): void {
+  function commitDrawing(d: Drawing, patch: DrawingPatch): Promise<void> {
     setEditing(null);
     // A note cannot lose its text: an emptied one keeps what it had.
     const label = d.kind === 'text' && patch.label === null ? d.label : patch.label;
     // `d` is the drawing as the dialog opened on it: what undo goes back to.
-    void changeDrawing(d.id, { style: patch.style, points: patch.points, label }, true, { style: d.style, points: d.points, label: d.label });
+    return changeDrawing(d.id, { style: patch.style, points: patch.points, label }, true, { style: d.style, points: d.points, label: d.label });
   }
 
   async function clearDrawings(record = true): Promise<void> {

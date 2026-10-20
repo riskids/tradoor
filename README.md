@@ -181,7 +181,11 @@ stop — on Binance, Bybit, Hyperliquid, OKX and Bitget; trades elsewhere, and
 those added by hand, are closed by hand. Its risk is the position's own
 settings (1% of a 1,000 account until set). A dashboard, the history with each
 trade's strategy and notes, and a weekly review, as rsalianto's journal has
-them. It is kept for a Telegram account: sign in (in the Journal, or in
+them. A position's settings are a trade form: its strategy, picked from
+sketched cards, its notes, a close by hand, and legs drawn with it — partial
+take profits, partial cut losses and averaged entries, each a price and a
+percent of the size — that price fills as it reaches them. It is kept for a
+Telegram account: sign in (in the Journal, or in
 Settings) and it is written down, and follows you to any device you sign in on;
 until then positions are drawn as before, and none is recorded.
 

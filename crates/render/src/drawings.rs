@@ -160,6 +160,9 @@ pub struct DrawingStyle {
     pub lot: Option<f64>,
     pub leverage: Option<f64>,
     pub qty_decimals: Option<usize>,
+    /// A position's partial takes (`t`), partial cuts (`c`) and adds (`a`):
+    /// each a price and a percent of the entry's size.
+    pub legs: Vec<(u8, f64, f64)>,
     pub compact: bool,
     /// A position's figures stay up; otherwise they show on hover or selection.
     pub always_stats: bool,
@@ -210,6 +213,19 @@ impl DrawingStyle {
             "lot" => self.lot = num().filter(|v| *v > 0.0),
             "leverage" => self.leverage = num().filter(|v| *v > 0.0),
             "qtyDecimals" => self.qty_decimals = num().map(|v| v.clamp(0.0, 10.0) as usize),
+            "legs" => {
+                self.legs = value
+                    .split('|')
+                    .filter_map(|part| {
+                        let mut f = part.split(',').map(str::trim);
+                        let kind = *f.next()?.as_bytes().first()?;
+                        let price: f64 = f.next()?.parse().ok()?;
+                        let percent: f64 = f.next()?.parse().ok()?;
+                        (matches!(kind, b't' | b'c' | b'a') && price.is_finite() && percent > 0.0 && percent <= 1000.0).then_some((kind, price, percent))
+                    })
+                    .take(12)
+                    .collect()
+            }
             "compact" => self.compact = flag(),
             "alwaysStats" => self.always_stats = flag(),
             "locked" => self.locked = flag(),
@@ -634,8 +650,34 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
         frame.hline(left, right, target_y, 1.0, profit_line);
         frame.hline(left, right, stop_y, 1.0, stop_line);
     }
+    // Its legs, those its prices allow (bins/server journal, `legs_of`): a
+    // dashed line each across the box, named once the figures are up.
+    let between = |p: f64, a: f64, b: f64| p > a.min(b) && p < a.max(b);
+    let legs: Vec<(u8, f64, f64)> = style
+        .legs
+        .iter()
+        .copied()
+        .filter(|&(k, p, _)| match k {
+            b't' => between(p, entry, target),
+            b'c' => between(p, entry, stop),
+            _ => between(p, stop, target) && p != entry,
+        })
+        .collect();
+    let figures = style.always_stats || d.selected || d.hovered || d.draft;
+    for &(k, p, percent) in &legs {
+        let (color, name) = match k {
+            b't' => (profit_line, "TP"),
+            b'c' => (stop_line, "Cut"),
+            _ => (entry_line, "Add"),
+        };
+        let y = d.y(p);
+        frame.dashed_line(left, y, right, y, 1.0, color, 4.0, 3.0);
+        if figures {
+            frame.text(right - 4.0, y - 2.0, format!("{name} {}%", trim_level(percent)), color, Align::Right, Baseline::Bottom, font, None, Some(plot));
+        }
+    }
     // As on TradingView: the figures come up under the pointer, or once selected.
-    if !(style.always_stats || d.selected || d.hovered || d.draft) {
+    if !figures {
         return;
     }
 
@@ -663,8 +705,11 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
         }
     };
     let target_above = target_y <= entry_y;
-    tag(frame, target_y + if target_above { -5.0 } else { 5.0 }, line("Target", target, qty * lot * reward_per), profit_line, if target_above { Baseline::Bottom } else { Baseline::Top });
-    tag(frame, stop_y + if target_above { 5.0 } else { -5.0 }, line("Stop", stop, qty * lot * risk_per), stop_line, if target_above { Baseline::Top } else { Baseline::Bottom });
+    // What running to the target makes and to the stop loses, the legs on the way filled.
+    let dir = if long { 1.0 } else { -1.0 };
+    let made = |end: f64| run_to(entry, end, qty * lot, &legs, dir).abs();
+    tag(frame, target_y + if target_above { -5.0 } else { 5.0 }, line("Target", target, made(target)), profit_line, if target_above { Baseline::Bottom } else { Baseline::Top });
+    tag(frame, stop_y + if target_above { 5.0 } else { -5.0 }, line("Stop", stop, made(stop)), stop_line, if target_above { Baseline::Top } else { Baseline::Bottom });
 
     let qty = qty_text(qty, style.qty_decimals);
     let (first, second) = match d.last.filter(|_| !d.draft) {
@@ -686,6 +731,31 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
         tag(frame, entry_y - 4.0 - row, first, grey, down);
         tag(frame, entry_y - 4.0, second, grey, down);
     }
+}
+
+/// What a position of `qty` coins makes running from its entry to `end`, the
+/// legs on the way filled, against their average entry: all of it closed by
+/// then, so the order they fill in does not count — but for takes and cuts
+/// asking more than was bought, scaled down to it. (Unsorted: a sort here is
+/// kilobytes of engine.)
+fn run_to(entry: f64, end: f64, qty: f64, legs: &[(u8, f64, f64)], dir: f64) -> f64 {
+    let (mut bought, mut cost, mut out, mut proceeds) = (qty, entry * qty, 0.0, 0.0);
+    for &(kind, price, percent) in legs.iter().filter(|l| (l.1 - entry) * (end - entry) > 0.0) {
+        let q = percent / 100.0 * qty;
+        if kind == b'a' {
+            bought += q;
+            cost += price * q;
+        } else {
+            out += q;
+            proceeds += price * q;
+        }
+    }
+    if out > bought {
+        proceeds *= bought / out;
+        out = bought;
+    }
+    proceeds += end * (bought - out);
+    (proceeds - cost) * dir
 }
 
 /// How far the pointer is from a drawing, in pixels — zero inside a filled
@@ -751,6 +821,16 @@ pub fn distance(d: &Placed<'_>, cursor: (f32, f32), plot: Rect) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_positions_legs_change_what_its_target_and_stop_come_to() {
+        let s = DrawingStyle::from_pairs([("legs", "t,110,50|a,95,100|x,1,1|c,96")]);
+        assert_eq!(s.legs, vec![(b't', 110.0, 50.0), (b'a', 95.0, 100.0)]);
+        assert_eq!(run_to(100.0, 120.0, 2.0, &[], 1.0), 40.0);
+        assert_eq!(run_to(100.0, 120.0, 2.0, &s.legs, 1.0), 30.0, "half taken at 110, half run to 120; the add is not on the way");
+        assert_eq!(run_to(100.0, 90.0, 2.0, &s.legs, 1.0), -30.0, "two more coins at 95, all four stopped at 90");
+        assert_eq!(run_to(100.0, 90.0, 1.0, &[(b'c', 95.0, 50.0)], -1.0), 7.5, "a short gains as it falls");
+    }
 
     #[test]
     fn kinds_and_significant_digits() {

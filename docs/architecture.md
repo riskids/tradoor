@@ -153,7 +153,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
-| `journal_trade`, `journal_review` | the trading journal per account's browser id: every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
+| `journal_trade`, `journal_review` | the trading journal per account's browser id — each trade's legs and fills too — every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
 | `market_cap`, `index_hour`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year), and each cap series rolled up by the hour; the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
 | `data_gap` | ranges the exchange could not supply |
@@ -258,7 +258,18 @@ a trade taken then and weighed from that moment, however far back its left
 edge sits; one wholly on bars already past is a setup looked back on, weighed
 from its left edge. A status set by hand — closed at a price, break-even,
 cancelled — takes the trade out of price's hands until it is given back, and
-moving a drawing weighs its trade again from the start. The view itself is
+moving a drawing weighs its trade again from the start. A position may carry
+legs, set in its settings (`PositionTicket`, laid out as rsalianto's trade
+form, its strategy picked from sketched cards) and drawn dashed across its box:
+partial take profits between the entry and the target, partial cut losses
+between the entry and the stop, and added entries — each a price and a percent
+of the size the entry buys, kept in the drawing's style as `legs`
+(`t,price,percent|c,…|a,…`). Price fills them as it reaches them, the stop's
+side first and nearest the entry first, each fill kept on the trade (`fills`);
+the trade closes once nothing is held, a win on the target's side and a loss
+on the stop's, and what it made is its fills against their average entry. Its
+risk, the unit of its R, is what it loses at the stop with every add and cut
+on the way filled. The view itself is
 rsalianto's journal: a dashboard of what the trades add up to (net P&L, win
 rate, total R, profit factor, expectancy, drawdown, streak; the equity curve,
 a P&L calendar, and by pair, side and strategy), the history — each trade
