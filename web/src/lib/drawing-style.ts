@@ -14,7 +14,8 @@ export function factoryStyle(kind: string): Style {
   switch (kind) {
     case 'long':
     case 'short':
-      return { account: 1000, risk: 1, riskUnit: '%', lot: 1, leverage: 1, profitLine: '#089981', stopLine: '#f23645', profitFill: '#08998133', stopFill: '#f2364533' };
+      // The target in a quiet grey, the stop a faint red: the price is what stands out.
+      return { account: 1000, risk: 1, riskUnit: '%', lot: 1, leverage: 1, profitLine: '#d1d4dc', stopLine: '#f2364566', profitFill: '#d1d4dc1a', stopFill: '#f236451a' };
     case 'channel':
       return { color: '#2962ff', width: 1, fillOn: true, fill: '#2962ff1f' };
     case 'fib':

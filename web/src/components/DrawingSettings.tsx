@@ -178,12 +178,12 @@ export function DrawingSettings(props: {
               <ColorField value={str('color', '#9598a1')} onChange={(v) => set('color', v)} />
             </Row>
             <Row label="Stop color">
-              <ColorField value={str('stopLine', '#f23645')} onChange={(v) => set('stopLine', v)} />
-              <ColorField value={str('stopFill', '#f2364533')} onChange={(v) => set('stopFill', v)} title="Stop background" />
+              <ColorField value={str('stopLine', '#f2364566')} onChange={(v) => set('stopLine', v)} />
+              <ColorField value={str('stopFill', '#f236451a')} onChange={(v) => set('stopFill', v)} title="Stop background" />
             </Row>
             <Row label="Target color">
-              <ColorField value={str('profitLine', '#089981')} onChange={(v) => set('profitLine', v)} />
-              <ColorField value={str('profitFill', '#08998133')} onChange={(v) => set('profitFill', v)} title="Target background" />
+              <ColorField value={str('profitLine', '#d1d4dc')} onChange={(v) => set('profitLine', v)} />
+              <ColorField value={str('profitFill', '#d1d4dc1a')} onChange={(v) => set('profitFill', v)} title="Target background" />
             </Row>
             <Row label="Text">
               <ColorField value={str('textColor', '#ffffff')} onChange={(v) => set('textColor', v)} />
