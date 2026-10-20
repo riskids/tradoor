@@ -135,7 +135,7 @@ export const STRATEGY_CARDS: { id: string; label: string; sketch: () => JSX.Elem
   },
   {
     id: 'Three Drives',
-    label: 'Three Drives',
+    label: '3 Drives',
     sketch: () => (
       <Sketch>
         <Line points="2,32 12,22 17,27 28,15 33,20 44,7 58,26" />
@@ -161,7 +161,8 @@ export function StrategyPicker(props: { value: string; onChange(v: string): void
           when={other()}
           fallback={
             <button class="strategy-other" onClick={() => (setOther(true), props.onChange(''))}>
-              <Icon name="pencil" size={11} /> Other
+              <Icon name="pencil" size={11} />
+              <span>Other</span>
             </button>
           }
         >

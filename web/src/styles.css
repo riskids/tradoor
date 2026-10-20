@@ -512,7 +512,7 @@ table.venues tr.off td { color: var(--dim); }
 .dtoolbar .swatchbtn { width: 22px; height: 22px; }
 .dtoolbar .dinput { height: 24px; }
 /* A position's Inputs: rsalianto's trade form, one compact column; a sheet from the bottom on a phone. */
-.dsettings.wide { width: 470px; }
+.dsettings.wide { width: 500px; }
 .ticket { display: flex; flex-direction: column; gap: 10px; }
 .tgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .tgrid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -552,10 +552,12 @@ table.venues tr.off td { color: var(--dim); }
 .strategy-own { flex: 1; height: 22px; }
 .strategy-other { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10px; }
 .strategy-other:hover { color: var(--text); border-color: color-mix(in oklab, var(--primary) 50%, var(--border)); }
-.strategy-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 4px; }
-.strategy-card { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 3px 2px 2px; border: 1px solid var(--border); border-radius: 5px; color: var(--dim); user-select: none; }
-.strategy-card svg { width: 100%; height: 18px; }
-.strategy-card span { max-width: 100%; overflow: hidden; font-size: 9px; line-height: 1.2; text-align: center; white-space: nowrap; text-overflow: ellipsis; }
+.strategy-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 5px; }
+.dsettings .strategy-cards { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.strategy-card { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 3px 4px; border: 1px solid var(--border); border-radius: 6px; color: var(--dim); user-select: none; }
+.strategy-card svg { width: 100%; height: 24px; }
+/* Its whole line, not the cap height the other icon buttons' labels are trimmed to: clipped, that cuts the letters. */
+.strategy-card span { max-width: 100%; overflow: hidden; font-size: 10px; line-height: 1.3; text-align: center; white-space: nowrap; text-overflow: ellipsis; text-box: normal; }
 .strategy-card:hover { color: var(--text); border-color: color-mix(in oklab, var(--primary) 50%, var(--border)); }
 .strategy-card.on { color: var(--text); border-color: var(--primary); background: color-mix(in oklab, var(--primary) 10%, transparent); }
 /* A phone: a sheet from the bottom, inputs big enough to touch and not zoomed into, the cards a strip to swipe. */
@@ -567,7 +569,7 @@ table.venues tr.off td { color: var(--dim); }
   .dsettings.wide .tleg .thint { grid-column: 2 / -1; text-align: left; }
   .dsettings.wide .tleg .iconbtn { grid-column: 4; grid-row: 1; }
   .dsettings.wide .tadd { height: 28px; padding: 0 10px; font-size: 11px; }
-  .dsettings.wide .strategy-cards { grid-auto-flow: column; grid-auto-columns: 68px; grid-template-columns: none; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 2px; }
+  .dsettings.wide .strategy-cards { grid-auto-flow: column; grid-auto-columns: 76px; grid-template-columns: none; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 2px; }
   .dsettings.wide .strategy-card { scroll-snap-align: start; }
   .dsettings.wide > footer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }

@@ -667,7 +667,7 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
     for &(k, p, percent) in &legs {
         let (color, name) = match k {
             b't' => (profit_line, "TP"),
-            b'c' => (stop_line, "Cut"),
+            b'c' => (stop_line, "SL"),
             _ => (entry_line, "Add"),
         };
         let y = d.y(p);

@@ -148,7 +148,7 @@ export function PositionTicket(props: {
     </label>
   );
   const pctText = (price: number) => `${movePct(price) > 0 ? '+' : ''}${movePct(price).toFixed(2)}%`;
-  const legName = (kind: LegKind) => (kind === 'take' ? 'TP' : kind === 'cut' ? 'Cut' : 'Add');
+  const legName = (kind: LegKind) => (kind === 'take' ? 'TP' : kind === 'cut' ? 'SL' : 'Add');
   // The legs in one list: takes, then cuts, then adds, each numbered in its kind.
   const listed = createMemo(() =>
     LEG_GROUPS.flatMap((g) =>
@@ -219,7 +219,8 @@ export function PositionTicket(props: {
           <For each={LEG_GROUPS}>
             {(g) => (
               <button class={`tadd ${g.kind}`} data-tip={g.tip} disabled={legs().length >= MAX_LEGS} onClick={() => addLeg(g.kind)}>
-                <Icon name="plus" size={10} /> {legName(g.kind)}
+                <Icon name="plus" size={10} />
+                <span>{legName(g.kind)}</span>
               </button>
             )}
           </For>
