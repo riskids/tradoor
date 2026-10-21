@@ -485,51 +485,57 @@ function Positions(props: {
             </tr>
           </thead>
           <tbody>
-            <For each={props.state!.positions}>
-              {(p) => {
-                const d = () => props.decimals(p.symbol);
-                const now = () => props.priceOf(p.symbol) ?? p.entry;
-                const made = () => unrealized(p, now());
+            {/* By coin, not by the position as read: the account is read every second, and a
+                row made afresh each time would take the take-profit box being typed in with it. */}
+            <For each={props.state!.positions.map((x) => x.symbol)}>
+              {(symbol) => {
+                const p = () => props.state!.positions.find((x) => x.symbol === symbol)!;
+                const d = () => props.decimals(symbol);
+                const now = () => props.priceOf(symbol) ?? p().entry;
+                const made = () => unrealized(p(), now());
                 return (
-                  <>
+                  <Show when={props.state!.positions.some((x) => x.symbol === symbol)}>
                     <tr>
                       <td>
-                        <button class="tr-coin-pick" onClick={() => props.onPick(p.symbol)}>
-                          <b class={p.side === 'long' ? 'bull' : 'bear'}>{coinOf(p.symbol)}</b> <span class="dim">{p.side} {p.leverage}×</span>
+                        <button class="tr-coin-pick" onClick={() => props.onPick(symbol)}>
+                          <b class={p().side === 'long' ? 'bull' : 'bear'}>{coinOf(symbol)}</b>{' '}
+                          <span class="dim">
+                            {p().side} {p().leverage}×
+                          </span>
                         </button>
                       </td>
                       <td>
-                        {coins(p.qty)} <span class="dim">{usd(p.qty * now())}</span>
+                        {coins(p().qty)} <span class="dim">{usd(p().qty * now())}</span>
                       </td>
-                      <td>{fmt(p.entry, d())}</td>
-                      <td>{fmt(props.markOf(p.symbol), d())}</td>
-                      <td class="bear">{fmt(p.liquidation, d())}</td>
-                      <td>{usd(p.margin)}</td>
+                      <td>{fmt(p().entry, d())}</td>
+                      <td>{fmt(props.markOf(symbol), d())}</td>
+                      <td class="bear">{fmt(p().liquidation, d())}</td>
+                      <td>{usd(p().margin)}</td>
                       <td classList={{ bull: made() > 0, bear: made() < 0 }}>
-                        {money(made())} <span class="dim">({percent(roe(p, now()))})</span>
+                        {money(made())} <span class="dim">({percent(roe(p(), now()))})</span>
                       </td>
                       <td>
-                        <button class="tr-exits" data-tip="Set the take profit and stop loss" onClick={() => edit(p)}>
-                          <span class="bull">{fmt(p.tp, d())}</span> / <span class="bear">{fmt(p.sl, d())}</span> <Icon name="pencil" size={10} />
+                        <button class="tr-exits" data-tip="Set the take profit and stop loss" onClick={() => edit(p())}>
+                          <span class="bull">{fmt(p().tp, d())}</span> / <span class="bear">{fmt(p().sl, d())}</span> <Icon name="pencil" size={10} />
                         </button>
                       </td>
                       <td class="tr-actions">
-                        <button class="tb" disabled={props.busy} data-tip="Close half at the market" onClick={() => void props.act(() => trainingApi.close(p.symbol, Number((p.qty / 2).toPrecision(6))))}>
+                        <button class="tb" disabled={props.busy} data-tip="Close half at the market" onClick={() => void props.act(() => trainingApi.close(symbol, Number((p().qty / 2).toPrecision(6))))}>
                           50%
                         </button>
-                        <button class="tb" disabled={props.busy} data-tip="Close it all at the market" onClick={() => void props.act(() => trainingApi.close(p.symbol))}>
+                        <button class="tb" disabled={props.busy} data-tip="Close it all at the market" onClick={() => void props.act(() => trainingApi.close(symbol))}>
                           Close
                         </button>
                       </td>
                     </tr>
-                    <Show when={editing() === p.symbol}>
+                    <Show when={editing() === symbol}>
                       <tr class="tr-edit">
                         <td colSpan={9}>
                           <span class="dim">Take profit</span>
                           <input class="dinput num" type="number" inputmode="decimal" step={10 ** -d()} value={tp()} placeholder="none" onInput={(e) => setTp(e.currentTarget.value)} />
                           <span class="dim">Stop loss</span>
                           <input class="dinput num" type="number" inputmode="decimal" step={10 ** -d()} value={sl()} placeholder="none" onInput={(e) => setSl(e.currentTarget.value)} />
-                          <button class="tb on" disabled={props.busy} onClick={() => saveExits(p)}>
+                          <button class="tb on" disabled={props.busy} onClick={() => saveExits(p())}>
                             Save
                           </button>
                           <button class="tb" onClick={() => setEditing(null)}>
@@ -538,7 +544,7 @@ function Positions(props: {
                         </td>
                       </tr>
                     </Show>
-                  </>
+                  </Show>
                 );
               }}
             </For>
