@@ -1,7 +1,7 @@
 /// <reference lib="deno.ns" />
 import { assertAlmostEquals, assertEquals } from 'jsr:@std/assert@1';
 import { pnl } from '../journal/model.ts';
-import { asJournal, liquidationAt, roe, shapes, unrealized, worth, type ClosedTrade, type Position, type State } from './model.ts';
+import { asJournal, liquidationAt, marked, roe, shapes, unrealized, worth, type ClosedTrade, type Position, type State } from './model.ts';
 
 const position = (over: Partial<Position> = {}): Position => ({
   symbol: 'BTCUSDT',
@@ -88,11 +88,22 @@ Deno.test("a closed trade reads in the journal's statistics as what it netted", 
   assertEquals(asJournal(closed()).strategy, 'Take profit');
 });
 
-Deno.test('the chart shows each trade as its box and where it got out, the position running on, and the orders', () => {
+Deno.test('the chart marks each trade where it was entered and closed, runs the position on, and lines the orders', () => {
   const s = state({ positions: [position({ sl: null, liquidation: 91, tp: null, openedAt: 5 })], orders: [{ id: 3, symbol: 'BTCUSDT', side: 'buy', price: 95, qty: 1, tp: null, sl: null, createdAt: 7 }] });
-  const out = shapes(s, [closed(), closed({ symbol: 'ETHUSDT' })], 'BTCUSDT', 100);
-  assertEquals(out.map((x) => x.kind), ['long', 'circle', 'long', 'trendline']);
-  assertEquals(out[0]!.points.map((p) => p.price), [100, 95, 110]);
-  assertEquals(out[2]!.points.map((p) => p.price), [100, 91, 109], 'no stop loss: the liquidation price, the target mirrored');
-  assertEquals(out[2]!.style.risk, 9, "the box's quantity is the position's");
+  const out = shapes(s, [closed({ openedAt: 125_000, closedAt: 245_000 }), closed({ symbol: 'ETHUSDT' })], 'BTCUSDT', 100);
+  assertEquals(out.map((x) => x.kind), ['trendline', 'text', 'trendline', 'long', 'trendline']);
+  assertEquals(out[0]!.points, [{ time: 60_000, price: 100 }, { time: 180_000, price: 100 }], 'across the entry candle and the one either side');
+  assertEquals([out[1]!.label, out[1]!.points[0]!.time], ['▲', 180_000]);
+  assertEquals(out[2]!.points.map((p) => [p.time, p.price]), [[180_000, 110], [300_000, 110]]);
+  assertEquals(out[3]!.points.map((p) => p.price), [100, 91, 109], 'no stop loss: the liquidation price, the target mirrored');
+  assertEquals(out[3]!.style.risk, 9, "the box's quantity is the position's");
+});
+
+Deno.test('the details come up on the candles a trade was entered and closed on', () => {
+  const t = closed({ openedAt: 125_000, closedAt: 605_000 });
+  assertEquals(marked([t], 'BTCUSDT', 120_000).length, 1);
+  assertEquals(marked([t], 'BTCUSDT', 180_000).length, 1, 'beside it, as its mark runs');
+  assertEquals(marked([t], 'BTCUSDT', 360_000).length, 0);
+  assertEquals(marked([t], 'BTCUSDT', 600_000).length, 1);
+  assertEquals(marked([t], 'ETHUSDT', 120_000).length, 0);
 });

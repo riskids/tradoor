@@ -8,7 +8,7 @@
 import type { DrawingPoint } from '../engine/protocol';
 import { json } from '../lib/api';
 import type { Style } from '../lib/drawing-style';
-import { money, type Trade } from '../journal/model';
+import type { Trade } from '../journal/model';
 
 export const TRAINING_MARKETS = ['binance-perp:BTCUSDT', 'binance-perp:ETHUSDT', 'binance-perp:SOLUSDT'] as const;
 export const symbolOfMarket = (market: string): string => market.split(':')[1] ?? market;
@@ -251,20 +251,39 @@ function box(side: Side, from: number, to: number, entry: number, stop: number, 
   };
 }
 
+const MINUTE = 60_000;
+/** The one-minute candle a moment falls in. */
+export const candleOf = (ms: number): number => Math.floor(ms / MINUTE) * MINUTE;
+const BULL = '#089981';
+const BEAR = '#f23645';
+
+/** A short flat line across a candle and the one either side of it. */
+const tick = (candle: number, price: number, color: string): Shape => ({
+  kind: 'trendline',
+  points: [
+    { time: candle - MINUTE, price },
+    { time: candle + MINUTE, price },
+  ],
+  label: null,
+  style: { color, width: 2 },
+});
+
 /**
- * What the chart shows of a coin's trading: each trade of the run as the
- * long or short box it was, from entry to close, with where it got out and
- * what it made; the open position as a box running on, its stop the stop
- * loss or else the liquidation price; and each resting order as a line.
+ * What the chart shows of a coin's trading, kept out of the candles' way: each
+ * trade of the run as a mark on the candle it was entered on — a short line at
+ * the entry with an arrow after it, up for a long, down for a short — and a
+ * flat line on the candle it closed on (the details come up over either, see
+ * `marked`); the open position as a box running on, its stop the stop loss or
+ * else the liquidation price; and each resting order as a line.
  */
 export function shapes(s: State | null, trades: readonly ClosedTrade[], symbol: string, now: number): Shape[] {
   const out: Shape[] = [];
-  for (const t of trades.filter((x) => x.symbol === symbol).slice(0, 40)) {
-    const won = (t.exit - t.entry) * way(t.side) >= 0;
-    const at = levels(t.side, t.entry, t.sl ?? (won ? null : t.exit), t.tp ?? (won ? t.exit : null));
-    if (at) out.push(box(t.side, t.openedAt, Math.max(t.closedAt, t.openedAt + 60_000), t.entry, at.stop, at.target, t.qty));
-    const tone = t.net >= 0 ? '#089981' : '#f23645';
-    out.push({ kind: 'circle', points: [{ time: t.closedAt, price: t.exit }], label: money(t.net), style: { color: tone, width: 1.5, textColor: tone, fill: `${tone}33` } });
+  for (const t of trades.filter((x) => x.symbol === symbol).slice(0, 60)) {
+    const color = t.side === 'long' ? BULL : BEAR;
+    const entered = candleOf(t.openedAt);
+    out.push(tick(entered, t.entry, color));
+    out.push({ kind: 'text', points: [{ time: entered + MINUTE, price: t.entry }], label: t.side === 'long' ? '▲' : '▼', style: { textColor: color, textSize: 11 } });
+    out.push(tick(candleOf(t.closedAt), t.exit, '#d1d4dc'));
   }
   const p = s?.positions.find((x) => x.symbol === symbol);
   if (p) {
@@ -276,6 +295,12 @@ export function shapes(s: State | null, trades: readonly ClosedTrade[], symbol: 
     out.push({ kind: 'trendline', points: [{ time: o.createdAt, price: o.price }, { time: now + AHEAD, price: o.price }], label, style: { color: '#ffc247', width: 1, dash: 'dashed', textColor: '#ffc247', priceLabels: true } });
   }
   return out;
+}
+
+/** The trades marked on or beside `candle` — entered or closed there — for the details over it. */
+export function marked(trades: readonly ClosedTrade[], symbol: string, candle: number): ClosedTrade[] {
+  const near = (ms: number) => Math.abs(candleOf(ms) - candle) <= MINUTE;
+  return trades.filter((t) => t.symbol === symbol && (near(t.openedAt) || near(t.closedAt))).slice(0, 3);
 }
 
 /** `1,234.5` with the coin's decimals; `—` for nothing. */

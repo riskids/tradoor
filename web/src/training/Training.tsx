@@ -22,9 +22,11 @@ import { DEFAULT_STUDIES, type ChartPanelState } from '../workspace/model';
 import { detached, holdDetached, setPanelMarket } from '../workspace/store';
 import {
   asJournal,
+  candleOf,
   coinOf,
   coins,
   liquidationAt,
+  marked,
   marketOfSymbol,
   percent,
   price as fmt,
@@ -178,9 +180,71 @@ export function Training(props: { chart: typeof ChartPanel }) {
     }
   };
 
+  const runTrades = () => (history()?.run === history()?.current ? (history()?.trades ?? []) : []);
   const overlay = () => {
     void now();
-    return shapes(state(), history()?.run === history()?.current ? (history()?.trades ?? []) : [], symbol(), now());
+    return shapes(state(), runTrades(), symbol(), now());
+  };
+  /** The details over a marked candle: the trades entered or closed there, and the position opened there. */
+  const hover = (time: number) => {
+    const candle = candleOf(time);
+    const list = marked(runTrades(), symbol(), candle);
+    const open = state()?.positions.find((p) => p.symbol === symbol() && Math.abs(candleOf(p.openedAt) - candle) <= 60_000);
+    if (list.length === 0 && !open) return null;
+    const d = decimals(symbol());
+    return (
+      <>
+        <Show when={open}>
+          {(p) => {
+            const made = () => unrealized(p(), priceOf(p().symbol) ?? p().entry);
+            return (
+              <div class="tc">
+                <div class="tc-head">
+                  <b class={p().side === 'long' ? 'bull' : 'bear'}>
+                    {p().side === 'long' ? '▲' : '▼'} {coinOf(p().symbol)} {p().side} {p().leverage}×
+                  </b>
+                  <span class="dim">open</span>
+                </div>
+                <div>
+                  <span class="dim">Entry</span> {fmt(p().entry, d)} <span class="dim">{stamp(p().openedAt)}</span>
+                </div>
+                <div>
+                  <span class="dim">Size</span> {coins(p().qty)} {coinOf(p().symbol)} · <span class="dim">margin</span> {usd(p().margin)}
+                </div>
+                <div>
+                  <span class="dim">Now</span> <b classList={{ bull: made() > 0, bear: made() < 0 }}>{money(made())}</b> ({percent(roe(p(), priceOf(p().symbol) ?? p().entry))})
+                </div>
+              </div>
+            );
+          }}
+        </Show>
+        <For each={list}>
+          {(t) => (
+            <div class="tc">
+              <div class="tc-head">
+                <b class={t.side === 'long' ? 'bull' : 'bear'}>
+                  {t.side === 'long' ? '▲' : '▼'} {coinOf(t.symbol)} {t.side} {t.leverage}×
+                </b>
+                <span class="dim">{REASON_LABEL[t.reason]}</span>
+              </div>
+              <div>
+                <span class="dim">Entry</span> {fmt(t.entry, d)} <span class="dim">{stamp(t.openedAt)}</span>
+              </div>
+              <div>
+                <span class="dim">Exit</span> {fmt(t.exit, d)} <span class="dim">{stamp(t.closedAt)}</span>
+              </div>
+              <div>
+                <span class="dim">Size</span> {coins(t.qty)} {coinOf(t.symbol)} · <span class="dim">margin</span> {usd(t.margin)}
+              </div>
+              <div>
+                <span class="dim">Net</span> <b classList={{ bull: t.net > 0, bear: t.net < 0 }}>{money(t.net)}</b> ({percent(t.margin > 0 ? t.net / t.margin : 0)}) ·{' '}
+                <span class="dim">fees</span> {usd(t.fees)}
+              </div>
+            </div>
+          )}
+        </For>
+      </>
+    );
   };
 
   // ---------------------------------------------------------------- reset
@@ -252,7 +316,7 @@ export function Training(props: { chart: typeof ChartPanel }) {
         >
           <div class="tr-body">
             <div class="tr-chart">
-              <props.chart panel={panel()} training={{ markets: TRAINING_MARKETS, overlay }} />
+              <props.chart panel={panel()} training={{ markets: TRAINING_MARKETS, overlay, hover }} />
             </div>
             <Ticket state={state()} symbol={symbol()} priceOf={priceOf} available={value()?.available ?? 0} decimals={decimals(symbol())} busy={busy()} act={act} error={error()} />
             <div class="tr-tabs">

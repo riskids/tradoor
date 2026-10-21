@@ -3,7 +3,7 @@
  * the DOM around them — toolbar, drawing rail, legend, menus — and forwards
  * pointer input.
  */
-import { batch, createEffect, createSignal, For, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
+import { batch, createEffect, createSignal, For, type JSX, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
 import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
@@ -165,6 +165,8 @@ function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; 
 export interface TrainingChart {
   markets: readonly string[];
   overlay: () => { kind: string; points: DrawingPoint[]; label: string | null; style: Style }[];
+  /** What to say over the candle under the pointer (or a finger), if anything. */
+  hover: (time: number) => JSX.Element | null;
 }
 
 export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingChart }) {
@@ -346,6 +348,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     const r = box.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
+  const [pointerX, setPointerX] = createSignal(0);
   const pointer = (kind: PointerKind, e: MouseEvent) => {
     const p = local(e);
     const touch = 'pointerType' in e && (e as PointerEvent).pointerType === 'touch';
@@ -847,7 +850,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             <>
               <For each={props.training!.markets}>
                 {(m) => (
-                  <button class="tb training-market" classList={{ on: market() === m }} onClick={() => setPanelMarket(id, m)}>
+                  <button class="tb" classList={{ on: market() === m }} onClick={() => setPanelMarket(id, m)}>
                     <span>{symbolOf(m).replace(/USDT$/, '')}</span>
                   </button>
                 )}
@@ -1155,6 +1158,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             pointer('down', e);
           }}
           onPointerMove={(e) => {
+            setPointerX(local(e).x);
             if (e.pointerType === 'touch') {
               if (!fingers.has(e.pointerId)) return;
               fingers.set(e.pointerId, local(e));
@@ -1276,6 +1280,13 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
                 <span class="dim">sold</span>
                 <span>{h().buy >= h().sell ? '+' : '-'}{formatTurnover(Math.abs(h().buy - h().sell))}</span>
                 <span class="dim">{formatClock(h().at)}</span>
+              </div>
+            )}
+          </Show>
+          <Show when={props.training && legend()?.cursor && props.training.hover(legend()!.time)}>
+            {(card) => (
+              <div class="trade-card" style={{ left: `${Math.min(pointerX() + 14, box.clientWidth - 250)}px`, top: `${legend()!.cursor!.y + 14}px` }}>
+                {card()}
               </div>
             )}
           </Show>

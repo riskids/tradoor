@@ -849,6 +849,12 @@ table.venues tr.off td { color: var(--dim); }
 .flow-label.bear { border-color: color-mix(in oklab, var(--bear) 60%, transparent); }
 .flow-label.bull b { color: var(--bull); }
 .flow-label.bear b { color: var(--bear); }
+/* A training trade's details over the candle it was entered or closed on. */
+.trade-card { position: absolute; z-index: 6; display: flex; flex-direction: column; gap: 6px; width: 236px; pointer-events: none; }
+.trade-card .tc { display: flex; flex-direction: column; gap: 2px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); box-shadow: 0 4px 14px #0009; font-size: 11px; white-space: nowrap; }
+.trade-card .tc-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.trade-card .bull { color: var(--bull); }
+.trade-card .bear { color: var(--bear); }
 
 /* The handle under the list: an arrow alone while the list is out, an arrow
    and the count of what is under it once folded away. */
@@ -1001,7 +1007,6 @@ textarea.jr-in { resize: vertical; line-height: 1.5; }
 .tr-curve polyline.bear { stroke: var(--bear); }
 .tr-curve .tr-zero { stroke: var(--border); stroke-dasharray: 3 3; }
 .tr-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
-.training-market { min-width: 34px; }
 @media (max-width: 760px) {
   .tr-body { display: flex; flex-direction: column; overflow-y: auto; }
   .tr-chart { flex: none; height: 52dvh; }

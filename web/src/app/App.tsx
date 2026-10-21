@@ -467,7 +467,7 @@ export function App() {
         <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={12} /> <span>Commands</span> <kbd>/</kbd>
         </button>
-        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
+        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
           <Icon name="pencil" size={12} /> <span>Journal</span>
         </button>
         <button class="item" classList={{ on: trainingOpen() }} data-tip="Paper trading at live prices" onClick={() => (setJournalOpen(false), setTrainingOpen(!trainingOpen()))}>
