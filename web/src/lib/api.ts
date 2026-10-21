@@ -103,8 +103,8 @@ export interface Drawing {
   createdAt: number;
 }
 
-/** A market's candle chart and its TPO chart keep separate drawings. */
-export type ChartKind = 'candles' | 'tpo';
+/** A market's candle chart and its TPO chart keep separate drawings, and the training chart its own. */
+export type ChartKind = 'candles' | 'tpo' | 'training';
 
 const scope = (market: string, timeframe: string, chart: ChartKind): string => `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}&chart=${chart}`;
 

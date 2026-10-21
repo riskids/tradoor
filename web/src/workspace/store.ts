@@ -32,6 +32,18 @@ const [doc, setDoc] = createStore<WorkspaceDoc>(
 );
 export { doc };
 
+/**
+ * Charts outside the layout — the training view's — kept beside the workspace
+ * rather than in it, which drops any panel its tree does not place. The panel
+ * setters below reach them by id all the same; whoever holds one saves it.
+ */
+const [detached, setDetached] = createStore<Record<string, ChartPanelState>>({});
+export { detached };
+
+export function holdDetached(panel: ChartPanelState): void {
+  setDetached(panel.id, panel);
+}
+
 export type SaveState = 'saved' | 'pending' | 'saving' | 'local' | 'conflict';
 const [saveState, setSaveState] = createSignal<SaveState>('saved');
 export { saveState };
@@ -102,13 +114,20 @@ export function update(mutate: (draft: WorkspaceDoc) => void): void {
 }
 
 export function patchPanel(id: string, patch: Partial<Omit<ChartPanelState, 'id' | 'type'>> | Record<string, unknown>): void {
-  if (!doc.panels[id]) return;
+  if (!doc.panels[id]) {
+    if (detached[id]) (setDetached as (...args: unknown[]) => void)(id, patch);
+    return;
+  }
   (setDoc as (...args: unknown[]) => void)('panels', id, patch);
   touched();
 }
 
 export function setPanelMarket(id: string, market: string): void {
   const p = doc.panels[id];
+  if (!p && detached[id]) {
+    if (detached[id].market !== market) setDetached(id, 'market', market);
+    return;
+  }
   if (!p || marketOf(p) === market) return;
   batch(() => {
     if (p.link) setDoc('links', p.link, 'market', market);
@@ -119,6 +138,10 @@ export function setPanelMarket(id: string, market: string): void {
 
 export function setPanelTimeframe(id: string, timeframe: string): void {
   const p = doc.panels[id];
+  if (!p && detached[id]) {
+    if (detached[id].timeframe !== timeframe) setDetached(id, 'timeframe', timeframe);
+    return;
+  }
   if (!p || timeframeOf(p) === timeframe) return;
   batch(() => {
     if (p.link) setDoc('links', p.link, 'timeframe', timeframe);

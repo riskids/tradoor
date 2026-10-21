@@ -957,3 +957,58 @@ textarea.jr-in { resize: vertical; line-height: 1.5; }
   .jr-weeks button { flex-shrink: 0; }
   .jr-weeks button .dim { display: none; }
 }
+
+/* Training: the chart, the order ticket beside it and the account's tabs under it; stacked on a phone. */
+.training .tr-worth { display: flex; flex-wrap: wrap; gap: 2px 14px; padding-left: 8px; font-size: 11px; }
+.training .tr-worth .dim { margin-right: 4px; font-size: 10px; }
+.tr-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: minmax(0, 1fr) minmax(150px, 32%); grid-template-areas: 'chart ticket' 'tabs ticket'; }
+.tr-chart { grid-area: chart; display: flex; min-width: 0; min-height: 0; border-bottom: 1px solid var(--border); }
+.tr-ticket { grid-area: ticket; display: flex; flex-direction: column; gap: 9px; min-height: 0; padding: 10px; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); font-size: 11px; }
+.tr-price { display: flex; align-items: baseline; justify-content: space-between; font-size: 15px; font-weight: 600; }
+.tr-price .tr-coin { color: var(--muted); font-size: 11px; font-weight: 500; }
+.tr-types, .tr-steps { padding: 0; }
+.tr-types button { flex: 1; padding: 4px 0; font-size: 11px; }
+.tr-steps button { flex: 1; padding: 2px 0; border: 1px solid var(--border); }
+.tr-ticket input[type='range'] { width: 100%; accent-color: var(--primary); }
+.tr-ticket .dinput { width: 100%; }
+.tr-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 2px; }
+.tr-sides button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 4px; color: #fff; font-size: 12px; font-weight: 600; }
+.tr-sides button .num { font-size: 9.5px; font-weight: 400; opacity: 0.8; }
+.tr-sides button:disabled { opacity: 0.45; }
+.tr-buy { background: var(--bull); }
+.tr-sell { background: var(--bear); }
+.tr-tabs { grid-area: tabs; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tr-tabs > .jr-tabs { padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.tr-tab { flex: 1; min-height: 0; overflow: auto; }
+.tr-tab .jr-empty { margin: 20px auto; }
+.tr-table { min-width: 0; }
+.tr-coin-pick, .tr-exits { display: inline-flex; align-items: center; gap: 4px; font: inherit; }
+.tr-coin-pick:hover b, .tr-exits:hover { text-decoration: underline; }
+.tr-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.tr-edit td { text-align: left; }
+.tr-edit .dinput { width: 110px; height: 22px; margin: 0 8px 0 4px; }
+.tr-stats { display: flex; flex-direction: column; gap: 10px; padding: 8px; }
+.tr-runs { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.tr-runs .dinput { width: auto; }
+.tr-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.tr-card { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border: 1px solid var(--border); background: var(--surface-2); font-size: 10px; }
+.tr-card b { font-size: 13px; font-weight: 600; color: var(--text); }
+.tr-card b.bull { color: var(--bull); }
+.tr-card b.bear { color: var(--bear); }
+.tr-curve { width: 100%; height: 150px; border: 1px solid var(--border); background: var(--surface-2); }
+.tr-curve polyline { stroke-width: 1.5; }
+.tr-curve polyline.bull { stroke: var(--bull); }
+.tr-curve polyline.bear { stroke: var(--bear); }
+.tr-curve .tr-zero { stroke: var(--border); stroke-dasharray: 3 3; }
+.tr-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.training-market { min-width: 34px; }
+@media (max-width: 760px) {
+  .tr-body { display: flex; flex-direction: column; overflow-y: auto; }
+  .tr-chart { flex: none; height: 52dvh; }
+  .tr-ticket { flex: none; border-left: 0; border-bottom: 1px solid var(--border); }
+  .tr-ticket .dinput { height: 34px; font-size: 16px; }
+  .tr-sides button { padding: 10px 4px; }
+  .tr-tabs { flex: none; min-height: 260px; }
+  .tr-tab { overflow-x: auto; }
+  .training .tr-worth { display: none; }
+}

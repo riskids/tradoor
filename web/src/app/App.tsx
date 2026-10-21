@@ -19,8 +19,10 @@ import { toast } from '../lib/toasts';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
 import { referralCard, startReferral } from '../lib/referral';
 import { Layout, panelTitle } from '../workspace/Layout';
-import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
+import { ChartPanel } from '../panels/ChartPanel';
+import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type ChartPanelState, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
 import {
+  detached,
   doc,
   focusedPanel,
   focusPanel,
@@ -38,7 +40,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, journalOpen, MAGNET_KEY, mobileMenu, overlay, panelSteps, setJournalOpen, setOverlay, TOOL_KEYS } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, journalOpen, MAGNET_KEY, mobileMenu, overlay, panelSteps, setJournalOpen, setOverlay, setTrainingOpen, TOOL_KEYS, TRAINING_CHART, trainingOpen } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -50,6 +52,7 @@ const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => (
 const ReferralDialog = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralDialog })));
 const ReferralCard = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralCard })));
 const Journal = lazy(() => import('../journal/Journal').then((m) => ({ default: m.Journal })));
+const Training = lazy(() => import('../training/Training').then((m) => ({ default: m.Training })));
 
 const splitList = (s: string): string[] => s.split(',').filter(Boolean);
 
@@ -141,7 +144,10 @@ function stepWatchlist(panel: Panel, step: number): boolean {
 function onKeyDown(e: KeyboardEvent): void {
   // The journal over the charts keeps the keys to itself.
   if (journalOpen()) return;
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+  // The training view's chart takes the drawing keys; the workspace's wait behind it.
+  const training = trainingOpen();
+  const inUse = (chart: ChartPanelState | null) => chartControllers.get(training ? TRAINING_CHART : (chart?.id ?? ''));
+  if (!training && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     setOverlay(overlay()?.kind === 'palette' ? null : { kind: 'palette' });
     return;
@@ -157,8 +163,7 @@ function onKeyDown(e: KeyboardEvent): void {
     }
     const kind = TOOL_KEYS[code];
     const focus = focusedPanel();
-    const chart = focus?.type === 'chart' ? focus : targetChart();
-    const control = chart ? chartControllers.get(chart.id) : undefined;
+    const control = inUse(focus?.type === 'chart' ? focus : targetChart());
     // A picture of the chart in use: shift saves the file instead of copying.
     if (code === CAPTURE_KEY && control) {
       e.preventDefault();
@@ -176,8 +181,7 @@ function onKeyDown(e: KeyboardEvent): void {
   const k = e.key.toLowerCase();
   if (mod && !e.altKey && (k === 'z' || k === 'y') && !overlay() && !isTypingTarget(e.target)) {
     const focus = focusedPanel();
-    const chart = focus?.type === 'chart' ? focus : targetChart();
-    const control = chart && chartControllers.get(chart.id);
+    const control = inUse(focus?.type === 'chart' ? focus : targetChart());
     if (control) {
       e.preventDefault();
       if (k === 'y' || e.shiftKey) control.redo();
@@ -195,6 +199,13 @@ function onKeyDown(e: KeyboardEvent): void {
   }
   // Dialogs own the keyboard while open; modifiers belong to the browser.
   if (overlay() || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+  if (training) {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace') {
+      if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
+      void inUse(null)?.key(e.key);
+    }
+    return;
+  }
   if (e.key === '?') {
     e.preventDefault();
     setOverlay({ kind: 'help' });
@@ -351,7 +362,7 @@ function Overlays() {
             );
           }
           case 'indicators': {
-            const panel = doc.panels[o.panelId];
+            const panel = doc.panels[o.panelId] ?? detached[o.panelId];
             if (panel?.type !== 'chart') return null;
             return (
               <IndicatorPicker
@@ -459,8 +470,11 @@ export function App() {
         <button class="item" data-tip="Open a chart beside the focused panel" onClick={() => addNear('chart', 'right')}>
           <Icon name="plus" size={12} /> <span>Chart</span>
         </button>
-        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => setJournalOpen(!journalOpen())}>
+        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
           <Icon name="pencil" size={12} /> <span>Journal</span>
+        </button>
+        <button class="item" classList={{ on: trainingOpen() }} data-tip="Paper trading at live prices" onClick={() => (setJournalOpen(false), setTrainingOpen(!trainingOpen()))}>
+          <Icon name="indicators" size={12} /> <span>Training</span>
         </button>
         <span class="item dim">
           <span>{doc.name}</span>
@@ -490,11 +504,14 @@ export function App() {
         <Show when={journalOpen()}>
           <Journal />
         </Show>
+        <Show when={trainingOpen()}>
+          <Training chart={ChartPanel} />
+        </Show>
       </main>
       <StatusBar />
       <Overlays />
       {/* Offered once, and never over a dialog, the phone's menu or the journal. */}
-      <Show when={referralCard() && !overlay() && !mobileMenu() && !journalOpen()}>
+      <Show when={referralCard() && !overlay() && !mobileMenu() && !journalOpen() && !trainingOpen()}>
         <ReferralCard />
       </Show>
       <Toasts />

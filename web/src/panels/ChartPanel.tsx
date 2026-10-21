@@ -30,7 +30,7 @@ import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert,
 import { toast } from '../lib/toasts';
 import { TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
-import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
+import { doc, marketOf, patchPanel, setPanelMarket, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
 
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
@@ -157,16 +157,26 @@ function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; 
   ];
 }
 
-export function ChartPanel(props: { panel: ChartPanelState }) {
+/**
+ * The training view's chart: its markets alone, on one timeframe, candles
+ * only, its drawings its own — and the account's positions laid over them,
+ * shown but not picked up.
+ */
+export interface TrainingChart {
+  markets: readonly string[];
+  overlay: () => { kind: string; points: DrawingPoint[]; label: string | null; style: Style }[];
+}
+
+export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingChart }) {
   const id = props.panel.id;
   const market = () => marketOf(props.panel);
   const timeframe = () => timeframeOf(props.panel);
   /** Profiles in place of candles: chosen, and a session longer than these bars. */
   /** The TPO split drawn now: chosen, and longer than the candles it stacks. */
-  const split = () => (props.panel.tpo && tfLonger(props.panel.tpo, timeframe()) ? props.panel.tpo : null);
+  const split = () => (!props.training && props.panel.tpo && tfLonger(props.panel.tpo, timeframe()) ? props.panel.tpo : null);
   const tpoShown = () => split() !== null;
-  /** Candles and TPO profiles keep separate drawings. */
-  const chartKind = (): ChartKind => (tpoShown() ? 'tpo' : 'candles');
+  /** Candles and TPO profiles keep separate drawings, and the training chart its own. */
+  const chartKind = (): ChartKind => (props.training ? 'training' : tpoShown() ? 'tpo' : 'candles');
 
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
@@ -255,7 +265,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
   void recordedMarkets().then(setRecorded);
   /** Whether this market's footprint can be asked for at all. */
   const footprintable = () => recorded().has(market());
-  const footprintOn = () => props.panel.footprint === true && footprintable() && !tpoShown();
+  const footprintOn = () => !props.training && props.panel.footprint === true && footprintable() && !tpoShown();
   createEffect(() => send({ t: 'footprintShown', id: sid, value: footprintOn() }));
   // The mode and what else a column carries, as the engine reads them.
   createEffect(() =>
@@ -506,6 +516,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
           .filter((d) => visibleOn(d.style, tf))
           .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style })),
         ...(p ? patternParts(p).map((d, i) => ({ id: -1_000_000 - i, ...d, style: { ...d.style, locked: true } })) : []),
+        ...(props.training?.overlay() ?? []).map((d, i) => ({ id: -2_000_000 - i, ...d, style: { ...d.style, locked: true } })),
       ],
     });
   });
@@ -830,6 +841,23 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             <Icon name="menu" size={17} />
           </button>
         </Show>
+        <Show
+          when={!props.training}
+          fallback={
+            <>
+              <For each={props.training!.markets}>
+                {(m) => (
+                  <button class="tb training-market" classList={{ on: market() === m }} onClick={() => setPanelMarket(id, m)}>
+                    <span>{symbolOf(m).replace(/USDT$/, '')}</span>
+                  </button>
+                )}
+              </For>
+              <VenueTag market={market()} name />
+              <span class="sep" />
+              <button class="tb num on">{tfLabel('1m')}</button>
+            </>
+          }
+        >
         <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
           <span>{symbolOf(market())}</span>
           <Icon name="chevron" size={10} />
@@ -852,6 +880,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
         <button ref={tfButton} class="tb" data-tip="Every timeframe — star one to keep it here" onPointerDown={(e) => e.stopPropagation()} onClick={() => setTfMenu((v) => (v === null ? tfButton.offsetLeft - (tfButton.parentElement?.scrollLeft ?? 0) : null))}>
           <Icon name="chevron" size={11} />
         </button>
+        </Show>
         <span class="sep" />
         <button
           class="tb"
@@ -869,6 +898,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             <span class="dim">{studyCount()}</span>
           </Show>
         </button>
+        <Show when={!props.training}>
         <span class="sep" />
         <select
           data-tip="Candles, the footprint's own volume by price, or TPO profiles — the candles are the brackets, the split is how long a profile runs"
@@ -890,6 +920,7 @@ export function ChartPanel(props: { panel: ChartPanelState }) {
             )}
           </For>
         </select>
+        </Show>
         <Show when={footprintOn()}>
           <span class="sep" />
           <select

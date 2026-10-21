@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, indices, journal, limits, liquidations, open_interest, relay, signals, telegram, workspaces};
+use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, indices, journal, limits, liquidations, open_interest, relay, signals, telegram, training, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -34,6 +34,8 @@ pub struct AppState {
     pub limits: Arc<limits::Limits>,
     /// The series this server works out itself.
     pub indices: Arc<indices::Indices>,
+    /// Training's live prices, and its engine's nudge.
+    pub training: Arc<training::Live>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -140,6 +142,14 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/journal/reviews", get(journal::reviews))
         .route("/journal/reviews/{week}", axum::routing::put(journal::save_review))
         .route("/journal/{id}", axum::routing::patch(journal::update).delete(journal::delete_one))
+        .route("/training", get(training::state))
+        .route("/training/orders", axum::routing::post(training::order))
+        .route("/training/orders/{id}", axum::routing::delete(training::cancel))
+        .route("/training/positions/{symbol}", axum::routing::patch(training::exits))
+        .route("/training/positions/{symbol}/close", axum::routing::post(training::close))
+        .route("/training/leverage/{symbol}", axum::routing::put(training::leverage))
+        .route("/training/reset", axum::routing::post(training::reset))
+        .route("/training/trades", get(training::history))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
         .layer(middleware::from_fn_with_state(state.clone(), limits::middleware))

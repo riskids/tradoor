@@ -114,7 +114,7 @@ pub fn parse_points(kind: &str, value: Option<&Value>) -> Result<Vec<Point>, Str
 pub struct Scope {
     market: String,
     timeframe: String,
-    /// `candles` (the default) or `tpo`.
+    /// `candles` (the default), `tpo`, or `training` — the training chart's own.
     #[serde(default)]
     chart: Option<String>,
 }
@@ -137,7 +137,8 @@ impl Scope {
         let chart = match self.chart.as_deref() {
             None | Some("candles") => "candles",
             Some("tpo") => "tpo",
-            Some(other) => return Err(ApiError::bad_request(format!("chart is candles or tpo, not '{other}'"))),
+            Some("training") => "training",
+            Some(other) => return Err(ApiError::bad_request(format!("chart is candles, tpo or training, not '{other}'"))),
         };
         Ok((market, &self.timeframe, chart))
     }
@@ -188,7 +189,10 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, Query(sco
     }
     let row = insert(&client, &owner, &market, timeframe, chart, &input).await?;
     let drawing = row_json(&row);
-    journal(&client, &owner, &drawing).await;
+    // A training chart's positions are drawings, not trades in the journal.
+    if chart != "training" {
+        journal(&client, &owner, &drawing).await;
+    }
     Ok((StatusCode::CREATED, Json(json!({ "drawing": drawing }))))
 }
 
@@ -198,9 +202,10 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let b = body.as_object().ok_or_else(|| ApiError::bad_request("body must be a JSON object"))?;
     let client = state.pool.get().await?;
     // Someone else's drawing is not found, not forbidden: its existence is not theirs to learn.
-    let row = client.query_opt("SELECT kind, label FROM drawing WHERE id = $1 AND owner = $2", &[&id, &owner]).await?;
+    let row = client.query_opt("SELECT kind, label, chart FROM drawing WHERE id = $1 AND owner = $2", &[&id, &owner]).await?;
     let row = row.ok_or_else(|| ApiError::not_found(format!("drawing {id} not found")))?;
     let kind: String = row.get(0);
+    let chart: String = row.get(2);
 
     let points = match b.get("points") {
         Some(value) => {
@@ -237,7 +242,9 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
         )
         .await?;
     let drawing = row_json(&row);
-    journal(&client, &owner, &drawing).await;
+    if chart != "training" {
+        journal(&client, &owner, &drawing).await;
+    }
     Ok(Json(json!({ "drawing": drawing })))
 }
 

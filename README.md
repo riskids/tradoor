@@ -189,6 +189,19 @@ Telegram account: sign in (in the Journal, or in
 Settings) and it is written down, and follows you to any device you sign in on;
 until then positions are drawn as before, and none is recorded.
 
+## Training
+
+Training in the top bar (or the phone's menu): paper trading on Binance's BTC,
+ETH and SOL perpetuals at their live prices, with 100,000 USDT to start. Market
+and limit orders, long and short, up to 100x on isolated margin, a take profit
+and stop loss; liquidation, fees and funding as Binance has them, the server
+filling everything as the prices come, browser open or not. The one-minute
+chart takes indicators and drawings, and draws every trade where it was taken;
+the positions show what they make as the price moves, and the statistics —
+win rate, net, profit factor, drawdown, by coin, side and how each ended —
+cover the run. Reset starts a new run; the ones before stay to look back on. It
+is kept for a Telegram account, as the journal is.
+
 ## Indices, the S&P 500 and the Nasdaq
 
 Search TOTAL, TOTAL2, TOTAL3, TOTALES, OTHERS, BTC.D, ETH.D, USDT.D,

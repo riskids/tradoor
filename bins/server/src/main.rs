@@ -28,6 +28,7 @@ mod research;
 mod signals;
 mod telegram;
 mod trades;
+mod training;
 mod workspaces;
 
 use std::net::SocketAddr;
@@ -168,6 +169,8 @@ async fn main() -> anyhow::Result<()> {
             journal::start(pool.clone(), &doh, catalog.clone());
             let site = Some(cli.site_url.trim().to_string()).filter(|s| !s.is_empty());
             signals::start(pool.clone(), &doh, catalog.clone(), telegram.clone(), site);
+            let training = training::Live::new();
+            training::start(pool.clone(), doh.clone(), training.clone());
             let state = api::AppState {
                 open_interest,
                 flow,
@@ -179,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
                 relay: relay::Relay::new(doh)?,
                 limits: Arc::new(limits::Limits::default()),
                 indices,
+                training,
             };
             let app = api::router(state, cli.data_dir.clone(), cli.web_dir.clone());
             let listener = tokio::net::TcpListener::bind(cli.bind).await.with_context(|| format!("binding {}", cli.bind))?;

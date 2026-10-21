@@ -58,6 +58,9 @@ export const [mobile, setMobile] = createSignal(false);
 export const [mobileMenu, setMobileMenu] = createSignal(false);
 /** Whether the trading journal covers the workspace. */
 export const [journalOpen, setJournalOpen] = createSignal(false);
+/** The training view over the workspace, and the id its chart goes by. */
+export const [trainingOpen, setTrainingOpen] = createSignal(false);
+export const TRAINING_CHART = 'training-chart';
 
 /** Alt + this key turns the magnet through off, weak and strong. */
 export const MAGNET_KEY = 'KeyG';

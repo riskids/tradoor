@@ -122,6 +122,9 @@ The file format is described in [format.md](format.md).
 | `GET /api/index/latest?symbols=&interval=` | the last two bars of each index named, by symbol: a watchlist's indices in one request |
 | `GET POST /api/journal` · `PATCH DELETE /api/journal/{id}` | this browser's journal trades — written only for an account, signed in with Telegram (403 otherwise) — tagged (`ETag`; asked with an unchanged tag, 304); add one by hand; set its strategy, notes, fees or risk, close it by hand (`closed` at `exit`, `breakeven`, `cancelled`) or give it back to price (`auto: true`); delete it |
 | `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers, for an account only |
+| `GET /api/training` · `GET /api/training/trades?run=` | training, for an account only: cash, leverages, positions with their liquidation prices, resting orders and the coins' live prices; a run's closed trades and every run's sum |
+| `POST /api/training/orders` · `DELETE /api/training/orders/{id}` | a market or limit order, long or short, with a take profit and stop loss; a resting order cancelled |
+| `PATCH /api/training/positions/{symbol}` · `POST /api/training/positions/{symbol}/close` · `PUT /api/training/leverage/{symbol}` · `POST /api/training/reset` | a position's take profit and stop loss; closed at the market, all or part; a coin's leverage while it has no position or order; a new run at 100,000 |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
@@ -153,6 +156,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
+| `training_account`, `training_position`, `training_order`, `training_trade` | training per account's browser id: the run and its cash, the open positions and resting orders, and every position from first fill to flat, by run |
 | `journal_trade`, `journal_review` | the trading journal per account's browser id — each trade's legs and fills too — every long or short position drawn (tied to its drawing until that is deleted) and the trades added by hand, with how price or the hand closed them; and the weekly reviews' answers |
 | `market_cap`, `index_hour`, `index_bar`, `index_tick` | CoinGecko's crypto market cap with Bitcoin's, Ether's, Tether's, the ten largest's and the stablecoins' parts, a row a minute (some 50 MB a year), and each cap series rolled up by the hour; the VIX's daily bars from Cboe, the day's own moved by its delayed quote until the history carries it, and each new quote through the day |
 | `partition` | every file on disk: rows, bytes, sha256, first and last open |
@@ -278,6 +282,29 @@ and the weekly review's nine questions beside the week's figures. A journal
 is kept for an account: a browser not signed in with Telegram is shown how to
 sign in, its positions are not written down, and the API turns its writes away
 (403); the watcher walks only accounts' trades.
+
+Training (`training`, `web/src/training`) is paper trading on Binance's BTC,
+ETH and SOL perpetuals at their live prices, for an account: the Training
+button beside the Journal opens it over the workspace. The server follows
+Binance's trades and mark prices for the three on one socket and fills from
+them — a market order at the last trade, a resting limit order when a trade
+reaches it (as a maker; one priced through the market fills at once as a
+taker), a position's take profit and stop loss — liquidates by the mark, and
+settles funding when a funding time passes, so an account trades on with no
+browser open. One position a coin, Binance's one-way mode: an order the
+position's way adds at the average entry, the other way takes off, closes, or
+turns it around. Margin is isolated: a position's notional over its leverage
+(1 to 100, the coin's, set while it has no position or order), liquidated
+where what is left of that is the maintenance margin, and then lost whole.
+Every fill and close pays Binance's fees. A position from first fill to flat
+is a trade, the statistics' unit; a reset starts a new run at 100,000 and keeps
+the runs before. The view's chart is a chart panel outside the layout — its
+own drawings (`chart = training`, never the journal's), one-minute candles,
+the three coins — with the run's trades drawn on it as the long and short
+boxes they were, the open position running on and the resting orders as
+lines; the ticket beside it, and the positions with what they make at the
+chart's own price, the orders, the history and the statistics (the journal's,
+read over the trades) under it.
 
 Signal is the server's screener (`signals`, `drives`). A minute after each
 four-hour close it reads the last five hundred closed bars of the two hundred
