@@ -603,7 +603,9 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
      rejected change is rolled back and the server's list is re-read. */
   let pending = 0;
   const onSameChart = (m: string, kind: ChartKind = chartKind()) => m === market() && kind === chartKind();
-  const history = new DrawingHistory();
+  // Read again by the undo and redo buttons whenever the history moves.
+  const [moved, setMoved] = createSignal(0);
+  const history = new DrawingHistory(() => setMoved((n) => n + 1));
 
   /** Save a drawing. `ref`: one undo is bringing back, which keeps its steps. */
   async function saveDrawing(input: { kind: string; points: DrawingPoint[]; label?: string | null; style: Style; timeframe?: string }, ref?: DrawingRef): Promise<void> {
@@ -1086,6 +1088,13 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
           <hr />
           <button class="magnet" classList={{ on: magnet() !== 'off', strong: magnet() === 'strong' }} data-tip={MAGNET_TIP[magnet()]} onClick={cycleMagnet}>
             <Icon name="magnet" />
+          </button>
+          <hr />
+          <button disabled={(moved(), !history.canUndo)} data-tip="Undo (Ctrl Z)" onClick={undo}>
+            <Icon name="undo" />
+          </button>
+          <button disabled={(moved(), !history.canRedo)} data-tip="Redo (Ctrl Y)" onClick={redo}>
+            <Icon name="redo" />
           </button>
           <hr />
           <button

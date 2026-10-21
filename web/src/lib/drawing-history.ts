@@ -30,6 +30,9 @@ export class DrawingHistory {
   private undone: Step[] = [];
   private refs = new Map<number, DrawingRef>();
 
+  /** `changed`: told whenever what can be undone or redone may have changed, for the buttons. */
+  constructor(private changed: () => void = () => {}) {}
+
   /** The one ref for a drawing id, made on first use. */
   ref(id: number): DrawingRef {
     let r = this.refs.get(id);
@@ -52,6 +55,7 @@ export class DrawingHistory {
     this.done.push(step);
     if (this.done.length > LIMIT) this.done.shift();
     this.undone = [];
+    this.changed();
   }
 
   /** Drop every step about a drawing that never made it to the server. */
@@ -59,17 +63,20 @@ export class DrawingHistory {
     const about = (s: Step) => (s.kind === 'clear' ? s.items.some((i) => i.ref === ref) : s.ref === ref);
     this.done = this.done.filter((s) => !about(s));
     this.undone = this.undone.filter((s) => !about(s));
+    this.changed();
   }
 
   takeUndo(): Step | undefined {
     const step = this.done.pop();
     if (step) this.undone.push(step);
+    this.changed();
     return step;
   }
 
   takeRedo(): Step | undefined {
     const step = this.undone.pop();
     if (step) this.done.push(step);
+    this.changed();
     return step;
   }
 
@@ -85,6 +92,7 @@ export class DrawingHistory {
     this.done = [];
     this.undone = [];
     this.refs.clear();
+    this.changed();
   }
 }
 
