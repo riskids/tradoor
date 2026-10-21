@@ -229,6 +229,8 @@ class Slot {
   private gpuLost = false;
   private gpuGone = false;
   private gpuTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Gone with the chart: freeing the engine loses its context, and a loss heard then would reach a freed engine. */
+  private gpuListening = new AbortController();
 
   constructor(
     readonly id: string,
@@ -240,6 +242,7 @@ class Slot {
     // memory, and the chart then stays blank until the page is loaded again.
     // Asking for it back (preventDefault) is what makes the browser restore
     // it; the engine then makes its GPU state again and draws.
+    const { signal } = this.gpuListening;
     gl.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.gpuLost = true;
@@ -250,7 +253,7 @@ class Slot {
         this.setStatus({ error: GPU_GONE });
         this.engine.set_message(GPU_GONE);
       }, GPU_WAIT_MS);
-    });
+    }, { signal });
     gl.addEventListener('webglcontextrestored', () => {
       this.gpuLost = false;
       clearTimeout(this.gpuTimer);
@@ -266,7 +269,7 @@ class Slot {
         this.engine.set_message(this.status.loading ? 'Loading…' : '');
       }
       schedule();
-    });
+    }, { signal });
     this.engine = new ChartEngine(gl, text, '1h', flat);
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
@@ -327,6 +330,7 @@ class Slot {
   }
 
   destroy(): void {
+    this.gpuListening.abort();
     clearInterval(this.demo);
     clearTimeout(this.gpuTimer);
     clearTimeout(this.priceTimer);
