@@ -8,10 +8,13 @@
  * how, and nothing is written down.
  */
 import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import { setJournalOpen } from '../app/ui';
 import { AccountCard } from '../components/Account';
+import { SymbolSearch } from '../components/SymbolSearch';
 import { api, catalog, errorText, type AccountStatus } from '../lib/api';
 import { formatPrice } from '../lib/format';
+import { VenueTag } from '../lib/exchanges';
 import { Icon } from '../lib/icons';
 import { isMarket, symbolOf, venueLabel } from '../lib/markets';
 import { focusPanel, marketOf, setPanelMarket, setPanelTimeframe, targetChart } from '../workspace/store';
@@ -145,7 +148,8 @@ export function Journal() {
         <span class="grow" />
         <Show when={signedIn()}>
           <button class="tb" data-tip="Add a trade by hand" onClick={() => setAdding(true)}>
-            <Icon name="plus" size={12} /> Trade
+            <Icon name="plus" size={12} />
+            <span>Trade</span>
           </button>
         </Show>
         <button class="iconbtn" aria-label="Close the journal" data-tip="Back to the charts (Esc)" onClick={() => setJournalOpen(false)}>
@@ -707,7 +711,8 @@ function Editor(props: {
               Save
             </button>
             <button class="tb" onClick={openChart}>
-              <Icon name="external" size={12} /> Open chart
+              <Icon name="external" size={12} />
+              <span>Open chart</span>
             </button>
             <span class="grow" />
             <button
@@ -716,7 +721,8 @@ function Editor(props: {
               disabled={busy()}
               onClick={() => (sure() ? act(async () => void (await journalApi.remove(t().id), props.onRemove(t().id))) : setSure(true))}
             >
-              <Icon name="trash" size={12} /> {sure() ? 'Delete from the journal' : 'Delete'}
+              <Icon name="trash" size={12} />
+              <span>{sure() ? 'Delete from the journal' : 'Delete'}</span>
             </button>
           </div>
         </div>
@@ -730,6 +736,7 @@ function Editor(props: {
 function AddTrade(props: { onClose: () => void; onAdd: (t: Trade) => void }) {
   const chart = targetChart();
   const [market, setMarket] = createSignal(chart ? marketOf(chart) : 'binance-perp:BTCUSDT');
+  const [picking, setPicking] = createSignal(false);
   const [side, setSide] = createSignal<Side>('long');
   const [entry, setEntry] = createSignal('');
   const [stop, setStop] = createSignal('');
@@ -786,10 +793,30 @@ function AddTrade(props: { onClose: () => void; onAdd: (t: Trade) => void }) {
           </button>
         </header>
         <div class="jr-drawer-body">
-          <label class="jr-label">
+          <div class="jr-label">
             Market
-            <input class="jr-in" value={market()} onInput={(e) => setMarket(e.currentTarget.value.trim())} />
-          </label>
+            <button type="button" class="jr-in jr-market" data-tip="Search every market, as the chart's symbol search does" onClick={() => setPicking(true)}>
+              <span class="sym">{symbolOf(market())}</span>
+              <VenueTag market={market()} name />
+              <span class="grow" />
+              <Icon name="search" size={12} />
+            </button>
+          </div>
+          <Show when={picking()}>
+            {/* In a portal: closing the search on a press outside must not land that click on this dialog's backdrop. */}
+            <Portal>
+              <SymbolSearch
+                initial=""
+                title="Market"
+                current={market()}
+                onClose={() => setPicking(false)}
+                onSelect={(m) => {
+                  setMarket(m);
+                  setPicking(false);
+                }}
+              />
+            </Portal>
+          </Show>
           <div class="chips">
             <button type="button" classList={{ on: side() === 'long' }} onClick={() => setSide('long')}>
               Long

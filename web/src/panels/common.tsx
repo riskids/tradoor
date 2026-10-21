@@ -10,7 +10,7 @@ export function MarketButton(props: { panelId: string; market: string; venue?: b
   return (
     <>
       <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: props.panelId, initial: '' })}>
-        {symbolOf(props.market)}
+        <span>{symbolOf(props.market)}</span>
         <Icon name="chevron" size={10} />
       </button>
       {props.venue === false ? null : <VenueTag market={props.market} name />}

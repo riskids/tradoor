@@ -76,7 +76,7 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
                     </For>
                     <button class="btn" disabled={added()} data-tip={added() ? 'Already on the chart' : `Add ${idOf(d)}`} onClick={() => props.onAdd(idOf(d))}>
                       <Icon name="plus" size={11} />
-                      {added() ? 'Added' : 'Add'}
+                      <span>{added() ? 'Added' : 'Add'}</span>
                     </button>
                     <span class="about">{d.about}</span>
                   </div>
