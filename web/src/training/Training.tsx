@@ -180,6 +180,20 @@ export function Training(props: { chart: typeof ChartPanel }) {
     }
   };
 
+  const toolbar = (
+    <>
+      <For each={TRAINING_MARKETS}>
+        {(m) => (
+          <button class="tb" classList={{ on: panel().market === m }} onClick={() => setPanelMarket(TRAINING_CHART, m)}>
+            <span>{coinOf(symbolOfMarket(m))}</span>
+          </button>
+        )}
+      </For>
+      <span class="dim tr-venue">Binance perp</span>
+      <span class="sep" />
+      <span class="tb num on">1m</span>
+    </>
+  );
   const runTrades = () => (history()?.run === history()?.current ? (history()?.trades ?? []) : []);
   const overlay = () => {
     void now();
@@ -316,7 +330,7 @@ export function Training(props: { chart: typeof ChartPanel }) {
         >
           <div class="tr-body">
             <div class="tr-chart">
-              <props.chart panel={panel()} training={{ markets: TRAINING_MARKETS, overlay, hover }} />
+              <props.chart panel={panel()} training={{ toolbar, overlay, hover }} />
             </div>
             <Ticket state={state()} symbol={symbol()} priceOf={priceOf} available={value()?.available ?? 0} decimals={decimals(symbol())} busy={busy()} act={act} error={error()} />
             <div class="tr-tabs">

@@ -30,7 +30,7 @@ import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert,
 import { toast } from '../lib/toasts';
 import { TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
-import { doc, marketOf, patchPanel, setPanelMarket, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
+import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
 
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
@@ -163,7 +163,8 @@ function patternParts(p: ShownPattern): { kind: string; points: DrawingPoint[]; 
  * shown but not picked up.
  */
 export interface TrainingChart {
-  markets: readonly string[];
+  /** In place of the symbol and timeframes: its own coins, and its one timeframe. */
+  toolbar: JSX.Element;
   overlay: () => { kind: string; points: DrawingPoint[]; label: string | null; style: Style }[];
   /** What to say over the candle under the pointer (or a finger), if anything. */
   hover: (time: number) => JSX.Element | null;
@@ -844,23 +845,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             <Icon name="menu" size={17} />
           </button>
         </Show>
-        <Show
-          when={!props.training}
-          fallback={
-            <>
-              <For each={props.training!.markets}>
-                {(m) => (
-                  <button class="tb" classList={{ on: market() === m }} onClick={() => setPanelMarket(id, m)}>
-                    <span>{symbolOf(m).replace(/USDT$/, '')}</span>
-                  </button>
-                )}
-              </For>
-              <VenueTag market={market()} name />
-              <span class="sep" />
-              <button class="tb num on">{tfLabel('1m')}</button>
-            </>
-          }
-        >
+        <Show when={!props.training} fallback={props.training!.toolbar}>
         <button class="symbol" data-tip="Change symbol — or just start typing" onClick={() => setOverlay({ kind: 'symbol', panelId: id, initial: '' })}>
           <span>{symbolOf(market())}</span>
           <Icon name="chevron" size={10} />

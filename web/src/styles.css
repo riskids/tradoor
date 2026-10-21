@@ -1006,6 +1006,7 @@ textarea.jr-in { resize: vertical; line-height: 1.5; }
 .tr-curve polyline.bull { stroke: var(--bull); }
 .tr-curve polyline.bear { stroke: var(--bear); }
 .tr-curve .tr-zero { stroke: var(--border); stroke-dasharray: 3 3; }
+.tr-venue { padding: 0 6px; font-size: 10px; }
 .tr-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 @media (max-width: 760px) {
   .tr-body { display: flex; flex-direction: column; overflow-y: auto; }

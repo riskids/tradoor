@@ -199,13 +199,6 @@ function onKeyDown(e: KeyboardEvent): void {
   }
   // Dialogs own the keyboard while open; modifiers belong to the browser.
   if (overlay() || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
-  if (training) {
-    if (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace') {
-      if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
-      void inUse(null)?.key(e.key);
-    }
-    return;
-  }
   if (e.key === '?') {
     e.preventDefault();
     setOverlay({ kind: 'help' });
@@ -216,13 +209,15 @@ function onKeyDown(e: KeyboardEvent): void {
     setOverlay({ kind: 'palette' });
     return;
   }
-  const panel = focusedPanel() ?? targetChart();
+  const panel = training ? detached[TRAINING_CHART] : (focusedPanel() ?? targetChart());
   if (!panel) return;
   if (panel.type === 'chart' && (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace')) {
     if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
     void chartControllers.get(panel.id)?.key(e.key);
     return;
   }
+  // The rest — another symbol, timeframe or list row — is the workspace's.
+  if (training) return;
   // A panel with a list of its own walks that (the Signal panel's patterns); any other, a watchlist.
   const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
   if (step && (panelSteps.get(panel.id)?.(step) || stepWatchlist(panel, step))) {
@@ -467,7 +462,7 @@ export function App() {
         <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={12} /> <span>Commands</span> <kbd>/</kbd>
         </button>
-        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
+        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
           <Icon name="pencil" size={12} /> <span>Journal</span>
         </button>
         <button class="item" classList={{ on: trainingOpen() }} data-tip="Paper trading at live prices" onClick={() => (setJournalOpen(false), setTrainingOpen(!trainingOpen()))}>
