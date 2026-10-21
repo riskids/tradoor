@@ -257,33 +257,32 @@ export const candleOf = (ms: number): number => Math.floor(ms / MINUTE) * MINUTE
 const BULL = '#089981';
 const BEAR = '#f23645';
 
-/** A short flat line across a candle and the one either side of it. */
-const tick = (candle: number, price: number, color: string): Shape => ({
-  kind: 'trendline',
-  points: [
-    { time: candle - MINUTE, price },
-    { time: candle + MINUTE, price },
-  ],
-  label: null,
-  style: { color, width: 2 },
+/** A glyph on its own, centred on a price: a circle drawn with no ring and no fill, only its label. */
+const glyph = (time: number, price: number, text: string, color: string, size: number): Shape => ({
+  kind: 'circle',
+  points: [{ time, price }],
+  label: text,
+  style: { color: '#00000000', width: 0, fillOn: false, textColor: color, textSize: size },
 });
 
 /**
- * What the chart shows of a coin's trading, kept out of the candles' way: each
- * trade of the run as a mark on the candle it was entered on — a short line at
- * the entry with an arrow after it, up for a long, down for a short — and a
- * flat line on the candle it closed on (the details come up over either, see
- * `marked`); the open position as a box running on, its stop the stop loss or
- * else the liquidation price; and each resting order as a line.
+ * What the chart shows of a coin's trading, clear and out of the candles' way,
+ * as a strategy tester marks its trades: each trade of the run an arrow at its
+ * entry — up for a long, down for a short — a thin dashed line to where it got
+ * out, and a dot there, the line and dot green for a gain and red for a loss;
+ * what it made, and the rest, come up over either candle (see `marked`);
+ * the open position as a box running on, its stop the stop loss or else the
+ * liquidation price; and each resting order as a line.
  */
 export function shapes(s: State | null, trades: readonly ClosedTrade[], symbol: string, now: number): Shape[] {
   const out: Shape[] = [];
   for (const t of trades.filter((x) => x.symbol === symbol).slice(0, 60)) {
-    const color = t.side === 'long' ? BULL : BEAR;
+    const tone = t.net >= 0 ? BULL : BEAR;
     const entered = candleOf(t.openedAt);
-    out.push(tick(entered, t.entry, color));
-    out.push({ kind: 'text', points: [{ time: entered + MINUTE, price: t.entry }], label: t.side === 'long' ? '▲' : '▼', style: { textColor: color, textSize: 11 } });
-    out.push(tick(candleOf(t.closedAt), t.exit, '#d1d4dc'));
+    const closed = candleOf(t.closedAt);
+    out.push({ kind: 'trendline', points: [{ time: entered, price: t.entry }, { time: closed, price: t.exit }], label: null, style: { color: `${tone}cc`, width: 1, dash: 'dashed' } });
+    out.push(glyph(entered, t.entry, t.side === 'long' ? '▲' : '▼', t.side === 'long' ? BULL : BEAR, 14));
+    out.push(glyph(closed, t.exit, '●', tone, 10));
   }
   const p = s?.positions.find((x) => x.symbol === symbol);
   if (p) {

@@ -88,15 +88,18 @@ Deno.test("a closed trade reads in the journal's statistics as what it netted", 
   assertEquals(asJournal(closed()).strategy, 'Take profit');
 });
 
-Deno.test('the chart marks each trade where it was entered and closed, runs the position on, and lines the orders', () => {
+Deno.test('the chart marks each trade with an arrow in, a dashed line out and a dot, runs the position on, and lines the orders', () => {
   const s = state({ positions: [position({ sl: null, liquidation: 91, tp: null, openedAt: 5 })], orders: [{ id: 3, symbol: 'BTCUSDT', side: 'buy', price: 95, qty: 1, tp: null, sl: null, createdAt: 7 }] });
   const out = shapes(s, [closed({ openedAt: 125_000, closedAt: 245_000 }), closed({ symbol: 'ETHUSDT' })], 'BTCUSDT', 100);
-  assertEquals(out.map((x) => x.kind), ['trendline', 'text', 'trendline', 'long', 'trendline']);
-  assertEquals(out[0]!.points, [{ time: 60_000, price: 100 }, { time: 180_000, price: 100 }], 'across the entry candle and the one either side');
-  assertEquals([out[1]!.label, out[1]!.points[0]!.time], ['▲', 180_000]);
-  assertEquals(out[2]!.points.map((p) => [p.time, p.price]), [[180_000, 110], [300_000, 110]]);
+  assertEquals(out.map((x) => x.kind), ['trendline', 'circle', 'circle', 'long', 'trendline']);
+  assertEquals(out[0]!.points, [{ time: 120_000, price: 100 }, { time: 240_000, price: 110 }], 'from the entry candle to the exit candle');
+  assertEquals([out[0]!.style.color, out[0]!.style.dash], ['#089981cc', 'dashed'], 'green for a gain');
+  assertEquals([out[1]!.label, out[1]!.points[0]], ['▲', { time: 120_000, price: 100 }]);
+  assertEquals([out[2]!.label, out[2]!.style.textColor], ['●', '#089981']);
   assertEquals(out[3]!.points.map((p) => p.price), [100, 91, 109], 'no stop loss: the liquidation price, the target mirrored');
   assertEquals(out[3]!.style.risk, 9, "the box's quantity is the position's");
+  const lost = shapes(null, [closed({ side: 'short', exit: 104, net: -8.4 })], 'BTCUSDT', 100);
+  assertEquals([lost[0]!.style.color, lost[1]!.label, lost[2]!.style.textColor], ['#f23645cc', '▼', '#f23645']);
 });
 
 Deno.test('the details come up on the candles a trade was entered and closed on', () => {
