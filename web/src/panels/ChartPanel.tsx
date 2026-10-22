@@ -3,7 +3,7 @@
  * the DOM around them — toolbar, drawing rail, legend, menus — and forwards
  * pointer input.
  */
-import { batch, createEffect, createSignal, For, type JSX, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
+import { batch, createEffect, createMemo, createSignal, For, type JSX, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { chartControllers, covered, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
 import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
@@ -390,6 +390,13 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   };
 
   // Under the journal or training a workspace chart keeps its market live and draws nothing until it is seen again.
+  // The training chart's card over a marked candle: made again when the pointer
+  // reaches another candle, not with each frame's legend.
+  const hoverTime = createMemo(() => (props.training && legend()?.cursor ? legend()!.time : null));
+  const trainingCard = createMemo(() => {
+    const t = hoverTime();
+    return t === null ? null : props.training!.hover(t);
+  });
   const paused = () => !props.training && covered();
   createEffect(on(paused, (p) => chart.created && send({ t: 'visible', id: sid, value: !p }), { defer: true }));
   onMount(() => {
@@ -1281,7 +1288,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
               </div>
             )}
           </Show>
-          <Show when={props.training && legend()?.cursor && props.training.hover(legend()!.time)}>
+          <Show when={trainingCard()}>
             {(card) => (
               <div class="trade-card" style={{ left: `${Math.min(pointerX() + 14, box.clientWidth - 250)}px`, top: `${legend()!.cursor!.y + 14}px` }}>
                 {card()}

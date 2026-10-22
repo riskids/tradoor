@@ -195,10 +195,11 @@ export function Training(props: { chart: typeof ChartPanel }) {
     </>
   );
   const runTrades = () => (history()?.run === history()?.current ? (history()?.trades ?? []) : []);
-  const overlay = () => {
-    void now();
-    return shapes(state(), runTrades(), symbol(), now());
-  };
+  // Drawn again only when it changes — a trade, the position, an order, or the
+  // minute its right edge reaches — not with every second's read of the account,
+  // each of which would send the chart the whole list again.
+  const minute = createMemo(() => Math.floor(now() / 60_000) * 60_000);
+  const overlay = createMemo(() => shapes(state(), runTrades(), symbol(), minute()), [], { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
   /** The details over a marked candle: the trades entered or closed there, and the position opened there. */
   const hover = (time: number) => {
     const candle = candleOf(time);
@@ -650,26 +651,30 @@ function Orders(props: { state: State | null; decimals: (s: string) => number; b
             </tr>
           </thead>
           <tbody>
-            <For each={props.state!.orders}>
-              {(o) => (
-                <tr>
-                  <td>{stamp(o.createdAt)}</td>
-                  <td>{coinOf(o.symbol)}</td>
-                  <td class={o.side === 'buy' ? 'bull' : 'bear'}>{o.side === 'buy' ? 'Buy' : 'Sell'} limit</td>
-                  <td>{fmt(o.price, props.decimals(o.symbol))}</td>
-                  <td>
-                    {coins(o.qty)} <span class="dim">{usd(o.qty * o.price)}</span>
-                  </td>
-                  <td>
-                    <span class="bull">{fmt(o.tp, props.decimals(o.symbol))}</span> / <span class="bear">{fmt(o.sl, props.decimals(o.symbol))}</span>
-                  </td>
-                  <td class="tr-actions">
-                    <button class="tb" disabled={props.busy} onClick={() => void props.act(() => trainingApi.cancel(o.id))}>
-                      Cancel
-                    </button>
-                  </td>
-                </tr>
-              )}
+            {/* By order: an order does not change while it waits, and a row made afresh each second is work for nothing. */}
+            <For each={props.state!.orders.map((x) => x.id)}>
+              {(id) => {
+                const o = props.state!.orders.find((x) => x.id === id)!;
+                return (
+                  <tr>
+                    <td>{stamp(o.createdAt)}</td>
+                    <td>{coinOf(o.symbol)}</td>
+                    <td class={o.side === 'buy' ? 'bull' : 'bear'}>{o.side === 'buy' ? 'Buy' : 'Sell'} limit</td>
+                    <td>{fmt(o.price, props.decimals(o.symbol))}</td>
+                    <td>
+                      {coins(o.qty)} <span class="dim">{usd(o.qty * o.price)}</span>
+                    </td>
+                    <td>
+                      <span class="bull">{fmt(o.tp, props.decimals(o.symbol))}</span> / <span class="bear">{fmt(o.sl, props.decimals(o.symbol))}</span>
+                    </td>
+                    <td class="tr-actions">
+                      <button class="tb" disabled={props.busy} onClick={() => void props.act(() => trainingApi.cancel(o.id))}>
+                        Cancel
+                      </button>
+                    </td>
+                  </tr>
+                );
+              }}
             </For>
           </tbody>
         </table>
