@@ -389,7 +389,6 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     return a && b ? { spread: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
   };
 
-  // Under the journal or training a workspace chart keeps its market live and draws nothing until it is seen again.
   // The training chart's card over a marked candle: made again when the pointer
   // reaches another candle, not with each frame's legend.
   const hoverTime = createMemo(() => (props.training && legend()?.cursor ? legend()!.time : null));
@@ -397,6 +396,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     const t = hoverTime();
     return t === null ? null : props.training!.hover(t);
   });
+  // Under the journal or training a workspace chart keeps its market live and draws nothing until it is seen again.
   const paused = () => !props.training && covered();
   createEffect(on(paused, (p) => chart.created && send({ t: 'visible', id: sid, value: !p }), { defer: true }));
   onMount(() => {
