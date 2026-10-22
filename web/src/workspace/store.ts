@@ -7,7 +7,7 @@
 import { batch, createSignal } from 'solid-js';
 import { createStore, reconcile, unwrap } from 'solid-js/store';
 import { api, ApiError } from '../lib/api';
-import { ownerId } from '../lib/owner';
+import { identity } from '../lib/owner';
 import { readJson, readPref, writePref } from '../lib/prefs';
 import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
 import { TIMEFRAMES } from '../lib/timeframes';
@@ -28,7 +28,7 @@ const SERVER_ID = 'default';
 export const localIsOurs = (stamped: string | null, owner: string): boolean => stamped === null || stamped === owner;
 
 const [doc, setDoc] = createStore<WorkspaceDoc>(
-  (localIsOurs(readPref(LOCAL_OWNER_KEY), ownerId()) ? validate(readJson(LOCAL_KEY)) : null) ?? defaultWorkspace(),
+  (localIsOurs(readPref(LOCAL_OWNER_KEY), identity()) ? validate(readJson(LOCAL_KEY)) : null) ?? defaultWorkspace(),
 );
 export { doc };
 
@@ -84,7 +84,7 @@ let serverTimer: ReturnType<typeof setTimeout> | undefined;
 function saveLocal(): void {
   clearTimeout(localTimer);
   writePref(LOCAL_KEY, JSON.stringify(unwrap(doc)));
-  writePref(LOCAL_OWNER_KEY, ownerId());
+  writePref(LOCAL_OWNER_KEY, identity());
 }
 
 function touched(): void {

@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, Show } from 'solid-js';
 import { api, errorText, type AccountStatus } from '../lib/api';
 import { Icon } from '../lib/icons';
-import { freshOwnerId, ownerId, switchOwner } from '../lib/owner';
+import { holdSession, startOver } from '../lib/owner';
 import { deviceZone, formatDateTime, LOCAL_ZONE, offsetMinutes, timeZone } from '../lib/timezone';
 
 /** The clock the reader reads the page in, which their Telegram messages follow. */
@@ -11,8 +11,9 @@ export const clock = () => {
 };
 
 /**
- * Signing in with Telegram: everything stays keyed by the browser id, and the
- * account is how a browser gets its id back. The link is minted before it is
+ * Signing in with Telegram: everything stays keyed by the browser id it was
+ * made under, and signing in gives a browser a session of the account that
+ * holds it — its own, ended by signing out of it or of every browser. The link is minted before it is
  * needed, so the button is a plain link — one opened after waiting on the
  * server is a popup, and a popup is blocked — and while it is out the sign-in
  * is asked after until the reader says yes in the chat. Settings shows it, and
@@ -51,9 +52,8 @@ export function AccountCard(props: { onSignedIn?: () => void }) {
       const got = await api.signedIn(code);
       if (got.state === 'done') {
         setWaiting(false);
-        // Another id: the account's things are under it, and the page loads them.
-        if (got.owner !== ownerId()) switchOwner(got.owner);
-        else void load().then(() => props.onSignedIn?.());
+        // The account's things load with the session, on the next load.
+        holdSession(got.session);
       } else if (got.state === 'gone') {
         setWaiting(false);
         setNote('Not signed in: the link was declined or has expired. Try again.');
@@ -74,9 +74,24 @@ export function AccountCard(props: { onSignedIn?: () => void }) {
     clearInterval(fresh);
   });
 
-  const signOut = () => {
+  const [leaving, setLeaving] = createSignal(false);
+  const signOut = async () => {
     if (!confirm('Sign out of this browser? Everything stays with your account; this browser starts empty until you sign in again.')) return;
-    switchOwner(freshOwnerId());
+    setLeaving(true);
+    // Ended on the server when it can be; dropped here whatever happens.
+    await api.signOut().catch(() => undefined);
+    startOver();
+  };
+  const signOutEverywhere = async () => {
+    if (!confirm('Sign out of every browser signed in to this account, this one too? Each one has to sign in with Telegram again.')) return;
+    setLeaving(true);
+    try {
+      await api.signOutEverywhere();
+      startOver();
+    } catch (e) {
+      setLeaving(false);
+      setError(errorText(e));
+    }
   };
 
   return (
@@ -135,11 +150,22 @@ export function AccountCard(props: { onSignedIn?: () => void }) {
                     <b>{a().name ?? 'Telegram account'}</b>
                     <span class="dim">Signed in with Telegram · since {formatDateTime(a().since).slice(0, 10)}</span>
                   </div>
-                  <button class="btn" onClick={signOut}>
+                  <button class="btn" disabled={leaving()} onClick={() => void signOut()}>
                     Sign out of this browser
                   </button>
                 </div>
-                <p class="note">Sign in on any other browser or device to have the same drawings, journal, layout, watchlists and alerts there.</p>
+                <div class="set-actions">
+                  <span class="dim">
+                    Signed in on {a().devices ?? 1} browser{(a().devices ?? 1) === 1 ? '' : 's'}.
+                  </span>
+                  <button class="btn" disabled={leaving()} onClick={() => void signOutEverywhere()}>
+                    Sign out everywhere
+                  </button>
+                </div>
+                <p class="note">
+                  Sign in on any other browser or device to have the same drawings, journal, layout, watchlists and alerts there. Lost a phone? Sign out everywhere here, or send /signout to the bot
+                  in Telegram.
+                </p>
               </div>
             )}
           </Show>

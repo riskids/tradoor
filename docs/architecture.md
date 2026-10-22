@@ -144,7 +144,7 @@ The file format is described in [format.md](format.md).
 | `GET PUT /api/workspaces/{id}` | the layout document; a PUT carries the version it was based on and gets `409` with the current document when another tab saved first |
 | `/data/…` | partitions (`immutable`) and manifests (`no-cache`) |
 
-Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser's own random id: one browser cannot read or change another's.
+Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser's own random id: one browser cannot read or change another's. A browser signed in to an account sends `x-tradoor-session` instead, and the server writes the session's account into `x-tradoor-owner` before any handler reads it (`session`); an account's id sent as `x-tradoor-owner`, or a session that has ended, is answered `401` with `signedOut: true`, on which the page drops what it held and starts as a new browser.
 
 ## Database
 
@@ -156,7 +156,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest`, `signal_touch_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
 | `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses, none for one followed until stopped |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
-| `account`, `account_signin` | a Telegram user and the browser id their things are kept under, and the sign-ins waiting on their yes |
+| `account`, `account_signin`, `account_session` | a Telegram user and the browser id their things are kept under, the sign-ins waiting on their yes, and each signed-in browser's session (the token's SHA-256) |
 | `telegram_message` | what the bot sent and when to take it back |
 | `workspace` | the terminal layout per browser id — panels, watchlists, indicators, theme, favourite timeframes — whole, with an optimistic version |
 | `tracked_market` | what the recorder keeps current, and from when |
@@ -173,7 +173,7 @@ A tree of splits and tab groups, the panels in it, four link groups and theme
 overrides, stored as one JSON document: in localStorage so the page opens
 instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. The local copy is stamped with the browser id that
-saved it: taking another browser's id (Settings) asks for their layout, so a
+saved it (or with the session's start, once signed in): taking another browser's id (Settings) asks for their layout, so a
 copy stamped for someone else is not opened with — it would show the wrong
 workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market and
 timeframe; a watchlist that is not linked drives the last chart used. The
@@ -492,17 +492,24 @@ with a mouse a click picks it — its ring fills — and only then does a drag
 move it, so a press meant for the chart cannot shift it; a finger holds it
 instead. Its label is written in the line's own colour.
 
-Signing in with Telegram (`account`) is how a browser gets its id back —
-history cleared, another device — with every row still keyed by that id.
+Signing in with Telegram (`account`) is how a browser gets back to its
+things — history cleared, another device — with every row still keyed by the
+id they were made under.
 Settings mints a one-use code and opens `t.me/<bot>?start=in_<code>`; the bot
 asks the Telegram user who opened it, in their private chat, whether it was
 them, with a Yes and a No button (so a link someone else sent cannot sign
-their browser in as you), and on yes the code holds the account's id until the
-browser that minted it collects it, once (`/api/account/signin/{code}`). A
-user's first sign-in makes the asking browser's id their account's, and their
-alerts then go to that chat. Chats linked before accounts existed became
-accounts, the linked id with the most drawings standing for each person.
-Signing out gives the browser a fresh id; the account keeps everything.
+their browser in as you), and on yes the code holds the account until the
+browser that minted it collects it, once (`/api/account/signin/{code}`): what
+it collects is a session of the account (`account_session`), a random token of
+its own of which the server keeps only the SHA-256 — never the account's id,
+which alone opens nothing, so a screenshot of Settings or a pasted id gives
+nobody the account. A user's first sign-in makes the asking browser's id their
+account's, and their alerts then go to that chat. Chats linked before accounts
+existed became accounts, the linked id with the most drawings standing for each
+person. Signing out of a browser ends its session (`DELETE
+/api/account/session`) and gives it a fresh id; signing out everywhere (`DELETE
+/api/account/sessions`, or `/signout` to the bot) ends every session of the
+account; the account keeps everything.
 
 An alert that fires is also sent to Telegram, where the reader has linked a
 chat (`telegram`, `TRADOOR_TELEGRAM_TOKEN`). A bot cannot open a conversation,

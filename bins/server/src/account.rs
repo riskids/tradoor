@@ -1,8 +1,9 @@
 //! Accounts: a Telegram user, and the browser id everything of theirs is kept
 //! under. Every row — drawings, layouts, watchlists, alerts — stays keyed by
 //! that id; an account is how a browser that lost it (history cleared, another
-//! device) takes it back: Sign in with Telegram in Settings, say yes in the
-//! bot's chat, and the browser has the account's id.
+//! device) gets back to it: Sign in with Telegram in Settings, say yes in the
+//! bot's chat, and the browser holds a session of the account (see `session`)
+//! — never the account's id itself, which alone opens nothing.
 //!
 //! The browser mints a one-use code and opens the bot with it. The bot asks the
 //! Telegram user who opened the link to confirm — a link someone else sent must
@@ -94,8 +95,8 @@ pub async fn decline(pool: &deadpool_postgres::Pool, code: &str, user: i64) -> a
 enum Collected {
     /// Not yet confirmed in the chat.
     Waiting,
-    /// Confirmed: the account's id and name, handed over once.
-    Done(String, Option<String>),
+    /// Confirmed, once: the account's id, its name, and the Telegram user who said yes.
+    Done(String, Option<String>, i64),
     /// Declined, stale, or never this browser's.
     Gone,
 }
@@ -103,13 +104,13 @@ enum Collected {
 async fn collect(pool: &deadpool_postgres::Pool, code: &str, asker: &str) -> ApiResult<Collected> {
     let client = pool.get().await?;
     let row = client
-        .query_opt("SELECT owner FROM account_signin WHERE code = $1 AND asker = $2 AND created_at > $3", &[&code, &asker, &(now_ms() - CODE_GOOD_FOR)])
+        .query_opt("SELECT owner, telegram_user FROM account_signin WHERE code = $1 AND asker = $2 AND created_at > $3", &[&code, &asker, &(now_ms() - CODE_GOOD_FOR)])
         .await?;
-    let Some(owner) = row.map(|r| r.get::<_, Option<String>>(0)) else { return Ok(Collected::Gone) };
-    let Some(owner) = owner else { return Ok(Collected::Waiting) };
+    let Some(row) = row else { return Ok(Collected::Gone) };
+    let (Some(owner), Some(user)) = (row.get::<_, Option<String>>(0), row.get::<_, Option<i64>>(1)) else { return Ok(Collected::Waiting) };
     client.execute("DELETE FROM account_signin WHERE code = $1", &[&code]).await?;
     let name = client.query_opt("SELECT name FROM account WHERE owner = $1", &[&owner]).await?.and_then(|r| r.get(0));
-    Ok(Collected::Done(owner, name))
+    Ok(Collected::Done(owner, name, user))
 }
 
 // ---------------------------------------------------------------- the API
@@ -123,7 +124,7 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
     Ok(Json(json!({
         "telegram": state.telegram.is_some(),
         "bot": state.telegram.as_ref().and_then(|t| t.bot()),
-        "account": account.map(|r| json!({ "name": r.get::<_, Option<String>>(0), "since": r.get::<_, i64>(1) })),
+        "account": account.map(|r| json!({ "name": r.get::<_, Option<String>>(0), "since": r.get::<_, i64>(1), "devices": state.sessions.count(&owner) })),
     })))
 }
 
@@ -141,14 +142,49 @@ pub async fn sign_in(State(state): State<AppState>, headers: HeaderMap, body: Op
 }
 
 /// `GET /api/account/signin/{code}`: `waiting` until the reader says yes in
-/// the chat, then `done` with the account's id — once — or `gone`.
+/// the chat, then `done` with a session of the account for this browser —
+/// once — or `gone`.
 pub async fn collected(State(state): State<AppState>, headers: HeaderMap, Path(code): Path<String>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
     Ok(Json(match collect(&state.pool, &code, &owner).await? {
         Collected::Waiting => json!({ "state": "waiting" }),
-        Collected::Done(id, name) => json!({ "state": "done", "owner": id, "name": name }),
+        Collected::Done(account, name, user) => {
+            let agent = headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok());
+            let session = state.sessions.open(&account, user, agent).await.map_err(|e| {
+                tracing::error!(error = %e, "opening a session");
+                ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, "signed in, but the session could not be kept — sign in again".into())
+            })?;
+            tracing::info!(owner = crate::api::short_owner(&account), "session opened");
+            json!({ "state": "done", "session": session, "name": name })
+        }
         Collected::Gone => json!({ "state": "gone" }),
     }))
+}
+
+/// `DELETE /api/account/session`: this browser signs out; the account and
+/// every other browser signed in to it stay as they are.
+pub async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<axum::http::StatusCode> {
+    let token = headers.get(crate::session::SESSION_HEADER).and_then(|v| v.to_str().ok()).ok_or_else(|| ApiError::bad_request("this browser is not signed in"))?;
+    state.sessions.close(token).await.map_err(|e| {
+        tracing::error!(error = %e, "closing a session");
+        ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, "could not sign out — try again".into())
+    })?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /api/account/sessions`: every browser signed in to the account,
+/// this one too, is signed out — for a phone lost or a session seen.
+pub async fn sign_out_everywhere(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
+    if headers.get(crate::session::SESSION_HEADER).is_none() {
+        return Err(ApiError::bad_request("this browser is not signed in"));
+    }
+    let n = state.sessions.close_all(&owner).await.map_err(|e| {
+        tracing::error!(error = %e, "closing sessions");
+        ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, "could not sign out — try again".into())
+    })?;
+    tracing::info!(owner = crate::api::short_owner(&owner), sessions = n, "signed out everywhere");
+    Ok(Json(json!({ "signedOut": n })))
 }
 
 #[cfg(test)]
@@ -177,7 +213,7 @@ mod tests {
         assert_eq!(confirm(&pool, &code, stranger, stranger, None).await.unwrap(), None, "nor can another confirm it");
         assert_eq!(confirm(&pool, &code, user, user, Some("ricky")).await.unwrap().as_deref(), Some(FIRST));
         assert_eq!(collect(&pool, &code, LATER).await.unwrap(), Collected::Gone, "another browser cannot collect it");
-        assert_eq!(collect(&pool, &code, FIRST).await.unwrap(), Collected::Done(FIRST.into(), Some("ricky".into())));
+        assert_eq!(collect(&pool, &code, FIRST).await.unwrap(), Collected::Done(FIRST.into(), Some("ricky".into()), user));
         assert_eq!(collect(&pool, &code, FIRST).await.unwrap(), Collected::Gone, "and it is handed over once");
         let linked: i64 = client.query_one("SELECT count(*) FROM telegram_chat WHERE owner = $1 AND chat_id = $2", &[&FIRST, &user]).await.unwrap().get(0);
         assert_eq!(linked, 1, "the account's alerts reach the chat");
@@ -186,7 +222,7 @@ mod tests {
         let code = mint(&pool, LATER, 0, None).await.unwrap();
         assert!(opened(&pool, &code, user).await.unwrap());
         assert_eq!(confirm(&pool, &code, user, user, Some("ricky")).await.unwrap().as_deref(), Some(FIRST));
-        assert_eq!(collect(&pool, &code, LATER).await.unwrap(), Collected::Done(FIRST.into(), Some("ricky".into())));
+        assert_eq!(collect(&pool, &code, LATER).await.unwrap(), Collected::Done(FIRST.into(), Some("ricky".into()), user));
 
         // A no spends the code and changes nothing.
         let code = mint(&pool, LATER, 0, None).await.unwrap();

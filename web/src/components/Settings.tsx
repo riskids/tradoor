@@ -1,6 +1,6 @@
 import { createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
 import { api, errorText, type TelegramStatus } from '../lib/api';
-import { OWNER_PATTERN, ownerId, switchOwner } from '../lib/owner';
+import { OWNER_PATTERN, ownerId, session, switchOwner } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { Icon, type IconName } from '../lib/icons';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
@@ -326,10 +326,14 @@ function AdvancedSection(props: { onClose(): void }) {
   );
 }
 
-/** This browser's id, to copy — and another's, to take its drawings and layout over. */
+/** This browser's id, to copy — and another's, to take its drawings and layout over. A
+ *  signed-in browser has a session instead, and nothing here to copy. */
 function OwnerRows() {
   const [other, setOther] = createSignal('');
   const [copied, setCopied] = createSignal(false);
+  if (session()) {
+    return <p class="note">This browser is signed in: it opens the account with a session of its own, which signing out ends. There is no id to copy — sign in with Telegram on the other device instead.</p>;
+  }
   return (
     <>
       <Row label="This browser's id">
@@ -354,7 +358,10 @@ function OwnerRows() {
           </button>
         </div>
       </Row>
-      <p class="note">Everything is kept on the server under this id, and only this browser sends it. Keep it to yourself — whoever has it can change your things.</p>
+      <p class="note">
+        Everything is kept on the server under this id, and only this browser sends it. Keep it to yourself — whoever has it can change your things. An account's id does not open the account: sign in with Telegram
+        for that.
+      </p>
     </>
   );
 }

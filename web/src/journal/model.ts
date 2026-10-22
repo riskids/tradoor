@@ -4,8 +4,8 @@
  * the server keeps: every long or short position drawn on a chart, and those
  * added by hand. Price decides how each went until a status is set by hand.
  */
-import { ApiError, json } from '../lib/api';
-import { ownerId } from '../lib/owner';
+import { ApiError, isSignedOut, json } from '../lib/api';
+import { authHeaders, SIGNED_OUT, startOver } from '../lib/owner';
 
 export type Side = 'long' | 'short';
 export type Status = 'planned' | 'open' | 'win' | 'loss' | 'closed' | 'breakeven' | 'cancelled';
@@ -92,13 +92,14 @@ let held: { tag: string; trades: Trade[] } | null = null;
 /** Every trade, newest first: the array read last time while none has changed
  *  (the server answers the tag it gave 304), so nothing is drawn again. */
 async function trades(): Promise<Trade[]> {
-  const headers: Record<string, string> = { 'x-tradoor-owner': ownerId() };
+  const headers = authHeaders();
   if (held) headers['if-none-match'] = held.tag;
   const res = await fetch('/api/journal', { headers }).catch(() => {
     throw new ApiError(0, 'the tradoor server is not reachable');
   });
   if (res.status === 304 && held) return held.trades;
   const body = (await res.json().catch(() => null)) as { trades?: Trade[]; error?: unknown } | null;
+  if (isSignedOut(res.status, body)) startOver(SIGNED_OUT);
   if (!res.ok || !body?.trades) throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : `request failed (${res.status})`);
   const tag = res.headers.get('etag');
   held = tag ? { tag, trades: body.trades } : null;

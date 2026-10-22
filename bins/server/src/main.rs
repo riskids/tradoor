@@ -25,6 +25,7 @@ mod liquidations;
 mod open_interest;
 mod relay;
 mod research;
+mod session;
 mod signals;
 mod telegram;
 mod trades;
@@ -158,7 +159,8 @@ async fn main() -> anyhow::Result<()> {
             }
             let open_interest = if coins.is_empty() { None } else { Some(open_interest::Recorder::start(pool.clone(), coins, &doh).await?) };
             let token = cli.telegram_token.trim().to_string();
-            let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh)?) };
+            let sessions = session::Sessions::load(pool.clone()).await?;
+            let telegram = if token.is_empty() { None } else { Some(telegram::Telegram::start(pool.clone(), token, &doh, sessions.clone())?) };
             let catalog = Arc::new(catalog::Catalog::new(cli.binance_spot_rest.clone(), &doh)?);
             let indices = indices::Indices::start(pool.clone(), &doh)?;
             catalog.list_indices(indices.clone());
@@ -183,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
                 limits: Arc::new(limits::Limits::default()),
                 indices,
                 training,
+                sessions,
             };
             let app = api::router(state, cli.data_dir.clone(), cli.web_dir.clone());
             let listener = tokio::net::TcpListener::bind(cli.bind).await.with_context(|| format!("binding {}", cli.bind))?;

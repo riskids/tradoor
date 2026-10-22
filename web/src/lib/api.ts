@@ -3,7 +3,7 @@
 import type { DrawingPoint } from '../engine/protocol';
 import type { Style } from './drawing-style';
 import { listing, type Listing } from './catalog-wire';
-import { ownerId } from './owner';
+import { authHeaders, SIGNED_OUT, startOver } from './owner';
 
 export class ApiError extends Error {
   constructor(
@@ -19,8 +19,8 @@ export const errorText = (e: unknown): string => (e instanceof Error ? e.message
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: T | null }> {
   const method = init.method ?? 'GET';
-  // Drawings and layouts are this browser's own: the server scopes them by this id.
-  const headers: Record<string, string> = { 'x-tradoor-owner': ownerId() };
+  // Drawings and layouts are this browser's own, or its account's: the server scopes them by this.
+  const headers = authHeaders();
   if (init.body !== undefined) headers['content-type'] = 'application/json';
   let res: Response;
   try {
@@ -30,13 +30,19 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
   }
   const text = await res.text();
   if (!text) return { status: res.status, body: null };
+  let body: T;
   try {
-    return { status: res.status, body: JSON.parse(text) as T };
+    body = JSON.parse(text) as T;
   } catch {
     // A dev proxy with nothing behind it answers with plain text.
     throw new ApiError(res.status, res.status >= 500 ? 'the tradoor server is not reachable' : `unexpected response (${res.status})`);
   }
+  if (isSignedOut(res.status, body)) startOver(SIGNED_OUT);
+  return { status: res.status, body };
 }
+
+/** The server's word that what this browser holds opens nothing any more (bins/server session). */
+export const isSignedOut = (status: number, body: unknown): boolean => status === 401 && (body as { signedOut?: unknown } | null)?.signedOut === true;
 
 /** A call answered with no body (204): only its status matters. */
 async function send(path: string, init?: { method?: string; body?: unknown }): Promise<void> {
@@ -506,11 +512,12 @@ export interface Clock {
 export interface AccountStatus {
   telegram: boolean;
   bot: string | null;
-  account: { name: string | null; since: number } | null;
+  /** The account and how many browsers are signed in to it. */
+  account: { name: string | null; since: number; devices?: number } | null;
 }
 
-/** A sign-in waiting on the reader's yes in Telegram, done with the account's id, or gone. */
-export type SignIn = { state: 'waiting' } | { state: 'done'; owner: string; name: string | null } | { state: 'gone' };
+/** A sign-in waiting on the reader's yes in Telegram, done with a session for this browser, or gone. */
+export type SignIn = { state: 'waiting' } | { state: 'done'; session: string; name: string | null } | { state: 'gone' };
 
 export interface TelegramStatus {
   /** Whether the server was given a bot token at all. */
@@ -544,6 +551,8 @@ export const api = {
   account: () => json<AccountStatus>('/api/account'),
   signIn: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/account/signin', { method: 'POST', body: clock }),
   signedIn: (code: string) => json<SignIn>(`/api/account/signin/${encodeURIComponent(code)}`),
+  signOut: () => send('/api/account/session', { method: 'DELETE' }),
+  signOutEverywhere: () => json<{ signedOut: number }>('/api/account/sessions', { method: 'DELETE' }),
   telegram: () => json<TelegramStatus>('/api/telegram'),
   telegramLink: (clock: Clock) => json<{ code: string; url: string; goodForMs: number }>('/api/telegram/link', { method: 'POST', body: clock }),
   telegramClock: (clock: Clock) => json<{ chats: number }>('/api/telegram', { method: 'PATCH', body: clock }),

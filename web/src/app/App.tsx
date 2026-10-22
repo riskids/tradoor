@@ -16,6 +16,7 @@ import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { showAlertsPanel, startAlerts, unread } from '../lib/alerts';
 import { Toasts } from '../components/Toasts';
 import { toast } from '../lib/toasts';
+import { takeNotice } from '../lib/owner';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
 import { referralCard, startReferral } from '../lib/referral';
 import { Layout, panelTitle } from '../workspace/Layout';
@@ -424,6 +425,9 @@ export function App() {
     // A link from Telegram opens its chart once the layout is in; new signals are told as they come.
     void syncWithServer().then(() => /[?&](signal|market)=/.test(location.search) && void import('../lib/deeplink').then((m) => m.followLink()));
     startAlerts();
+    // Signed out by the server or another browser: said once, with the way back.
+    const notice = takeNotice();
+    if (notice) toast({ tone: 'info', title: 'Signed out', body: notice, action: () => setOverlay({ kind: 'settings' }) }, 30_000);
     if (!IS_CRAWLER) {
       startReferral();
       setTimeout(() => void import('../lib/signal-alerts').then((m) => m.watchSignals()), 4_000);

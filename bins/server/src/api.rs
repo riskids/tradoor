@@ -13,7 +13,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tradoor_store::DataDir;
 
-use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, indices, journal, limits, liquidations, open_interest, relay, signals, telegram, training, workspaces};
+use crate::{account, alerts, catalog::Catalog, drawings, flow, footprint, indices, journal, limits, liquidations, open_interest, relay, session, signals, telegram, training, workspaces};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +36,8 @@ pub struct AppState {
     pub indices: Arc<indices::Indices>,
     /// Training's live prices, and its engine's nudge.
     pub training: Arc<training::Live>,
+    /// Signed-in browsers' sessions, and which ids are accounts'.
+    pub sessions: Arc<session::Sessions>,
 }
 
 /// An error with the status it answers with. The message goes to the client,
@@ -129,6 +131,8 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/account", get(account::status))
         .route("/account/signin", axum::routing::post(account::sign_in))
         .route("/account/signin/{code}", get(account::collected))
+        .route("/account/session", delete(account::sign_out))
+        .route("/account/sessions", delete(account::sign_out_everywhere))
         .route("/telegram", get(telegram::status).patch(telegram::set_clock))
         .route("/telegram/link", axum::routing::post(telegram::link))
         .route("/telegram/test", axum::routing::post(telegram::test))
@@ -152,6 +156,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/training/trades", get(training::history))
         .route("/relay/rest", get(relay::rest))
         .route("/relay/ws", get(relay::ws))
+        .layer(middleware::from_fn_with_state(state.clone(), session::middleware))
         .layer(middleware::from_fn_with_state(state.clone(), limits::middleware))
         .layer(CompressionLayer::new())
         .with_state(state);

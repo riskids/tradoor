@@ -62,16 +62,18 @@ pub struct Telegram {
     http: reqwest::Client,
     token: String,
     pool: deadpool_postgres::Pool,
+    /// Sign-ins made here open accounts, and `/signout` ends their sessions.
+    sessions: Arc<crate::session::Sessions>,
     /// The bot's @name, for the link Settings opens. Read once it answers.
     bot: RwLock<Option<String>>,
     out: mpsc::Sender<(i64, String, Option<i32>)>,
 }
 
 impl Telegram {
-    pub fn start(pool: deadpool_postgres::Pool, token: String, doh: &Arc<Doh>) -> anyhow::Result<Arc<Self>> {
+    pub fn start(pool: deadpool_postgres::Pool, token: String, doh: &Arc<Doh>, sessions: Arc<crate::session::Sessions>) -> anyhow::Result<Arc<Self>> {
         let http = reqwest::Client::builder().dns_resolver(doh.resolver()).timeout(Duration::from_secs(POLL_SECS + 15)).build()?;
         let (out, rx) = mpsc::channel(QUEUE);
-        let telegram = Arc::new(Self { http, token, pool, bot: RwLock::new(None), out });
+        let telegram = Arc::new(Self { http, token, pool, sessions, bot: RwLock::new(None), out });
         tokio::spawn(send_queued(telegram.clone(), rx));
         tokio::spawn(sweep(telegram.clone()));
         tokio::spawn(poll(telegram.clone()));
@@ -379,6 +381,9 @@ async fn poll(telegram: Arc<Telegram>) {
 /// What the bot says back, if anything. It takes a link code, for alerts, or
 /// a sign-in code, which it asks the reader to confirm.
 async fn handle(telegram: &Telegram, update: &Incoming) -> Option<String> {
+    if update.text.starts_with("/signout") {
+        return Some(sign_out_everywhere(telegram, update).await);
+    }
     if update.text.starts_with("/stop") {
         return Some(match forget(&telegram.pool, update.chat_id).await {
             Ok(0) => "This chat was not receiving alerts.".to_string(),
@@ -403,6 +408,43 @@ async fn handle(telegram: &Telegram, update: &Incoming) -> Option<String> {
             "Something went wrong here; try the link again in a moment.".to_string()
         }
     })
+}
+
+/// `/signout`: every browser signed in to the reader's account is signed out —
+/// for a phone lost, from the one place still to hand. Only from a private chat.
+async fn sign_out_everywhere(telegram: &Telegram, update: &Incoming) -> String {
+    let Some(user) = update.user.filter(|_| update.private) else {
+        return "Send /signout in a private chat with the bot.".to_string();
+    };
+    let owners: anyhow::Result<Vec<String>> = async {
+        let client = telegram.pool.get().await?;
+        Ok(client.query("SELECT owner FROM account WHERE telegram_user = $1", &[&user]).await?.iter().map(|r| r.get(0)).collect())
+    }
+    .await;
+    let mut ended = 0;
+    match owners {
+        Ok(owners) if owners.is_empty() => return "You have no tradoor account to sign out of.".to_string(),
+        Ok(owners) => {
+            for owner in owners {
+                match telegram.sessions.close_all(&owner).await {
+                    Ok(n) => ended += n,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "signing out from the bot");
+                        return "Something went wrong here; send /signout again in a moment.".to_string();
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "signing out from the bot");
+            return "Something went wrong here; send /signout again in a moment.".to_string();
+        }
+    }
+    match ended {
+        0 => "No browser was signed in to your account.".to_string(),
+        1 => "Signed out of 1 browser. Sign in again from Settings in tradoor.".to_string(),
+        n => format!("Signed out of {n} browsers. Sign in again from Settings in tradoor."),
+    }
 }
 
 /// A sign-in link opened: the reader is asked whether it was them, with a
@@ -442,7 +484,10 @@ async fn pressed(telegram: &Telegram, press: &Pressed) {
     };
     let (toast, text) = if yes {
         match account::confirm(&telegram.pool, code, press.user, press.chat_id, press.name.as_deref()).await {
-            Ok(Some(_)) => ("Signed in", "Signed in. Your drawings, layout and alerts are opening in that browser now, and your alerts come to this chat."),
+            Ok(Some(owner)) => {
+                telegram.sessions.add_account(&owner);
+                ("Signed in", "Signed in. Your drawings, layout and alerts are opening in that browser now, and your alerts come to this chat. Send /signout here to sign every browser out.")
+            }
             Ok(None) => ("Expired", "That sign-in has expired. Press Sign in with Telegram in tradoor again."),
             Err(e) => {
                 tracing::warn!(error = %e, "confirming a sign-in");
