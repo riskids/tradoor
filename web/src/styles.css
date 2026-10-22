@@ -86,6 +86,8 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap alphabetic; }
 .banner { padding: 3px 8px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--bear) 12%, transparent); color: var(--bear); font-size: 11px; }
 .workspace { position: relative; flex: 1; min-height: 0; min-width: 0; padding: 3px; display: flex; }
+/* Under the journal or training: kept as it is, sized, but not styled, laid out or painted. */
+.workspace.covered { content-visibility: hidden; }
 
 /* ------------------------------------------------------------ layout */
 .split { display: flex; flex: 1; min-width: 0; min-height: 0; }

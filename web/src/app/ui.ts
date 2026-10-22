@@ -61,6 +61,8 @@ export const [journalOpen, setJournalOpen] = createSignal(false);
 /** The training view over the workspace, and the id its chart goes by. */
 export const [trainingOpen, setTrainingOpen] = createSignal(false);
 export const TRAINING_CHART = 'training-chart';
+/** The workspace is under one of them: unseen, its charts stop drawing and its panels are not laid out. */
+export const covered = (): boolean => journalOpen() || trainingOpen();
 
 /** Alt + this key turns the magnet through off, weak and strong. */
 export const MAGNET_KEY = 'KeyG';

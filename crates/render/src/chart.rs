@@ -336,6 +336,8 @@ pub struct Chart {
     message: Option<String>,
     dirty: bool,
     last_second: i64,
+    /// When the last frame was drawn, for a liquidation that has settled or gone since.
+    rendered_at: i64,
     cursor: Cursor,
     frame: Frame,
 }
@@ -397,6 +399,7 @@ impl Chart {
             message: None,
             dirty: true,
             last_second: 0,
+            rendered_at: 0,
             cursor: Cursor::Crosshair,
             frame: Frame::default(),
         }
@@ -984,11 +987,15 @@ impl Chart {
     }
 
     /// Something changed, the countdown needs its next second, or a liquidation
-    /// ping is still fading.
+    /// ping is sliding in or fading.
     pub fn needs_render(&self, now: i64) -> bool {
-        self.dirty
-            || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second)
-            || self.liquidations.iter().any(|l| now - l.at < LIQUIDATION_TTL)
+        // A hit moves only as it arrives and as it fades: between, it stands, and the chart rests.
+        let moving = |l: &Liquidation| {
+            let (was, age) = (self.rendered_at - l.at, now - l.at);
+            let passed = |at: i64| was < at && age >= at;
+            age < LIQUIDATION_ENTER || (LIQUIDATION_TTL - LIQUIDATION_FADE..LIQUIDATION_TTL).contains(&age) || passed(LIQUIDATION_ENTER) || passed(LIQUIDATION_TTL)
+        };
+        self.dirty || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second) || self.liquidations.iter().any(moving)
     }
 
     // ------------------------------------------------------------------ layout
@@ -1143,6 +1150,7 @@ impl Chart {
     pub fn render(&mut self, now: i64) -> &Frame {
         self.dirty = false;
         self.last_second = now.div_euclid(1000);
+        self.rendered_at = now;
         let mut frame = std::mem::take(&mut self.frame);
         frame.begin(self.width, self.height, self.dpr, self.theme.background);
         if self.width >= 40.0 && self.height >= 60.0 {
@@ -2878,6 +2886,11 @@ mod tests {
         assert!(texts.iter().any(|t| t.text == "LONG $2.0M"), "says which side was closed out, and how big it was");
         assert_eq!(icons, 1, "with the venue's mark beside the figure");
         assert!(c.needs_render(now + 100), "and the feed keeps the chart animating");
+        assert!(c.needs_render(now + 400), "to where it settles");
+        c.render(now + 400);
+        assert!(!c.needs_render(now + 900), "where it stands, and the chart rests");
+        c.render(now + 4_050);
+        assert!(c.needs_render(now + 4_150), "until it fades");
 
         // Out of the candles' way: at the foot of the pane, inside it.
         let pane = c.panes[0].plot;

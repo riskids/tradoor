@@ -4,7 +4,7 @@
  * pointer input.
  */
 import { batch, createEffect, createSignal, For, type JSX, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
-import { chartControllers, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
+import { chartControllers, covered, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
 import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
@@ -389,11 +389,14 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     return a && b ? { spread: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
   };
 
+  // Under the journal or training a workspace chart keeps its market live and draws nothing until it is seen again.
+  const paused = () => !props.training && covered();
+  createEffect(on(paused, (p) => chart.created && send({ t: 'visible', id: sid, value: !p }), { defer: true }));
   onMount(() => {
     box.prepend(chart.gl, chart.text);
     const rect = box.getBoundingClientRect();
     if (chart.created) {
-      send({ t: 'visible', id: sid, value: true });
+      send({ t: 'visible', id: sid, value: !paused() });
       send({ t: 'resize', id: sid, width: rect.width, height: rect.height, dpr: devicePixelRatio });
     } else {
       try {
@@ -401,6 +404,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         const text = chart.text.transferControlToOffscreen();
         send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio, flat: forceFlatRenderer() }, [gl, text]);
         chart.created = true;
+        if (paused()) send({ t: 'visible', id: sid, value: false });
       } catch (e) {
         setStatus((s) => ({ ...s, loading: false, error: `this browser cannot draw off the main thread (${errorText(e)})` }));
       }

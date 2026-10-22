@@ -3,7 +3,7 @@
  * by dragging a tab onto another group's centre or edge.
  */
 import { createEffect, createSignal, For, lazy, Match, on, onCleanup, Show, Switch, type JSX } from 'solid-js';
-import { dragging, mobileMenu, setDragging, setJournalOpen, setMobile, setMobileMenu, setOverlay, setTrainingOpen } from '../app/ui';
+import { covered, dragging, mobileMenu, setDragging, setJournalOpen, setMobile, setMobileMenu, setOverlay, setTrainingOpen } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { unread } from '../lib/alerts';
 import { Icon } from '../lib/icons';
@@ -52,7 +52,7 @@ export function Layout() {
   createEffect(() => setMobile(narrow()));
   onCleanup(() => setMobile(false));
   return (
-    <div class="workspace" classList={{ mobile: narrow() }}>
+    <div class="workspace" classList={{ mobile: narrow(), covered: covered() }}>
       <Show when={narrow()} fallback={<NodeView node={doc.root} />}>
         <MobileShell />
       </Show>

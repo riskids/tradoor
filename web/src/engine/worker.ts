@@ -957,8 +957,9 @@ const raf: (cb: () => void) => void =
   typeof requestAnimationFrame === 'function' ? (cb) => void requestAnimationFrame(cb) : (cb) => void setTimeout(cb, 16);
 let scheduled = false;
 
+/** Frames run while a chart is seen: with every one hidden the loop stops, and showing one starts it. */
 function schedule(): void {
-  if (scheduled || slots.size === 0) return;
+  if (scheduled || ![...slots.values()].some((s) => !s.hidden)) return;
   scheduled = true;
   raf(tick);
 }
@@ -1023,6 +1024,7 @@ function handle(msg: ToWorker): void {
       break;
     case 'visible':
       slot.show(msg.value);
+      schedule();
       break;
     case 'loseGpu':
       // Development only: the GPU context taken as iOS takes it, and given back after `ms` (never when negative).
