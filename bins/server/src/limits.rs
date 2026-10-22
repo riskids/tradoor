@@ -48,6 +48,9 @@ pub const RELAY_REST: Rate = Rate { name: "relay-rest", per_min: 240.0, burst: 1
 pub const RELAY_HOST: Rate = Rate { name: "relay-host", per_min: 300.0, burst: 150.0 };
 /// Relayed streams opened from one address.
 pub const RELAY_OPENS: Rate = Rate { name: "relay-opens", per_min: 60.0, burst: 30.0 };
+/// Relayed streams opened to one exchange socket from everyone: Binance bans an
+/// address that opens 300 in five minutes.
+pub const RELAY_HOST_OPENS: Rate = Rate { name: "relay-host-opens", per_min: 40.0, burst: 40.0 };
 /// Relayed streams one address keeps open: a page opens one per exchange socket.
 pub const RELAY_STREAMS: usize = 16;
 /// Live liquidation streams one address keeps open: one per chart.
