@@ -937,6 +937,7 @@ textarea.jr-in { resize: vertical; line-height: 1.5; }
 .jr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .jr-actions .tb { border: 1px solid var(--border); padding: 3px 8px; }
 .jr-actions .jr-in { width: 110px; }
+.jr-actions .jr-when { width: 160px; }
 .jr-delete:hover:not(:disabled), .jr-delete.sure { color: var(--bear); border-color: color-mix(in oklab, var(--bear) 45%, transparent); }
 .jr-label { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; color: var(--muted); }
 .jr-market { display: flex; align-items: center; gap: 6px; padding: 4px 6px; text-align: left; }

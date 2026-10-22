@@ -862,7 +862,11 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, Path(id):
             .await?;
     }
     if let Some(status) = b.get("status").and_then(Value::as_str) {
-        let closed_at = finite(b, "closedAt")?.map_or(now, |v| v as i64);
+        let given = finite(b, "closedAt")?.map(|v| v as i64);
+        if given.is_some_and(|at| at < opened_at.unwrap_or(start_at)) {
+            return Err(ApiError::bad_request("it cannot close before it opened"));
+        }
+        let closed_at = given.unwrap_or(now);
         match status {
             "closed" | "breakeven" => {
                 // What price took off on the way stays; the close is the hand's.

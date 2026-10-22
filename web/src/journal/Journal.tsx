@@ -559,10 +559,13 @@ function Editor(props: {
   const [notes, setNotes] = createSignal(t().notes);
   const [fees, setFees] = createSignal(String(t().fees || ''));
   const [risk, setRisk] = createSignal(String(Number(t().risk.toFixed(2))));
-  const [exit, setExit] = createSignal('');
+  // A finished trade's exit and close time, to put right; a live one closes now.
+  const [exit, setExit] = createSignal(isLive(t()) || t().exit === null ? '' : String(t().exit));
+  const [closedAt, setClosedAt] = createSignal(localInput(t().closedAt ?? Date.now()));
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [sure, setSure] = createSignal(false);
+  const when = () => (isLive(t()) ? {} : { closedAt: Date.parse(closedAt()) });
 
   const act = async (run: () => Promise<Trade | void>) => {
     setBusy(true);
@@ -668,27 +671,26 @@ function Editor(props: {
               : 'Its status was set by hand.'}
           </p>
 
-          <Show when={isLive(t()) || !t().auto}>
-            <div class="jr-actions">
-              <Show when={isLive(t())}>
-                <input class="jr-in num" inputmode="decimal" placeholder="Exit price" value={exit()} onInput={(e) => setExit(e.currentTarget.value)} />
-                <button class="tb" disabled={busy() || !(Number(exit()) > 0)} onClick={() => act(() => journalApi.update(t().id, { status: 'closed', exit: Number(exit()) }))}>
-                  Close at it
-                </button>
-                <button class="tb" disabled={busy()} onClick={() => act(() => journalApi.update(t().id, { status: 'breakeven' }))}>
-                  Break-even
-                </button>
-                <button class="tb" disabled={busy()} onClick={() => act(() => journalApi.update(t().id, { status: 'cancelled' }))}>
-                  Cancel
-                </button>
-              </Show>
-              <Show when={!t().auto && t().tracked}>
-                <button class="tb" disabled={busy()} data-tip="Weigh it against price again, from where it was drawn" onClick={() => act(() => journalApi.update(t().id, { auto: true }))}>
-                  Let price decide
-                </button>
-              </Show>
-            </div>
-          </Show>
+          <div class="jr-actions">
+            <input class="jr-in num" inputmode="decimal" placeholder="Exit price" value={exit()} onInput={(e) => setExit(e.currentTarget.value)} />
+            <Show when={!isLive(t())}>
+              <input class="jr-in jr-when" type="datetime-local" aria-label="Closed at" value={closedAt()} onInput={(e) => setClosedAt(e.currentTarget.value)} />
+            </Show>
+            <button class="tb" disabled={busy() || !(Number(exit()) > 0) || Number.isNaN(Date.parse(closedAt()))} onClick={() => act(() => journalApi.update(t().id, { status: 'closed', exit: Number(exit()), ...when() }))}>
+              {isLive(t()) ? 'Close at it' : 'Set exit'}
+            </button>
+            <button class="tb" disabled={busy()} onClick={() => act(() => journalApi.update(t().id, { status: 'breakeven', ...when() }))}>
+              Break-even
+            </button>
+            <button class="tb" disabled={busy()} onClick={() => act(() => journalApi.update(t().id, { status: 'cancelled', ...when() }))}>
+              {isLive(t()) ? 'Cancel' : 'Cancelled'}
+            </button>
+            <Show when={!t().auto && t().tracked}>
+              <button class="tb" disabled={busy()} data-tip="Weigh it against price again, from where it was drawn" onClick={() => act(() => journalApi.update(t().id, { auto: true }))}>
+                Let price decide
+              </button>
+            </Show>
+          </div>
 
           <StrategyPicker value={strategy()} onChange={setStrategy} />
           <div class="jr-row">
