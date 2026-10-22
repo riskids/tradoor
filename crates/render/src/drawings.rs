@@ -637,13 +637,6 @@ fn paint_position(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme, 
 
     frame.rect(left, target_y.min(entry_y), w, (target_y - entry_y).abs(), profit_fill);
     frame.rect(left, stop_y.min(entry_y), w, (stop_y - entry_y).abs(), stop_fill);
-    // How far the last price has run: a deeper shade from entry to the last close.
-    if let Some(last) = d.last.filter(|_| !d.draft) {
-        let y = d.y(last).clamp(stop_y.min(target_y), stop_y.max(target_y));
-        let winning = if long { last >= entry } else { last <= entry };
-        let tone = if winning { profit_line } else { stop_line };
-        frame.rect(left, y.min(entry_y), w, (y - entry_y).abs(), tone.with_alpha(40));
-    }
     let entry_line = style.color.unwrap_or(Color::hex(0x9598a1));
     frame.hline(left, right, entry_y, 1.0, entry_line);
     if d.selected {
