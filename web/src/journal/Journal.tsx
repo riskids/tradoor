@@ -268,7 +268,7 @@ function Dashboard(props: { trades: Trade[] }) {
           <h3>Equity</h3>
           <Equity trades={list()} />
         </section>
-        <section class="jr-box jr-wide">
+        <section class="jr-box">
           <h3>P&L calendar</h3>
           <Calendar trades={list()} />
         </section>
