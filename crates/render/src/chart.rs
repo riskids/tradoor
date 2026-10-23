@@ -3070,6 +3070,23 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_reaching_far_off_screen_costs_what_shows_of_it() {
+        let mut c = Chart::new(ChartTimeframe::H1);
+        c.resize(1_000.0, 600.0, 1.0);
+        let bars = candles(6_000);
+        let (first, last) = (bars[0].open_time as f64, bars[5_999].open_time as f64);
+        c.set_candles(bars);
+        let now = 1_800_000_000_000;
+        let bare = c.render(now).vertex_count();
+        // Six thousand bars long at the opening zoom: some 40,000 pixels, its middle line dashed.
+        let price = c.panes[0].scale.price(300.0);
+        c.set_drawings(vec![DrawingShape::new(Some(1), DrawingKind::Channel, vec![Anchor { time: first, price }, Anchor { time: last, price }, Anchor { time: first, price: price * 0.98 }])]);
+        let drawn = c.render(now).vertex_count() - bare;
+        assert!(drawn > 0, "the channel is drawn");
+        assert!(drawn < 3_000, "and only what shows of it: {drawn} vertices");
+    }
+
+    #[test]
     fn a_minute_chart_zooms_out_no_further_than_its_draw_distance() {
         let shown = |tf: ChartTimeframe| {
             let mut c = Chart::new(tf);

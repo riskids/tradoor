@@ -175,7 +175,7 @@ impl Frame {
     pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) {
         let (dx, dy) = (x1 - x0, y1 - y0);
         let len = dx.hypot(dy);
-        if len == 0.0 || !len.is_finite() {
+        if len == 0.0 || !len.is_finite() || self.beyond((x0, y0), (x1, y1), width) {
             return;
         }
         let (nx, ny) = (-dy / len * width / 2.0, dx / len * width / 2.0);
@@ -189,6 +189,9 @@ impl Frame {
         let len = dx.hypot(dy);
         if !self.smooth || dx == 0.0 || dy == 0.0 || len == 0.0 || !len.is_finite() {
             self.line(x0, y0, x1, y1, width, color);
+            return;
+        }
+        if self.beyond((x0, y0), (x1, y1), width) {
             return;
         }
         // One device pixel of fade each side, taken from the solid core so the
@@ -223,8 +226,8 @@ impl Frame {
             return;
         }
         let (ux, uy) = ((x1 - x0) / len, (y1 - y0) / len);
-        let mut d = 0.0;
-        while d < len {
+        let Some((mut d, end)) = self.dashes_shown((x0, y0), (x1, y1), len, width, dash + gap) else { return };
+        while d < end {
             let e = (d + dash).min(len);
             self.smooth_line(x0 + ux * d, y0 + uy * d, x0 + ux * e, y0 + uy * e, width, color);
             d += dash + gap;
@@ -238,8 +241,8 @@ impl Frame {
         }
         let (ux, uy) = ((x1 - x0) / len, (y1 - y0) / len);
         let horizontal = y0 == y1;
-        let mut d = 0.0;
-        while d < len {
+        let Some((mut d, end)) = self.dashes_shown((x0, y0), (x1, y1), len, width, dash + gap) else { return };
+        while d < end {
             let e = (d + dash).min(len);
             if horizontal {
                 self.hline(x0 + ux * d, x0 + ux * e, y0, width, color);
@@ -252,14 +255,57 @@ impl Frame {
         }
     }
 
+    /// Both ends past the same edge of the frame, by more than `width`: nothing
+    /// of the line between them shows. A brush stroke or path drawn on a longer
+    /// chart runs thousands of segments off a minute chart's edges.
+    fn beyond(&self, a: (f32, f32), b: (f32, f32), width: f32) -> bool {
+        if self.width <= 0.0 || self.height <= 0.0 {
+            return false;
+        }
+        let (lo_x, hi_x, lo_y, hi_y) = (-width, self.width + width, -width, self.height + width);
+        (a.0 < lo_x && b.0 < lo_x) || (a.0 > hi_x && b.0 > hi_x) || (a.1 < lo_y && b.1 < lo_y) || (a.1 > hi_y && b.1 > hi_y)
+    }
+
+    /// Where along a dashed line, from its start, the dashes on the frame run:
+    /// from the first whole dash at its edge — so the pattern stays where it is
+    /// as the line moves — to where it leaves. A channel drawn days long on a
+    /// minute chart reaches a hundred thousand pixels past the frame, and was
+    /// dashed all the way, every frame.
+    fn dashes_shown(&self, (x0, y0): (f32, f32), (x1, y1): (f32, f32), len: f32, width: f32, period: f32) -> Option<(f32, f32)> {
+        if self.width <= 0.0 || self.height <= 0.0 || period <= 0.0 {
+            return Some((0.0, len));
+        }
+        let m = width + period;
+        // Liang–Barsky: the share of the line, 0 to 1, inside the frame and a margin.
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        for (p, q) in [(-dx, x0 + m), (dx, self.width + m - x0), (-dy, y0 + m), (dy, self.height + m - y0)] {
+            if p == 0.0 {
+                if q < 0.0 {
+                    return None;
+                }
+            } else {
+                let r = q / p;
+                if p < 0.0 {
+                    t0 = t0.max(r);
+                } else {
+                    t1 = t1.min(r);
+                }
+            }
+        }
+        (t0 < t1).then(|| ((t0 * len / period).floor() * period, t1 * len))
+    }
+
     pub fn polyline(&mut self, points: &[(f32, f32)], width: f32, color: Color) {
         for w in points.windows(2) {
             self.line(w[0].0, w[0].1, w[1].0, w[1].1, width, color);
         }
         // Squares at the joints fill the notch a thick line leaves at each turn.
         if width > 1.5 && points.len() > 2 {
-            for p in &points[1..points.len() - 1] {
-                self.rect(p.0 - width / 2.0, p.1 - width / 2.0, width, width, color);
+            for &p in &points[1..points.len() - 1] {
+                if !self.beyond(p, p, width) {
+                    self.rect(p.0 - width / 2.0, p.1 - width / 2.0, width, width, color);
+                }
             }
         }
     }
@@ -336,6 +382,39 @@ mod tests {
         f.begin(100.0, 100.0, 1.0, Color::hex(0));
         f.smooth_line(10.0, 50.0, 90.0, 50.0, 2.0, white);
         assert_eq!(f.vertex_count(), 6, "a level line is crisp already");
+    }
+
+    #[test]
+    fn a_dashed_line_far_past_the_frame_is_dashed_only_where_it_shows() {
+        let white = Color::hex(0xffffff);
+        let dashes = |f: &mut Frame, x0: f32, y0: f32, x1: f32, y1: f32| {
+            f.begin(1_000.0, 500.0, 1.0, Color::hex(0));
+            f.dashed_line(x0, y0, x1, y1, 1.0, white, 6.0, 4.0);
+            f.vertex_count() / 6
+        };
+        let mut f = Frame::default();
+        assert_eq!(dashes(&mut f, 0.0, 100.0, 1_000.0, 120.0), 101, "a line across the frame, dashed end to end");
+        // Two hundred thousand pixels long, from far off the left: what shows is dashed, not the rest.
+        let long = dashes(&mut f, -199_000.0, 100.0, 1_000.0, 120.0);
+        assert!((100..=104).contains(&long), "{long} dashes");
+        assert_eq!(dashes(&mut f, -5_000.0, -50.0, -10.0, -40.0), 0, "a line wholly off the frame draws nothing");
+        // The pattern keeps its place along the line: a dash starts on a multiple of dash and gap from its start.
+        f.begin(1_000.0, 500.0, 1.0, Color::hex(0));
+        f.dashed_line(-1_005.0, 100.0, 1_000.0, 100.0, 1.0, white, 6.0, 4.0);
+        let first = f.positions.chunks(2).map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        assert!(((first + 1_005.0) % 10.0).abs() < 1e-3, "starts at {first}");
+    }
+
+    #[test]
+    fn a_path_draws_only_the_segments_on_the_frame() {
+        let mut f = Frame::default();
+        f.begin(1_000.0, 500.0, 1.0, Color::hex(0));
+        // Ten thousand points from far off the left to the middle of the frame.
+        let points: Vec<(f32, f32)> = (0..10_000).map(|i| (-99_500.0 + i as f32 * 10.0, 200.0 + (i % 7) as f32)).collect();
+        f.polyline(&points, 2.0, Color::hex(0xffffff));
+        // Quads: a segment each, and a square at each joint between.
+        let quads = f.vertex_count() / 6;
+        assert!((95..=105).contains(&quads), "{quads} drawn, of 9,999 segments and 9,998 joints");
     }
 
     #[test]
