@@ -7,7 +7,7 @@
  * Run with `deno task test`; tsc skips this file (see tsconfig exclude).
  */
 import { assertEquals } from 'jsr:@std/assert@1';
-import { Series } from './history.ts';
+import { concatCols, emptyCols, sameCols, Series } from './history.ts';
 import { parseMarket } from '../lib/markets.ts';
 
 const MINUTE = 60_000;
@@ -47,4 +47,13 @@ Deno.test('a series asked for again takes in the bars that closed since it was l
   } finally {
     restore();
   }
+});
+
+Deno.test('bars brought again unchanged are known as the same, and one changed figure is not', () => {
+  const cols = (close: number[]) => ({ time: Float64Array.from(close.map((_, i) => i * 60_000)), open: Float64Array.from(close), high: Float64Array.from(close), low: Float64Array.from(close), close: Float64Array.from(close), volume: Float64Array.from(close.map(() => 1)) });
+  assertEquals(sameCols(cols([1, 2, 3]), cols([1, 2, 3])), true);
+  assertEquals(sameCols(cols([1, 2, 3]), cols([1, 2, 4])), false, 'the last close');
+  assertEquals(sameCols(cols([1, 2, 3]), cols([1, 2])), false, 'a bar more');
+  assertEquals(sameCols(cols([9, 2, 3]), cols([1, 2, 3])), false, 'an older bar put right');
+  assertEquals(sameCols(emptyCols(), concatCols([emptyCols()])), true);
 });

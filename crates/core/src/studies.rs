@@ -133,6 +133,11 @@ impl StudySpec {
         STUDIES.iter().find(|d| d.kind == self.kind).expect("every kind has a definition")
     }
 
+    /// Its `i`th parameter, or the definition's default.
+    fn param(&self, i: usize) -> usize {
+        self.params.get(i).copied().unwrap_or(self.def().params.get(i).map_or(0, |p| p.default)) as usize
+    }
+
     /// `ema:50` — the id AND the wire format: what localStorage holds and what a
     /// legend row is keyed by, so a study cannot be added twice under two names.
     pub fn id(&self) -> String {
@@ -290,12 +295,19 @@ pub fn compute_study(spec: &StudySpec, candles: &[Candle]) -> ComputedStudy {
     compute_study_with(spec, candles, &StudyInputs::default())
 }
 
+/// A study named and listed, with nothing worked out: what a hidden one holds
+/// until it is shown, its bars unread.
+pub fn idle_study(spec: &StudySpec) -> ComputedStudy {
+    let def = spec.def();
+    ComputedStudy { id: spec.id(), kind: def.kind, label: spec.label(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new(), candles: Vec::new() }
+}
+
 pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyInputs<'_>) -> ComputedStudy {
     let def = spec.def();
     let close: Series = candles.iter().map(|c| Some(c.close)).collect();
     let label = spec.label();
-    let param = |i: usize| spec.params.get(i).copied().unwrap_or(def.params.get(i).map_or(0, |p| p.default)) as usize;
-    let mut study = ComputedStudy { id: spec.id(), kind: def.kind, label: label.clone(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new(), candles: Vec::new() };
+    let param = |i: usize| spec.param(i);
+    let mut study = idle_study(spec);
 
     match def.kind {
         StudyKind::Ema => study.lines.push(StudyLine::line("ema", label, indicators::ema(&close, param(0)))),
@@ -383,6 +395,31 @@ fn open_interest_bars(candles: &[Candle], inputs: &StudyInputs<'_>) -> (Vec<Opti
         out.push(bar);
     }
     (out, bars.iter().map(|b| b.1).collect())
+}
+
+/// The forming bar's open interest worked out again on its own, the bars before
+/// it as they were: within one bar a tick moves only that bar's figure — in
+/// dollars, by its price. False where the study is not of these bars and this
+/// forming one, and is to be worked out whole.
+pub fn open_interest_live(spec: &StudySpec, study: &mut ComputedStudy, candles: &[Candle], inputs: &StudyInputs<'_>) -> bool {
+    let Some((open, close)) = inputs.live.filter(|l| candles.last().is_none_or(|c| l.0 > c.open_time)) else { return false };
+    let n = candles.len() + 1;
+    if spec.kind != StudyKind::OpenInterest || study.lines.is_empty() || study.lines.iter().any(|l| l.values.len() != n) || !(study.candles.is_empty() || study.candles.len() == n) {
+        return false;
+    }
+    // The steps that start inside it, else the last close before it, held flat.
+    let steps = inputs.open_interest;
+    let first = steps.partition_point(|s| s.0 < open);
+    let bar = steps[first..].iter().map(|s| s.1).reduce(|b, s| [b[0], b[1].max(s[1]), b[2].min(s[2]), s[3]]).or_else(|| first.checked_sub(1).map(|i| [steps[i].1[3]; 4]));
+    let bar = bar.map(|b| if spec.param(1) == 1 { b.map(|v| v * close) } else { b });
+    for line in &mut study.lines {
+        let k = ["open", "high", "low", "close"].iter().position(|key| *key == line.key).unwrap_or(3);
+        line.values[n - 1] = bar.map(|b| b[k]);
+    }
+    if let Some(last) = study.candles.last_mut() {
+        *last = bar;
+    }
+    true
 }
 
 /// The dollar value of the open interest, bar by bar.
@@ -677,6 +714,35 @@ mod tests {
         assert!(usd.candles.is_empty());
         assert_eq!(line(&usd, "close"), &vec![Some(1000.0), Some(2000.0), Some(6000.0), Some(12_000.0)]);
         assert!(usd.label.contains("USD Line · 2 venues"));
+    }
+
+    #[test]
+    fn a_tick_in_the_forming_bar_moves_its_open_interest_as_the_whole_would() {
+        let hour = 3_600_000;
+        let candles = series("2026-09-01", 3, hour, |i| (None, None, None, Some(100.0 * (i + 1) as f64), None));
+        let t0 = candles[0].open_time;
+        let forming = t0 + 3 * hour;
+        let steps = vec![(t0, [10.0, 12.0, 10.0, 11.0]), (t0 + 2 * hour, [20.0, 21.0, 19.0, 20.0]), (forming, [30.0, 33.0, 29.0, 31.0]), (forming + 900_000, [31.0, 35.0, 31.0, 34.0])];
+        let quiet = vec![(t0, [10.0, 12.0, 10.0, 11.0]), (t0 + 2 * hour, [20.0, 21.0, 19.0, 20.0])];
+        for raw in ["oi", "oi:255:1:0", "oi:255:1:1", "oi:255:0:1"] {
+            let spec = &parse_studies(raw, 12)[0];
+            for steps in [&steps, &quiet] {
+                let before = StudyInputs { open_interest: steps, live: Some((forming, 400.0)), ..StudyInputs::default() };
+                let after = StudyInputs { open_interest: steps, live: Some((forming, 415.5)), ..StudyInputs::default() };
+                let mut study = compute_study_with(spec, &candles, &before);
+                assert!(open_interest_live(spec, &mut study, &candles, &after), "{raw}: the forming bar alone");
+                let whole = compute_study_with(spec, &candles, &after);
+                assert_eq!(study.candles, whole.candles, "{raw}");
+                for (a, b) in study.lines.iter().zip(&whole.lines) {
+                    assert_eq!(a.values, b.values, "{raw} {}", a.key);
+                }
+            }
+        }
+        // A forming bar not yet in the study: worked out whole.
+        let spec = &parse_studies("oi", 12)[0];
+        let mut closed = compute_study_with(spec, &candles, &StudyInputs { open_interest: &steps, ..StudyInputs::default() });
+        assert!(!open_interest_live(spec, &mut closed, &candles, &StudyInputs { open_interest: &steps, live: Some((forming, 400.0)), ..StudyInputs::default() }));
+        assert!(idle_study(spec).lines.is_empty(), "a hidden study holds nothing");
     }
 
     fn line<'a>(study: &'a ComputedStudy, key: &str) -> &'a Series {

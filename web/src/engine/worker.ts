@@ -9,7 +9,7 @@ import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
 import { MARK_ORDER, markIndex } from '../lib/mark-order';
 import { parseMarket, ratioLegs, type MarketRef } from '../lib/markets';
-import { concatCols, emptyCols, formingRows, intervalMs, lowerBound, openSeries, sliceCols, type CandleSeries, type Cols, type Series } from './history';
+import { concatCols, emptyCols, formingRows, intervalMs, lowerBound, openSeries, sameCols, sliceCols, type CandleSeries, type Cols, type Series } from './history';
 import type { RatioSeries } from './ratio';
 import { lacksUtcOf, marketInterval } from './intervals';
 import { nativeOf } from '../lib/native';
@@ -536,8 +536,13 @@ class Slot {
     // moves. Any other market's are read off its prices (-1).
     this.engine.set_price_decimals(series.source === 'ratio' ? (series as RatioSeries).decimals() : -1);
     this.extra = this.extra.filter((b) => b.time > last);
-    this.closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
-    this.pushCandles();
+    const closed = this.extra.length > 0 ? concatCols([folded, barCols(this.extra)]) : folded;
+    // The exchange vouching for a bar the stream already closed changes no bar:
+    // working every study out again over all of them — the slowest thing a long
+    // minute chart does, and asked for again until the exchange answers — is skipped.
+    const same = !this.fresh && sameCols(closed, this.closed);
+    this.closed = closed;
+    if (!same) this.pushCandles();
     this.syncOpenInterest();
     this.setStatus({ loading: false, error: null, bars: this.closed.time.length, source: series.source, exhausted: series.exhausted });
   }

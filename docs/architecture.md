@@ -88,7 +88,11 @@ row.
    the feed asks for frames only while it slides in and while it fades. A chart
    not seen — its tab switched away, or the workspace under the journal or
    training — keeps its market live and draws nothing, and with no chart
-   seen the worker's frame loop stops.
+   seen the worker's frame loop stops. Studies are worked out over every bar
+   held when the bars change; a hidden study is not worked out at all until it
+   is shown, and a tick in the forming bar moves open interest's last figure
+   alone. The exchange vouching for a bar the stream already closed brings the
+   same bars again, and the studies are then not worked out again.
 8. Panning near the oldest bar held emits `needHistory`; the series loads the
    next older partition, or pages REST back, and every chart on it refolds.
 

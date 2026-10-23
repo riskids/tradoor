@@ -29,6 +29,17 @@ export function emptyCols(): Cols {
   return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e() };
 }
 
+/** Whether two runs of bars are the same bars, to the last figure. */
+export function sameCols(a: Cols, b: Cols): boolean {
+  if (a.time.length !== b.time.length) return false;
+  for (const key of KEYS) {
+    const x = a[key];
+    const y = b[key];
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  }
+  return true;
+}
+
 export function concatCols(parts: readonly Cols[]): Cols {
   if (parts.length === 1) return parts[0]!;
   const n = parts.reduce((sum, p) => sum + p.time.length, 0);
