@@ -300,13 +300,14 @@ export function localDay(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Each local day's closed trades: what they made, and how many. */
-export function dailyPnl(trades: readonly Trade[]): Map<string, { pnl: number; trades: number }> {
-  const out = new Map<string, { pnl: number; trades: number }>();
+/** Each local day's closed trades: what they made, in money and in R (a trade with no risk set adds none), and how many. */
+export function dailyPnl(trades: readonly Trade[]): Map<string, { pnl: number; r: number; trades: number }> {
+  const out = new Map<string, { pnl: number; r: number; trades: number }>();
   for (const t of trades.filter(isClosed)) {
     const day = localDay(when(t));
-    const d = out.get(day) ?? { pnl: 0, trades: 0 };
+    const d = out.get(day) ?? { pnl: 0, r: 0, trades: 0 };
     d.pnl += pnl(t)!;
+    d.r += rMultiple(t) ?? 0;
     d.trades++;
     out.set(day, d);
   }

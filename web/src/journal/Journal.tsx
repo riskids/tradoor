@@ -268,7 +268,7 @@ function Dashboard(props: { trades: Trade[] }) {
           <h3>Equity</h3>
           <Equity trades={list()} />
         </section>
-        <section class="jr-box">
+        <section class="jr-box jr-wide">
           <h3>P&L calendar</h3>
           <Calendar trades={list()} />
         </section>
@@ -335,7 +335,7 @@ function Equity(props: { trades: Trade[] }) {
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-/** A month of days, each with what its closed trades made. */
+/** A month of days, each with what its closed trades made, and each week's R beside it. */
 function Calendar(props: { trades: Trade[] }) {
   const today = new Date();
   const [month, setMonth] = createSignal({ y: today.getFullYear(), m: today.getMonth() });
@@ -345,8 +345,17 @@ function Calendar(props: { trades: Trade[] }) {
     const first = new Date(y, m, 1);
     const lead = (first.getDay() + 6) % 7;
     const count = new Date(y, m + 1, 0).getDate();
-    return [...Array<null>(lead).fill(null), ...Array.from({ length: count }, (_, i) => localDay(new Date(y, m, i + 1).getTime()))];
+    const days = [...Array<null>(lead).fill(null), ...Array.from({ length: count }, (_, i) => localDay(new Date(y, m, i + 1).getTime()))];
+    return [...days, ...Array<null>((7 - (days.length % 7)) % 7).fill(null)];
   });
+  /** Monday to Sunday, a row each: the days of this month in it, and their R together. */
+  const weeks = createMemo(() =>
+    Array.from({ length: cells().length / 7 }, (_, i) => {
+      const row = cells().slice(i * 7, i * 7 + 7);
+      const traded = row.map((day) => (day ? days().get(day) : undefined)).filter((d) => d !== undefined);
+      return { row, r: traded.reduce((sum, d) => sum + d.r, 0), trades: traded.reduce((sum, d) => sum + d.trades, 0), first: row.find((day) => day !== null)! };
+    }),
+  );
   const total = createMemo(() => cells().reduce((sum, day) => sum + (day ? (days().get(day)?.pnl ?? 0) : 0), 0));
   const biggest = createMemo(() => Math.max(1, ...cells().map((day) => Math.abs(day ? (days().get(day)?.pnl ?? 0) : 0))));
   const step = (n: number) => setMonth(({ y, m }) => ({ y: m + n < 0 ? y - 1 : m + n > 11 ? y + 1 : y, m: (m + n + 12) % 12 }));
@@ -366,26 +375,36 @@ function Calendar(props: { trades: Trade[] }) {
       </div>
       <div class="jr-cal-grid">
         <For each={WEEKDAYS}>{(d) => <span class="dim jr-wd">{d}</span>}</For>
-        <For each={cells()}>
-          {(day) => {
-            const d = () => (day ? days().get(day) : undefined);
-            const strength = () => Math.min(1, Math.abs(d()?.pnl ?? 0) / biggest());
-            return (
-              <div
-                class="jr-day"
-                classList={{ blank: !day, up: (d()?.pnl ?? 0) > 0, down: (d()?.pnl ?? 0) < 0 }}
-                style={{ '--s': String(0.12 + strength() * 0.5) }}
-                data-tip={d() ? `${day}: ${money(d()!.pnl)} from ${d()!.trades} trade${d()!.trades > 1 ? 's' : ''}` : undefined}
-              >
-                <Show when={day}>
-                  <span class="dim">{Number(day!.slice(8))}</span>
-                  <Show when={d()}>
-                    <span class="num">{compactMoney(d()!.pnl)}</span>
-                  </Show>
-                </Show>
+        <span class="dim jr-wd">Week</span>
+        <For each={weeks()}>
+          {(week) => (
+            <>
+              <For each={week.row}>
+                {(day) => {
+                  const d = () => (day ? days().get(day) : undefined);
+                  const strength = () => Math.min(1, Math.abs(d()?.pnl ?? 0) / biggest());
+                  return (
+                    <div
+                      class="jr-day"
+                      classList={{ blank: !day, up: (d()?.pnl ?? 0) > 0, down: (d()?.pnl ?? 0) < 0 }}
+                      style={{ '--s': String(0.12 + strength() * 0.5) }}
+                      data-tip={d() ? `${day}: ${money(d()!.pnl)} from ${d()!.trades} trade${d()!.trades > 1 ? 's' : ''}` : undefined}
+                    >
+                      <Show when={day}>
+                        <span class="dim">{Number(day!.slice(8))}</span>
+                        <Show when={d()}>
+                          <span class="num">{compactMoney(d()!.pnl)}</span>
+                        </Show>
+                      </Show>
+                    </div>
+                  );
+                }}
+              </For>
+              <div class={`jr-week num ${week.trades > 0 ? tone(week.r) : 'dim'}`} data-tip={week.trades > 0 ? `Week of ${week.first}: ${rText(week.r)} from ${week.trades} trade${week.trades > 1 ? 's' : ''}` : undefined}>
+                {week.trades > 0 ? rText(week.r) : '—'}
               </div>
-            );
-          }}
+            </>
+          )}
         </For>
       </div>
     </div>
