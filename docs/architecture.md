@@ -92,9 +92,16 @@ row.
    held when the bars change; a hidden study is not worked out at all until it
    is shown, and a tick in the forming bar moves open interest's last figure
    alone. The exchange vouching for a bar the stream already closed brings the
-   same bars again, and the studies are then not worked out again.
+   same bars again, and the studies are then not worked out again. Trades
+   move the forming bar once a frame, however many arrive in it.
 8. Panning near the oldest bar held emits `needHistory`; the series loads the
    next older partition, or pages REST back, and every chart on it refolds.
+   A chart of 15 minutes or shorter keeps an open world: it folds and holds
+   only a window of the newest bars — 6,000, or back to the week's open if
+   more — and `needHistory` widens it 4,000 bars at a time, from bars the
+   series already has before any are fetched. Back at the newest, the window
+   narrows again, so a bar closing on a minute chart panned months back costs
+   what it does on one opened today.
 
 Series nobody reads are dropped after two minutes, so a deep 1-minute history
 does not outlive its chart.

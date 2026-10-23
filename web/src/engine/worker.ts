@@ -22,6 +22,20 @@ import { onWake } from './reach';
 
 /** Closed bars a chart opens with: enough for EMA 200 to settle, with room to scroll. */
 const CHART_BARS = 1_500;
+/**
+ * A chart of 15 minutes or shorter keeps an open world: its engine holds only
+ * the bars about the view — the newest few thousand, back to the week's open
+ * at least for its levels — widened as the reader pans back and narrowed again
+ * once they are back at the newest, so a minute chart with months behind it is
+ * worked out and drawn as one with days. Longer charts hold every bar.
+ */
+const WINDOW_MAX_BAR_MS = 15 * 60_000;
+const WINDOW_BARS = 6_000;
+/** How far the window widens each time the reader nears its oldest bar. */
+const WIDEN_BARS = 4_000;
+const WEEK_MS = 7 * 86_400_000;
+/** 1970-01-05 was a Monday: weeks open counted from it. */
+const MONDAY_MS = 4 * 86_400_000;
 /** Cap on the base bars behind them — 1,500 bars of 30m is 45,000 minutes. */
 const MAX_BASE_BARS = 60_000;
 /**
@@ -194,6 +208,11 @@ class Slot {
   private owedTimer: ReturnType<typeof setTimeout> | undefined;
   private asks = 0;
   private live: Bar | null = null;
+  /** A trade moved the forming bar since the last frame: it goes to the engine once a frame. */
+  private liveDue = false;
+  /** The bars the engine holds, newest last, and what it holds at rest (see WINDOW_BARS). */
+  private window = Number.POSITIVE_INFINITY;
+  private rest = Number.POSITIVE_INFINITY;
   private feed: LiveFeedEngine | null = null;
   private gen = 0;
   private cleanup: (() => void)[] = [];
@@ -319,7 +338,10 @@ class Slot {
   /** Open interest follows the chart's market, bars and the study's venues. */
   private syncOpenInterest(): void {
     const ref = parseMarket(this.market);
-    const first = this.closed.time.length > 0 ? this.closed.time[0]! : Number.NaN;
+    // A window's first bar moves as it widens and narrows: open interest keeps
+    // to the first bar of the history behind it instead, and is not fetched again.
+    const from = Number.isFinite(this.window) ? this.series?.cols.time : this.closed.time;
+    const first = from && from.length > 0 ? from[0]! : Number.NaN;
     let barMs = 0;
     try {
       barMs = info(this.timeframe).barMs;
@@ -453,6 +475,8 @@ class Slot {
       this.fail(message(e));
       return;
     }
+    this.liveDue = false;
+    this.window = this.rest = this.restWindow(tf);
     this.engine.set_message('Loading…');
     this.candlesIn = false;
     this.setStatus({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
@@ -528,7 +552,13 @@ class Slot {
   private refold(): void {
     const series = this.series;
     if (!series) return;
-    const c = series.cols;
+    if (Number.isFinite(this.window)) {
+      // As the week goes on, the window at rest keeps back to its open.
+      const rest = this.restWindow(info(this.timeframe));
+      this.window = this.window <= this.rest ? rest : Math.max(this.window, rest);
+      this.rest = rest;
+    }
+    const c = this.tail(series);
     const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
     const last = folded.time.length > 0 ? folded.time[folded.time.length - 1]! : Number.NEGATIVE_INFINITY;
     this.foldedLast = last;
@@ -547,8 +577,43 @@ class Slot {
     this.setStatus({ loading: false, error: null, bars: this.closed.time.length, source: series.source, exhausted: series.exhausted });
   }
 
+  /** The bars the engine holds at rest: see WINDOW_BARS. */
+  private restWindow(tf: TfInfo): number {
+    if (tf.barMs > WINDOW_MAX_BAR_MS) return Number.POSITIVE_INFINITY;
+    const sinceMonday = Math.ceil(((Date.now() - MONDAY_MS) % WEEK_MS) / tf.barMs);
+    return Math.max(WINDOW_BARS, this.bars, sinceMonday + 100);
+  }
+
+  /**
+   * The base bars the window's bars fold from, so a bar closing works over the
+   * window's bars and not the months behind them. All of them for a longer chart.
+   */
+  private tail(series: CandleSeries): Cols {
+    const c = series.cols;
+    const n = c.time.length;
+    if (!Number.isFinite(this.window)) return c;
+    // Counted, not timed: across a gap in the bars a stretch of time holds
+    // fewer, and widening by time could add none.
+    const barMs = info(this.timeframe).barMs;
+    let from = n - (this.window + 1) * Math.max(1, Math.round(barMs / intervalMs(series.interval)));
+    if (from <= 0) return c;
+    // From the first of a bar's base bars, so the oldest bar held is whole.
+    while (from < n && Math.floor(c.time[from]! / barMs) === Math.floor(c.time[from - 1]! / barMs)) from += 1;
+    return sliceCols(c, from);
+  }
+
+  /** Back about the newest bars, the window lets the older ones go again. */
+  private narrow(): void {
+    if (this.window <= this.rest) return;
+    const held = Math.min(this.window, this.closed.time.length);
+    if (this.engine.visible_from() < held - this.rest + WIDEN_BARS) return;
+    this.window = this.rest = this.restWindow(info(this.timeframe));
+    this.refold();
+  }
+
   private pushCandles(): void {
-    const k = this.closed;
+    const all = this.closed;
+    const k = all.time.length > this.window ? sliceCols(all, all.time.length - this.window) : all;
     this.engine.set_candles(k.time, k.open, k.high, k.low, k.close, k.volume);
     if (this.fresh && k.time.length > 0) {
       // A market of its own opens at its own last bars, not where the one
@@ -678,7 +743,7 @@ class Slot {
     // Before the closed bars are in, the chart drawn is the last market's: the
     // bar and its price wait, to go out with them.
     if (!this.candlesIn) return;
-    this.pushLive();
+    this.liveDue = true;
     this.setPrice(bar.close);
   }
 
@@ -790,9 +855,17 @@ class Slot {
   }
 
   private async loadOlder(): Promise<void> {
+    // Bars already held come into the window before any are fetched.
+    const held = this.series?.cols.time;
+    if (held && held.length > 0 && this.closed.time.length > 0 && held[0]! < this.closed.time[0]!) {
+      this.window += WIDEN_BARS;
+      this.refold();
+      return;
+    }
     const series = this.series;
     const gen = this.gen;
     if (!series || series.exhausted) return;
+    if (Number.isFinite(this.window)) this.window += WIDEN_BARS;
     this.setStatus({ loading: true });
     try {
       await series.older();
@@ -802,7 +875,16 @@ class Slot {
     }
   }
 
+  /** The forming bar as trades last moved it, into the engine: once a frame, and before a picture. */
+  flushLive(): void {
+    if (!this.liveDue) return;
+    this.liveDue = false;
+    this.pushLive();
+  }
+
   frame(now: number): void {
+    this.flushLive();
+    this.narrow();
     if (this.engine.draw(now)) {
       const legend = this.engine.legend();
       const key = JSON.stringify(legend);
@@ -938,6 +1020,7 @@ async function captureCall({ id, wide }: Calls['capture']['args']): Promise<Blob
   const [w, h] = [Math.round(width * dpr * scale), Math.round(height * dpr * scale)];
   const shapes = new OffscreenCanvas(w, h);
   const labels = new OffscreenCanvas(w, h);
+  slot.flushLive();
   slot.engine.draw_into(shapes, labels, scale, Date.now());
   const out = new OffscreenCanvas(w, h);
   const ctx = out.getContext('2d');

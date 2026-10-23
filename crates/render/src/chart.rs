@@ -514,7 +514,17 @@ impl Chart {
         let live = live.filter(|l| self.candles.last().is_none_or(|c| l.open_time > c.open_time));
         if live != self.live {
             let same_bar = live.zip(self.live).is_some_and(|(a, b)| a.open_time == b.open_time);
+            // A trade at a price the bar has already seen moves its volume alone:
+            // with no volume drawn, nothing on screen changes and nothing is redrawn.
+            let unseen = same_bar
+                && live.zip(self.live).is_some_and(|(a, b)| (a.open, a.high, a.low, a.close) == (b.open, b.high, b.low, b.close))
+                && self.hidden.contains("volume")
+                && self.tpo().is_none()
+                && !self.footprint_shown;
             self.live = live;
+            if unseen {
+                return;
+            }
             // Open interest runs into the forming bar, and in dollars moves with
             // its price: a tick within the bar moves that bar's figure alone.
             if same_bar {
@@ -875,6 +885,12 @@ impl Chart {
     pub fn set_price_decimals(&mut self, decimals: Option<usize>) {
         self.precision_override = decimals.map(|d| d.clamp(0, 10));
         self.touch();
+    }
+
+    /// The leftmost bar in view, as an index into the bars held: how far back
+    /// the reader is, for the page to know when older bars can be let go.
+    pub fn visible_from(&self) -> f64 {
+        self.time.visible().0
     }
 
     pub fn precision(&self) -> usize {
@@ -2571,6 +2587,26 @@ mod tests {
                 Candle { open_time: 1_700_000_000_000 - 1_700_000_000_000 % HOUR + i as i64 * HOUR, open: p - 0.5, high: p + 1.5, low: p - 2.0, close: p + 0.5, volume: 10.0 + i as f64, quote_volume: None }
             })
             .collect()
+    }
+
+    #[test]
+    fn a_trade_that_moves_only_hidden_volume_draws_nothing_and_the_view_says_where_it_starts() {
+        let mut c = chart();
+        let forming = candles(500)[499].open_time + HOUR;
+        let tick = |close: f64, volume: f64| Some(LiveBar { open_time: forming, open: 130.0, high: 131.0, low: 129.0, close, volume, closed: false });
+        c.set_live(tick(130.0, 1.0));
+        c.render(1_800_000_000_000);
+        c.set_live(tick(130.0, 2.0));
+        assert!(c.needs_render(1_800_000_000_000), "volume is drawn");
+        c.set_hidden("volume");
+        c.render(1_800_000_000_000);
+        c.set_live(tick(130.0, 3.0));
+        assert!(!c.needs_render(1_800_000_000_000), "hidden, a volume-only trade changes nothing on screen");
+        assert_eq!(c.live.map(|l| l.volume), Some(3.0), "though it is kept");
+        c.set_live(tick(130.5, 4.0));
+        assert!(c.needs_render(1_800_000_000_000), "a new price is drawn");
+        let from = c.visible_from();
+        assert!(from > 0.0 && from < 500.0, "the view starts inside the bars held: {from}");
     }
 
     #[test]

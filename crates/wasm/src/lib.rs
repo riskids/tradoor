@@ -323,6 +323,10 @@ impl ChartEngine {
         self.chart.cursor().css().to_string()
     }
 
+    pub fn visible_from(&self) -> f64 {
+        self.chart.visible_from()
+    }
+
     pub fn precision(&self) -> u32 {
         self.chart.precision() as u32
     }
