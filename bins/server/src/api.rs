@@ -151,6 +151,7 @@ pub fn router(state: AppState, data_dir: PathBuf, web_dir: Option<PathBuf>) -> R
         .route("/training/orders/{id}", axum::routing::delete(training::cancel))
         .route("/training/positions/{symbol}", axum::routing::patch(training::exits))
         .route("/training/positions/{symbol}/close", axum::routing::post(training::close))
+        .route("/training/positions/{symbol}/reverse", axum::routing::post(training::reverse))
         .route("/training/leverage/{symbol}", axum::routing::put(training::leverage))
         .route("/training/reset", axum::routing::post(training::reset))
         .route("/training/trades", get(training::history))

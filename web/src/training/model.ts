@@ -122,6 +122,7 @@ export const trainingApi = {
   order: (o: NewOrder) => json<{ order?: number; filled?: { price: number; qty: number }; closed?: boolean }>('/api/training/orders', { method: 'POST', body: o }),
   cancel: (id: number) => json<{ id: number }>(`/api/training/orders/${id}`, { method: 'DELETE' }),
   close: (symbol: string, qty?: number) => json<{ price: number; qty: number; closed: boolean }>(`/api/training/positions/${symbol}/close`, { method: 'POST', body: qty === undefined ? {} : { qty } }),
+  reverse: (symbol: string) => json<{ price: number; qty: number; side: Side | null }>(`/api/training/positions/${symbol}/reverse`, { method: 'POST' }),
   exits: (symbol: string, exits: { tp?: number | null; sl?: number | null }) => json<{ tp: number | null; sl: number | null }>(`/api/training/positions/${symbol}`, { method: 'PATCH', body: exits }),
   leverage: (symbol: string, leverage: number) => json<{ leverage: number }>(`/api/training/leverage/${symbol}`, { method: 'PUT', body: { leverage } }),
   reset: () => json<{ run: number }>('/api/training/reset', { method: 'POST' }),

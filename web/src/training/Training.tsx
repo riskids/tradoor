@@ -602,6 +602,9 @@ function Positions(props: {
                         <button class="tb" disabled={props.busy} data-tip="Close half at the market" onClick={() => void props.act(() => trainingApi.close(symbol, Number((p().qty / 2).toPrecision(6))))}>
                           50%
                         </button>
+                        <button class="tb" disabled={props.busy} data-tip={`Close it and open as much ${p().side === 'long' ? 'short' : 'long'} at the market, with no TP / SL`} onClick={() => void props.act(() => trainingApi.reverse(symbol))}>
+                          Reverse
+                        </button>
                         <button class="tb" disabled={props.busy} data-tip="Close it all at the market" onClick={() => void props.act(() => trainingApi.close(symbol))}>
                           Close
                         </button>

@@ -139,7 +139,7 @@ The file format is described in [format.md](format.md).
 | `GET /api/journal/reviews` · `PUT /api/journal/reviews/{week}` | this browser's weekly reviews; save a week's answers, for an account only |
 | `GET /api/training` · `GET /api/training/trades?run=` | training, for an account only: cash, leverages, positions with their liquidation prices, resting orders and the coins' live prices; a run's closed trades and every run's sum |
 | `POST /api/training/orders` · `DELETE /api/training/orders/{id}` | a market or limit order, long or short, with a take profit and stop loss; a resting order cancelled |
-| `PATCH /api/training/positions/{symbol}` · `POST /api/training/positions/{symbol}/close` · `PUT /api/training/leverage/{symbol}` · `POST /api/training/reset` | a position's take profit and stop loss; closed at the market, all or part; a coin's leverage while it has no position or order; a new run at 100,000 |
+| `PATCH /api/training/positions/{symbol}` · `POST /api/training/positions/{symbol}/close` · `POST /api/training/positions/{symbol}/reverse` · `PUT /api/training/leverage/{symbol}` · `POST /api/training/reset` | a position's take profit and stop loss; closed at the market, all or part; turned the other way at the market, as much against it, with no take profit or stop loss; a coin's leverage while it has no position or order; a new run at 100,000 |
 | `GET /api/history` | archived markets and what each base covers |
 | `GET POST DELETE /api/drawings?market=&timeframe=` | list, create, clear — every timeframe of the market; `timeframe` records where it was drawn |
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |

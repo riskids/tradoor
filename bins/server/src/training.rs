@@ -892,6 +892,43 @@ pub async fn close(State(state): State<AppState>, headers: HeaderMap, Path(symbo
     Ok(Json(json!({ "price": last, "qty": qty, "closed": outcome.closed.is_some() })))
 }
 
+/// What turning a position around at `price` puts up — the margin of as much
+/// the other way, and the taker fee on both — and what closing it gives back
+/// first: its margin, with what it made.
+fn turn_cost(p: &Position, price: f64) -> (f64, f64) {
+    let need = p.qty * price / p.leverage as f64 + 2.0 * p.qty * price * TAKER;
+    let freed = p.margin + (price - p.entry) * p.side.dir() * p.qty;
+    (need, freed)
+}
+
+/// `POST /api/training/positions/{symbol}/reverse`: the position turned the
+/// other way at the last trade, as a taker, in one fill — closed, and as much
+/// opened against it at its leverage, with no take profit or stop loss.
+pub async fn reverse(State(state): State<AppState>, headers: HeaderMap, Path(symbol): Path<String>) -> ApiResult<Json<Value>> {
+    let owner = owner(&headers)?;
+    let symbol = symbol_of(&symbol)?;
+    let last = state.training.quote(&symbol).map(|q| q.last).ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "no live price yet — try again in a moment".into()))?;
+    let mut client = state.pool.get().await?;
+    account_only(&client, &owner).await?;
+    let tx = client.transaction().await?;
+    let account = lock(&tx, &owner).await?.ok_or_else(|| ApiError::not_found("no training account"))?;
+    // Read here, in the fill's own transaction: a stop or a partial close a
+    // moment before leaves a different size to turn than the page last saw.
+    let p = position(&tx, &owner, &symbol).await?.ok_or_else(|| ApiError::not_found(format!("no {symbol} position")))?;
+    if p.qty * last < MIN_NOTIONAL {
+        return Err(ApiError::bad_request(format!("an order is worth at least {MIN_NOTIONAL} USDT")));
+    }
+    let (need, freed) = turn_cost(&p, last);
+    let free = available(&tx, &owner, &account).await? + freed;
+    if need > free + 1e-6 {
+        return Err(ApiError::bad_request(format!("not enough margin to reverse: this takes {need:.2} USDT, {free:.2} is free")));
+    }
+    let outcome = execute(&tx, &owner, &account, &symbol, p.side == Side::Short, 2.0 * p.qty, last, TAKER, None, None, "reversed").await?;
+    tx.commit().await?;
+    state.training.changed.notify_one();
+    Ok(Json(json!({ "price": last, "qty": p.qty, "side": outcome.position.map(|p| p.side.id()) })))
+}
+
 /// `PATCH /api/training/positions/{symbol}` `{tp?, sl?}`: a position's take
 /// profit and stop loss set, or cleared with null.
 pub async fn exits(State(state): State<AppState>, headers: HeaderMap, Path(symbol): Path<String>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
@@ -1041,6 +1078,20 @@ mod tests {
         let s = turn.position.unwrap();
         assert_eq!((s.side, s.qty, s.entry, s.leverage, s.opened_at), (Side::Short, 1.0, 90.0, 5, 9));
         assert_eq!(turn.cash, -10.0);
+    }
+
+    #[test]
+    fn reversing_closes_the_position_and_opens_as_much_the_other_way_bare() {
+        let p = fill(None, true, 2.0, 100.0, 0.0, 10, Some(120.0), Some(90.0), 1).position.unwrap();
+        // Closing at 110 gives back its 20 of margin and the 20 it made; the short puts up 22, and 0.22 of fees.
+        let (need, freed) = turn_cost(&p, 110.0);
+        assert!((need - 22.22).abs() < 1e-9 && (freed - 40.0).abs() < 1e-9);
+        let turn = fill(Some(p), false, 4.0, 110.0, TAKER, 10, None, None, 7);
+        let c = turn.closed.unwrap();
+        assert_eq!((c.side, c.qty, c.exit, c.pnl), (Side::Long, 2.0, 110.0, 20.0));
+        let s = turn.position.unwrap();
+        assert_eq!((s.side, s.qty, s.entry, s.leverage, s.tp, s.sl, s.opened_at), (Side::Short, 2.0, 110.0, 10, None, None, 7), "its own take profit and stop loss do not carry over");
+        assert!((turn.cash - (20.0 - 0.22)).abs() < 1e-9, "what it made, less a taker fee each way");
     }
 
     #[test]
