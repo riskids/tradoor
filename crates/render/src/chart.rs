@@ -26,6 +26,12 @@ const SEPARATOR_GRAB: f32 = 4.0;
 /// A chart opens on this many bars: all of them at once makes every candle a
 /// hairline, which shows the trend and nothing about any setup.
 const DEFAULT_VISIBLE_BARS: f64 = 150.0;
+/// The most bars a chart of 15 minutes or shorter shows at once, zoomed all
+/// the way out — its draw distance. A frame costs what the bars on screen
+/// cost, and a minute chart zoomed out to half a pixel a bar drew 4,800 of
+/// them, three times as many as at this. Longer charts zoom out to `MIN_BAR_SPACING`.
+const MAX_SHOWN_SHORT_BARS: f64 = 1_500.0;
+const SHORT_BAR_MS: i64 = 15 * 60_000;
 const RIGHT_MARGIN_BARS: f64 = 2.0;
 const CLICK_SLOP: f32 = 5.0;
 /// How near an anchor handle counts as grabbing it.
@@ -1109,7 +1115,16 @@ impl Chart {
 
         self.time.width = f64::from(plot_w);
         self.time.bars = self.total_bars();
-        self.time.min_spacing = if self.tpo().is_some() { TPO_MIN_SPACING } else { MIN_BAR_SPACING };
+        let short = self.timeframe.source().interval.ms().is_some_and(|ms| ms * i64::from(self.timeframe.source().group) <= SHORT_BAR_MS);
+        self.time.min_spacing = if self.tpo().is_some() {
+            TPO_MIN_SPACING
+        } else if short {
+            MIN_BAR_SPACING.max(f64::from(plot_w) / MAX_SHOWN_SHORT_BARS)
+        } else {
+            MIN_BAR_SPACING
+        };
+        // Zoomed out past a floor raised since — a wider plot, a shorter timeframe — it holds.
+        self.time.bar_spacing = self.time.bar_spacing.max(self.time.min_spacing);
         if !self.view_ready && self.time.bars > 0 {
             let (bars, margin) = self.opening_bars();
             self.time.show_last(bars, margin);
@@ -3052,6 +3067,33 @@ mod tests {
         // The newest hits are the ones kept.
         assert!(frame.texts.iter().any(|t| t.text == "LONG $20K"), "the newest hit is in the feed");
         assert!(!frame.texts.iter().any(|t| t.text == "LONG $1K"), "the oldest has been pushed out");
+    }
+
+    #[test]
+    fn a_minute_chart_zooms_out_no_further_than_its_draw_distance() {
+        let shown = |tf: ChartTimeframe| {
+            let mut c = Chart::new(tf);
+            c.resize(2_400.0, 600.0, 1.0);
+            c.set_candles(candles(6_000));
+            c.render(1_800_000_000_000);
+            for _ in 0..60 {
+                c.wheel(1_000.0, 200.0, 0.0, 400.0);
+            }
+            c.render(1_800_000_000_000);
+            c.time.width / c.time.bar_spacing
+        };
+        assert!((shown(ChartTimeframe::M1) - MAX_SHOWN_SHORT_BARS).abs() < 1.0, "a minute chart stops at {MAX_SHOWN_SHORT_BARS} bars");
+        assert!((shown(ChartTimeframe::M15) - MAX_SHOWN_SHORT_BARS).abs() < 1.0, "and a 15-minute one");
+        assert!(shown(ChartTimeframe::H1) > 4_000.0, "an hour chart goes on to half a pixel a bar");
+
+        // Zoomed out before the floor came up, it is brought in to it.
+        let mut c = Chart::new(ChartTimeframe::M1);
+        c.resize(2_400.0, 600.0, 1.0);
+        c.set_candles(candles(6_000));
+        c.render(1_800_000_000_000);
+        c.time.bar_spacing = MIN_BAR_SPACING;
+        c.render(1_800_000_000_000);
+        assert!((c.time.width / c.time.bar_spacing - MAX_SHOWN_SHORT_BARS).abs() < 1.0);
     }
 
     #[test]

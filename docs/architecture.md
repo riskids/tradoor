@@ -104,7 +104,9 @@ row.
    more — and `needHistory` widens it 4,000 bars at a time, from bars the
    series already has before any are fetched. Back at the newest, the window
    narrows again, so a bar closing on a minute chart panned months back costs
-   what it does on one opened today.
+   what it does on one opened today. Such a chart also zooms out no further
+   than 1,500 bars on screen: a frame costs what the bars shown cost, and at
+   the half-pixel floor longer charts keep, a wide minute chart drew 4,800.
 
 Series nobody reads are dropped after two minutes, so a deep 1-minute history
 does not outlive its chart.
