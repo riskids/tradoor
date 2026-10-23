@@ -54,6 +54,8 @@ pub struct ChartEngine {
     chart: Chart,
     gl: gl::Surface,
     text: text::TextLayer,
+    /// The liquidation feed, on a 2D canvas over the other two.
+    feed: text::TextLayer,
     /// The size it is shown at, to go back to after drawing a picture larger.
     size: (f32, f32, f32),
 }
@@ -63,13 +65,14 @@ impl ChartEngine {
     #[wasm_bindgen(constructor)]
     /// `flat` draws shapes with the 2D canvas even where WebGL2 is there — the
     /// path older iPhones take, forced so it can be looked at anywhere.
-    pub fn new(gl_canvas: web_sys::OffscreenCanvas, text_canvas: web_sys::OffscreenCanvas, tf: &str, flat: bool) -> Result<ChartEngine, JsValue> {
+    pub fn new(gl_canvas: web_sys::OffscreenCanvas, text_canvas: web_sys::OffscreenCanvas, feed_canvas: web_sys::OffscreenCanvas, tf: &str, flat: bool) -> Result<ChartEngine, JsValue> {
         let mut chart = Chart::new(timeframe(tf)?);
         let text = text::TextLayer::new(text_canvas)?;
+        let feed = text::TextLayer::new(feed_canvas)?;
         chart.set_char_width(text.char_width(chart.theme().font_px));
         let gl = if flat { gl::Surface::Flat(gl::Flat::new(gl_canvas)?) } else { gl::Surface::new(gl_canvas)? };
         chart.set_smooth_lines(matches!(gl, gl::Surface::Gpu(_)));
-        Ok(Self { chart, gl, text, size: (0.0, 0.0, 1.0) })
+        Ok(Self { chart, gl, text, feed, size: (0.0, 0.0, 1.0) })
     }
 
     /// The shapes' GPU context is back after the browser took it away: made
@@ -105,6 +108,7 @@ impl ChartEngine {
         let frame = self.chart.render(now as i64);
         surface.draw(frame);
         text.draw(frame);
+        text.draw_layer(self.chart.render_feed(now as i64), false);
         // Back to the size and the renderer it is shown at.
         self.chart.set_smooth_lines(smooth);
         self.chart.resize(width, height, dpr);
@@ -144,6 +148,7 @@ impl ChartEngine {
     /// Exchange `index`'s mark, drawn on the feed rows of hits from there.
     pub fn set_mark(&mut self, index: u8, box_size: f32, spec: &str) {
         self.text.set_mark(index, box_size, spec);
+        self.feed.set_mark(index, box_size, spec);
         self.chart.touch();
     }
 
@@ -331,15 +336,21 @@ impl ChartEngine {
         self.chart.precision() as u32
     }
 
-    /// Draw if anything changed since the last frame. Returns whether it drew.
+    /// Draw what changed since the last frame: the chart, the liquidation feed
+    /// over it, or both. Returns whether the chart was drawn.
     pub fn draw(&mut self, now: f64) -> bool {
-        if !self.chart.needs_render(now as i64) {
-            return false;
+        let now = now as i64;
+        let chart = self.chart.needs_render(now);
+        if chart {
+            let frame = self.chart.render(now);
+            self.gl.draw(frame);
+            self.text.draw(frame);
         }
-        let frame = self.chart.render(now as i64);
-        self.gl.draw(frame);
-        self.text.draw(frame);
-        true
+        // Over a chart drawn anew, whose panes may have moved, or as a hit moves.
+        if chart || self.chart.needs_feed(now) {
+            self.feed.draw_layer(self.chart.render_feed(now), true);
+        }
+        chart
     }
 
     pub fn take_events(&mut self) -> Array {

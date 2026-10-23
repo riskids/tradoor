@@ -400,7 +400,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   const paused = () => !props.training && covered();
   createEffect(on(paused, (p) => chart.created && send({ t: 'visible', id: sid, value: !p }), { defer: true }));
   onMount(() => {
-    box.prepend(chart.gl, chart.text);
+    box.prepend(chart.gl, chart.text, chart.feed);
     const rect = box.getBoundingClientRect();
     if (chart.created) {
       send({ t: 'visible', id: sid, value: !paused() });
@@ -409,7 +409,8 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
       try {
         const gl = chart.gl.transferControlToOffscreen();
         const text = chart.text.transferControlToOffscreen();
-        send({ t: 'create', id: sid, gl, text, width: rect.width, height: rect.height, dpr: devicePixelRatio, flat: forceFlatRenderer() }, [gl, text]);
+        const feed = chart.feed.transferControlToOffscreen();
+        send({ t: 'create', id: sid, gl, text, feed, width: rect.width, height: rect.height, dpr: devicePixelRatio, flat: forceFlatRenderer() }, [gl, text, feed]);
         chart.created = true;
         if (paused()) send({ t: 'visible', id: sid, value: false });
       } catch (e) {

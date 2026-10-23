@@ -84,8 +84,11 @@ row.
    into a `Frame`: one vertex buffer of triangles in draw order with clip
    batches, and a list of text commands. The worker uploads it in two buffer
    writes and replays the text on the 2D canvas. Nothing is drawn unless
-   something changed or the countdown needs its next second; a liquidation in
-   the feed asks for frames only while it slides in and while it fades. A chart
+   something changed or the countdown needs its next second. The liquidation
+   feed is a third canvas over the chart, a 2D one drawn from a frame of its
+   own: a hit sliding in or fading redraws those few rows, never the candles
+   and studies under them — in a cascade, hits arrive faster than the price
+   moves. A chart
    not seen — its tab switched away, or the workspace under the journal or
    training — keeps its market live and draws nothing, and with no chart
    seen the worker's frame loop stops. Studies are worked out over every bar

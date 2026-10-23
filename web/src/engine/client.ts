@@ -113,6 +113,8 @@ export interface HeldChart {
   readonly id: string;
   readonly gl: HTMLCanvasElement;
   readonly text: HTMLCanvasElement;
+  /** The liquidation feed, over the other two: a hit moving redraws it alone. */
+  readonly feed: HTMLCanvasElement;
   /** Whether the canvases have been handed to the engine yet. */
   created: boolean;
 }
@@ -130,7 +132,7 @@ const charts = new Map<string, HeldChart>();
 export function holdChart(panelId: string, handlers: SlotHandlers): HeldChart {
   let chart = charts.get(panelId);
   if (!chart) {
-    chart = { id: `chart-${nextSlot++}`, gl: document.createElement('canvas'), text: document.createElement('canvas'), created: false };
+    chart = { id: `chart-${nextSlot++}`, gl: document.createElement('canvas'), text: document.createElement('canvas'), feed: document.createElement('canvas'), created: false };
     charts.set(panelId, chart);
     panelOf.set(chart.id, panelId);
   }
@@ -145,6 +147,7 @@ export function releaseChart(panelId: string, stillOpen: boolean): void {
   slots.delete(chart.id);
   chart.gl.remove();
   chart.text.remove();
+  chart.feed.remove();
   if (stillOpen) {
     if (chart.created) send({ t: 'visible', id: chart.id, value: false });
     return;

@@ -336,10 +336,14 @@ pub struct Chart {
     message: Option<String>,
     dirty: bool,
     last_second: i64,
-    /// When the last frame was drawn, for a liquidation that has settled or gone since.
-    rendered_at: i64,
+    /// When the liquidation feed was last drawn, for a hit that has settled or gone since.
+    feed_at: i64,
+    feed_dirty: bool,
     cursor: Cursor,
     frame: Frame,
+    /// The liquidation feed, on a layer of its own over the chart: a hit sliding
+    /// in or fading redraws a few rows, not every candle and study under them.
+    feed: Frame,
 }
 
 impl Chart {
@@ -399,9 +403,11 @@ impl Chart {
             message: None,
             dirty: true,
             last_second: 0,
-            rendered_at: 0,
+            feed_at: 0,
+            feed_dirty: false,
             cursor: Cursor::Crosshair,
             frame: Frame::default(),
+            feed: Frame::default(),
         }
     }
 
@@ -595,12 +601,12 @@ impl Chart {
             self.liquidations.remove(0);
         }
         self.liquidations.push(Liquidation { usd, long, mark, at });
-        self.touch();
+        self.feed_dirty = true;
     }
 
     pub fn clear_liquidations(&mut self) {
         self.liquidations.clear();
-        self.touch();
+        self.feed_dirty = true;
     }
 
     /// `ema:50,rsi:14`.
@@ -1030,16 +1036,21 @@ impl Chart {
         self.cursor
     }
 
-    /// Something changed, the countdown needs its next second, or a liquidation
-    /// ping is sliding in or fading.
+    /// Something changed, or the countdown needs its next second.
     pub fn needs_render(&self, now: i64) -> bool {
-        // A hit moves only as it arrives and as it fades: between, it stands, and the chart rests.
+        self.dirty || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second)
+    }
+
+    /// A liquidation ping is sliding in or fading, or has just gone: the feed's
+    /// layer is drawn again, and the chart under it is not.
+    pub fn needs_feed(&self, now: i64) -> bool {
+        // A hit moves only as it arrives and as it fades: between, it stands, and the feed rests.
         let moving = |l: &Liquidation| {
-            let (was, age) = (self.rendered_at - l.at, now - l.at);
+            let (was, age) = (self.feed_at - l.at, now - l.at);
             let passed = |at: i64| was < at && age >= at;
             age < LIQUIDATION_ENTER || (LIQUIDATION_TTL - LIQUIDATION_FADE..LIQUIDATION_TTL).contains(&age) || passed(LIQUIDATION_ENTER) || passed(LIQUIDATION_TTL)
         };
-        self.dirty || (!self.candles.is_empty() && now.div_euclid(1000) != self.last_second) || self.liquidations.iter().any(moving)
+        self.feed_dirty || self.liquidations.iter().any(moving)
     }
 
     // ------------------------------------------------------------------ layout
@@ -1194,7 +1205,6 @@ impl Chart {
     pub fn render(&mut self, now: i64) -> &Frame {
         self.dirty = false;
         self.last_second = now.div_euclid(1000);
-        self.rendered_at = now;
         let mut frame = std::mem::take(&mut self.frame);
         frame.begin(self.width, self.height, self.dpr, self.theme.background);
         if self.width >= 40.0 && self.height >= 60.0 {
@@ -1216,6 +1226,65 @@ impl Chart {
         }
         self.frame = frame;
         &self.frame
+    }
+
+    /// The liquidation feed's layer, over the chart as last drawn: hits land
+    /// above the volume and ride up and out. Empty while there is no chart to
+    /// stand on, or the chart is between markets.
+    pub fn render_feed(&mut self, now: i64) -> &Frame {
+        self.feed_at = now;
+        self.feed_dirty = false;
+        let mut f = std::mem::take(&mut self.feed);
+        f.begin(self.width, self.height, self.dpr, self.theme.background);
+        if self.width >= 40.0 && self.height >= 60.0 && self.total_bars() > 0 && !self.loading && !self.panes.is_empty() && !self.hidden.contains("liquidations") {
+            self.paint_feed(&mut f, now);
+        }
+        self.feed = f;
+        &self.feed
+    }
+
+    fn paint_feed(&self, f: &mut Frame, now: i64) {
+        let t = &self.theme;
+        let price = self.panes[0];
+        let plot_w = price.plot.w;
+        f.clip(Some(price.plot));
+        let size = t.font_px + 1.0;
+        let mark = (size + 4.0).round();
+        let row = mark + 4.0;
+        // Monospace glyphs scale with the size, from the axis font's width.
+        let glyph = self.char_width * size / t.font_px;
+        // At the foot of the pane, where the volume is shortest and the
+        // candles are not: the feed rises from there rather than sitting
+        // among the bodies.
+        let foot = price.plot.bottom() - 4.0;
+        // The newest hit pushes the whole stack up as it arrives, rather
+        // than snapping a row taller between one frame and the next.
+        let shift = match self.liquidations.last() {
+            Some(l) if now - l.at < LIQUIDATION_ENTER => row * (1.0 - (now - l.at).max(0) as f32 / LIQUIDATION_ENTER as f32),
+            _ => 0.0,
+        };
+        for (slot, l) in self.liquidations.iter().rev().take(LIQUIDATION_ROWS).enumerate() {
+            let age = (now - l.at).max(0);
+            if age >= LIQUIDATION_TTL {
+                break;
+            }
+            let y = foot - slot as f32 * row + shift;
+            if y - row < price.plot.y {
+                break;
+            }
+            // Full strength in the middle of its life: it arrives with the
+            // stack and leaves by fading where it stands.
+            let fade = (age as f32 / LIQUIDATION_ENTER as f32).min((LIQUIDATION_TTL - age) as f32 / LIQUIDATION_FADE as f32).clamp(0.0, 1.0);
+            // A long liquidated is forced selling, so it takes the bear colour.
+            let base = if l.long { t.bear } else { t.bull };
+            let alpha = (40.0 + 200.0 * fade) as u8;
+            let text = format!("{} ${}", if l.long { "LONG" } else { "SHORT" }, format_turnover(l.usd));
+            let width = mark + 4.0 + text.len() as f32 * glyph;
+            let left = (plot_w - width - 8.0).max(0.0);
+            f.rect(left - 4.0, y - row + 1.0, width + 8.0, row - 1.0, t.background.with_alpha((190.0 * fade) as u8));
+            f.icon(left + mark / 2.0, y - row / 2.0, mark, alpha, l.mark, Some(price.plot));
+            f.text(left + mark + 4.0, y - row / 2.0, text, base.with_alpha(alpha), Align::Left, Baseline::Middle, size, None, Some(price.plot));
+        }
     }
 
     /// Bars the chart opens on, and the room right of the last: a screenful of
@@ -1442,48 +1511,6 @@ impl Chart {
                 if on {
                     f.ring(x, y, self.flow_radius(mark) + 2.0, 1.0, base);
                 }
-            }
-        }
-
-        // ---- liquidation feed: hits land above the volume and ride up and out
-        if !self.hidden.contains("liquidations") {
-            f.clip(Some(price.plot));
-            let size = t.font_px + 1.0;
-            let mark = (size + 4.0).round();
-            let row = mark + 4.0;
-            // Monospace glyphs scale with the size, from the axis font's width.
-            let glyph = self.char_width * size / t.font_px;
-            // At the foot of the pane, where the volume is shortest and the
-            // candles are not: the feed rises from there rather than sitting
-            // among the bodies.
-            let foot = price.plot.bottom() - 4.0;
-            // The newest hit pushes the whole stack up as it arrives, rather
-            // than snapping a row taller between one frame and the next.
-            let shift = match self.liquidations.last() {
-                Some(l) if now - l.at < LIQUIDATION_ENTER => row * (1.0 - (now - l.at).max(0) as f32 / LIQUIDATION_ENTER as f32),
-                _ => 0.0,
-            };
-            for (slot, l) in self.liquidations.iter().rev().take(LIQUIDATION_ROWS).enumerate() {
-                let age = (now - l.at).max(0);
-                if age >= LIQUIDATION_TTL {
-                    break;
-                }
-                let y = foot - slot as f32 * row + shift;
-                if y - row < price.plot.y {
-                    break;
-                }
-                // Full strength in the middle of its life: it arrives with the
-                // stack and leaves by fading where it stands.
-                let fade = (age as f32 / LIQUIDATION_ENTER as f32).min((LIQUIDATION_TTL - age) as f32 / LIQUIDATION_FADE as f32).clamp(0.0, 1.0);
-                // A long liquidated is forced selling, so it takes the bear colour.
-                let base = if l.long { t.bear } else { t.bull };
-                let alpha = (40.0 + 200.0 * fade) as u8;
-                let text = format!("{} ${}", if l.long { "LONG" } else { "SHORT" }, format_turnover(l.usd));
-                let width = mark + 4.0 + text.len() as f32 * glyph;
-                let left = (plot_w - width - 8.0).max(0.0);
-                f.rect(left - 4.0, y - row + 1.0, width + 8.0, row - 1.0, t.background.with_alpha((190.0 * fade) as u8));
-                f.icon(left + mark / 2.0, y - row / 2.0, mark, alpha, l.mark, Some(price.plot));
-                f.text(left + mark + 4.0, y - row / 2.0, text, base.with_alpha(alpha), Align::Left, Baseline::Middle, size, None, Some(price.plot));
             }
         }
 
@@ -2966,19 +2993,22 @@ mod tests {
         let mut c = chart();
         let now = 1_800_000_000_000;
         let quiet = c.render(now).vertex_count();
+        assert_eq!(c.render_feed(now).vertex_count(), 0, "no hit, nothing on the feed's layer");
 
         c.push_liquidation(2_000_000.0, true, 0, now);
-        let frame = c.render(now + 100);
-        let (drawn, texts, icons) = (frame.vertex_count(), frame.texts.clone(), frame.icons.len());
-        assert!(drawn > quiet, "the hit is drawn");
+        assert!(!c.needs_render(now + 100), "a hit leaves the chart under it as it was drawn");
+        assert!(c.needs_feed(now + 100), "and slides in on a layer of its own");
+        let frame = c.render_feed(now + 100);
+        let (texts, icons) = (frame.texts.clone(), frame.icons.len());
+        assert!(frame.vertex_count() > 0, "the hit is drawn");
         assert!(texts.iter().any(|t| t.text == "LONG $2.0M"), "says which side was closed out, and how big it was");
         assert_eq!(icons, 1, "with the venue's mark beside the figure");
-        assert!(c.needs_render(now + 100), "and the feed keeps the chart animating");
-        assert!(c.needs_render(now + 400), "to where it settles");
-        c.render(now + 400);
-        assert!(!c.needs_render(now + 900), "where it stands, and the chart rests");
-        c.render(now + 4_050);
-        assert!(c.needs_render(now + 4_150), "until it fades");
+        assert_eq!(c.render(now + 100).vertex_count(), quiet, "and none of it is drawn with the chart");
+        assert!(c.needs_feed(now + 400), "it moves to where it settles");
+        c.render_feed(now + 400);
+        assert!(!c.needs_feed(now + 900), "where it stands, and the feed rests");
+        c.render_feed(now + 4_050);
+        assert!(c.needs_feed(now + 4_150), "until it fades");
 
         // Out of the candles' way: at the foot of the pane, inside it.
         let pane = c.panes[0].plot;
@@ -2988,7 +3018,7 @@ mod tests {
 
         // A second hit, on another exchange, takes the foot and pushes the first up a row.
         c.push_liquidation(4_000.0, false, 1, now + 1_000);
-        let frame = c.render(now + 1_400);
+        let frame = c.render_feed(now + 1_400);
         let marks: Vec<u8> = frame.icons.iter().map(|i| i.mark).collect();
         assert_eq!(marks, [1, 0], "each row carries its own exchange's mark, newest first");
         let ys: Vec<(String, f32)> = frame.texts.iter().filter(|t| t.text.contains('$')).map(|t| (t.text.clone(), t.y)).collect();
@@ -2997,12 +3027,13 @@ mod tests {
         let older = ys.iter().find(|(text, _)| text == "LONG $2.0M").unwrap().1;
         assert!(newest > older, "the newest hit is at the foot and the older one has risen");
 
-        assert_eq!(c.render(now + 1_000 + LIQUIDATION_TTL).vertex_count(), quiet, "five seconds and they are gone");
-        assert!(!c.needs_render(now + 1_000 + LIQUIDATION_TTL), "and the chart rests again");
+        assert!(c.needs_feed(now + 1_000 + LIQUIDATION_TTL), "gone, they are cleared once more");
+        assert_eq!(c.render_feed(now + 1_000 + LIQUIDATION_TTL).vertex_count(), 0, "five seconds and they are gone");
+        assert!(!c.needs_feed(now + 1_000 + LIQUIDATION_TTL), "and the feed rests again");
 
         c.push_liquidation(900.0, false, 0, now);
         c.set_hidden("liquidations");
-        assert_eq!(c.render(now + 100).vertex_count(), quiet, "the layer can be switched off");
+        assert_eq!(c.render_feed(now + 100).vertex_count(), 0, "the layer can be switched off");
     }
 
     #[test]
@@ -3013,7 +3044,8 @@ mod tests {
         for i in 0..20 {
             c.push_liquidation(1_000.0 * f64::from(i + 1), true, 0, now);
         }
-        let frame = c.render(now + 300);
+        c.render(now);
+        let frame = c.render_feed(now + 300);
         let rows = frame.texts.iter().filter(|t| t.text.contains('$')).count();
         assert!(rows <= LIQUIDATION_ROWS, "at most {LIQUIDATION_ROWS} rows, not {rows}");
         assert_eq!(rows, frame.icons.len(), "every row carries its mark");

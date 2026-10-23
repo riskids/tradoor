@@ -255,6 +255,7 @@ class Slot {
     readonly id: string,
     readonly gl: OffscreenCanvas,
     text: OffscreenCanvas,
+    feed: OffscreenCanvas,
     flat = false,
   ) {
     // iOS takes a page's WebGL contexts back when it is put away or short of
@@ -289,7 +290,7 @@ class Slot {
       }
       schedule();
     }, { signal });
-    this.engine = new ChartEngine(gl, text, '1h', flat);
+    this.engine = new ChartEngine(gl, text, feed, '1h', flat);
     for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
     // Every exchange's mark, once: a liquidation names the one it came from.
@@ -1091,7 +1092,7 @@ function handle(msg: ToWorker): void {
   }
   if (msg.t === 'create') {
     try {
-      const slot = new Slot(msg.id, msg.gl, msg.text, msg.flat === true);
+      const slot = new Slot(msg.id, msg.gl, msg.text, msg.feed, msg.flat === true);
       slot.resize(msg.width, msg.height, msg.dpr);
       slots.set(msg.id, slot);
       schedule();

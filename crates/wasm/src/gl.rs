@@ -195,43 +195,47 @@ impl Flat {
         let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
         ctx.set_fill_style_str(&frame.background.css());
         ctx.fill_rect(0.0, 0.0, f64::from(frame.width), f64::from(frame.height));
+        fill_triangles(ctx, frame);
+    }
+}
 
-        let (p, c) = (&frame.positions, &frame.colors);
-        for batch in frame.batches.iter().filter(|b| b.count > 0) {
-            ctx.save();
-            if let Some(clip) = batch.clip {
-                ctx.begin_path();
-                ctx.rect(f64::from(clip.x), f64::from(clip.y), f64::from(clip.w), f64::from(clip.h));
-                ctx.clip();
-            }
-            let (first, last) = (batch.first as usize, (batch.first + batch.count) as usize);
-            let mut run: Option<&[u8]> = None;
-            for v in (first..last).step_by(3) {
-                if v + 2 >= last {
-                    break;
-                }
-                // A triangle is one colour: the engine gives its three vertices the same.
-                let color = &c[v * 4..v * 4 + 4];
-                if run != Some(color) {
-                    if run.is_some() {
-                        ctx.fill();
-                    }
-                    ctx.set_fill_style_str(&format!("rgba({},{},{},{})", color[0], color[1], color[2], f64::from(color[3]) / 255.0));
-                    ctx.begin_path();
-                    run = Some(color);
-                }
-                let at = |i: usize| (f64::from(p[i * 2]), f64::from(p[i * 2 + 1]));
-                let (a, b, d) = (at(v), at(v + 1), at(v + 2));
-                ctx.move_to(a.0, a.1);
-                ctx.line_to(b.0, b.1);
-                ctx.line_to(d.0, d.1);
-                ctx.close_path();
-            }
-            if run.is_some() {
-                ctx.fill();
-            }
-            ctx.restore();
+/// A frame's triangles filled on a 2D canvas as it stands, over what it holds.
+pub fn fill_triangles(ctx: &web_sys::OffscreenCanvasRenderingContext2d, frame: &Frame) {
+    let (p, c) = (&frame.positions, &frame.colors);
+    for batch in frame.batches.iter().filter(|b| b.count > 0) {
+        ctx.save();
+        if let Some(clip) = batch.clip {
+            ctx.begin_path();
+            ctx.rect(f64::from(clip.x), f64::from(clip.y), f64::from(clip.w), f64::from(clip.h));
+            ctx.clip();
         }
+        let (first, last) = (batch.first as usize, (batch.first + batch.count) as usize);
+        let mut run: Option<&[u8]> = None;
+        for v in (first..last).step_by(3) {
+            if v + 2 >= last {
+                break;
+            }
+            // A triangle is one colour: the engine gives its three vertices the same.
+            let color = &c[v * 4..v * 4 + 4];
+            if run != Some(color) {
+                if run.is_some() {
+                    ctx.fill();
+                }
+                ctx.set_fill_style_str(&format!("rgba({},{},{},{})", color[0], color[1], color[2], f64::from(color[3]) / 255.0));
+                ctx.begin_path();
+                run = Some(color);
+            }
+            let at = |i: usize| (f64::from(p[i * 2]), f64::from(p[i * 2 + 1]));
+            let (a, b, d) = (at(v), at(v + 1), at(v + 2));
+            ctx.move_to(a.0, a.1);
+            ctx.line_to(b.0, b.1);
+            ctx.line_to(d.0, d.1);
+            ctx.close_path();
+        }
+        if run.is_some() {
+            ctx.fill();
+        }
+        ctx.restore();
     }
 }
 

@@ -94,6 +94,23 @@ impl TextLayer {
     }
 
     pub fn draw(&mut self, frame: &Frame) {
+        self.begin(frame, true);
+        self.texts(frame);
+        self.draw_marks(frame);
+    }
+
+    /// A frame of its own on this canvas — the liquidation feed's, over the
+    /// chart: its shapes filled here rather than on the GPU, then its text and
+    /// marks. Not `clear`ed, it goes over what the canvas holds, for a picture.
+    pub fn draw_layer(&mut self, frame: &Frame, clear: bool) {
+        self.begin(frame, clear);
+        crate::gl::fill_triangles(&self.ctx, frame);
+        self.texts(frame);
+        self.draw_marks(frame);
+    }
+
+    /// The canvas at the frame's size and scale, and wiped if `clear`.
+    fn begin(&self, frame: &Frame, clear: bool) {
         let (w, h) = ((frame.width * frame.dpr).round().max(1.0) as u32, (frame.height * frame.dpr).round().max(1.0) as u32);
         if self.canvas.width() != w {
             self.canvas.set_width(w);
@@ -101,11 +118,15 @@ impl TextLayer {
         if self.canvas.height() != h {
             self.canvas.set_height(h);
         }
-        let ctx = &self.ctx;
         let dpr = f64::from(frame.dpr);
-        let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
-        ctx.clear_rect(0.0, 0.0, f64::from(frame.width), f64::from(frame.height));
+        let _ = self.ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
+        if clear {
+            self.ctx.clear_rect(0.0, 0.0, f64::from(frame.width), f64::from(frame.height));
+        }
+    }
 
+    fn texts(&self, frame: &Frame) {
+        let ctx = &self.ctx;
         let mut current = (0.0f32, None::<Align>, None::<Baseline>);
         for t in &frame.texts {
             if let Some(c) = t.clip {
@@ -156,6 +177,5 @@ impl TextLayer {
                 current = (0.0, None, None);
             }
         }
-        self.draw_marks(frame);
     }
 }
