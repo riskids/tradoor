@@ -6,19 +6,19 @@ first.
 
 | Part | What it is |
 |---|---|
-| Chart engine | Rust compiled to WebAssembly (115 KB gzip after wasm-opt), run in a Web Worker. Candles are drawn with WebGL2 on an OffscreenCanvas and text on a 2D layer, so the page thread never touches a candle. |
+| Chart engine | Rust compiled to WebAssembly (about 155 KB gzip after wasm-opt), run in a Web Worker. Candles are drawn with WebGL2 on an OffscreenCanvas, text on a 2D layer and the liquidation feed on a third, so the page thread never touches a candle. |
 | History | Immutable columnar partition files, about 16 bytes per 1-minute bar: five years of BTCUSDT perpetual minutes is 42 MB. Served from disk or a CDN and cached by the browser for a year. |
 | Live | Exchange WebSockets straight to the browser: trades folded into the forming bar between kline updates, and liquidations feeding a ticker above the volume and a tape of their own as they land. |
 | Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, and a day of liquidations for a few tickers. |
 | Database | PostgreSQL 18, for metadata only. Candles never enter it. |
-| UI | SolidJS (35 KB gzip): splits, tabs, docking by drag, link groups, command palette, theme; one chart and a menu on a phone. |
+| UI | SolidJS (about 50 KB brotli): splits, tabs, docking by drag, link groups, command palette, theme; one chart and a menu on a phone. |
 
 ## Repository
 
 ```text
 crates/core      candles, timeframes, indicators and studies with Pine Script semantics; no dependencies
 crates/codec     the TDC1 partition format (docs/format.md)
-crates/venues    the exchanges: market lists, klines, archives (Binance and Bybit)
+crates/venues    the exchanges: market lists, klines, Binance's archives
 crates/store     the data directory and PostgreSQL metadata
 crates/ingest    archive and REST sync into partitions
 crates/render    the chart as a pure model: layout, scales, interaction, frames
@@ -57,9 +57,12 @@ set -a; . ./.env; set +a
 cd web && deno install && deno task dev   # http://127.0.0.1:5173
 ```
 
-Markets are written `venue:SYMBOL`, with the venue one of `binance-spot`,
-`binance-perp`, `bybit-spot` or `bybit-perp`. A market that has not been backfilled
-still charts: its candles come from the exchange's REST API instead of partitions.
+Markets are written `venue:SYMBOL`: `binance-spot`, `binance-perp`, `bybit-spot`,
+`bybit-perp`, `okx-spot`, `okx-perp`, `bitget-spot`, `bitget-perp`,
+`hyperliquid-perp`, `kraken-spot`, `kraken-perp`, `lighter-perp`, or `index` for
+the market measures the server works out itself. A market that has not been
+backfilled still charts: its candles come from the exchange's REST API instead
+of partitions.
 
 `cargo test` runs the Rust tests; `deno task check` type-checks the web app,
 `deno task test` replays recorded exchange payloads through the stream hub, and
@@ -172,6 +175,24 @@ TRADOOR_ADMINS=<browser id>,<another browser id>
 
 Without it the panel only reads the coins already recorded.
 
+## Charts
+
+Timeframes run from one minute to a year. Those of several bars — 2D, 3D, 2W,
+3M, 6M, 12M — are folded from days, and their forming bar is built from the
+day's stream, so every timeframe shows the same price at the same moment.
+
+A chart of 15 minutes or shorter keeps an open world: it holds a window of the
+newest bars (6,000, or back to the week's open if more), widened as you pan
+back into history and let go again once you are back at the newest, and it
+zooms out no further than 1,500 bars on screen. A minute chart with months
+behind it costs what one opened today does.
+
+Drawings belong to the market and show on every timeframe. On a timeframe
+longer than the one a drawing was made on, its points stand on the bar holding
+their time, as TradingView places them; at its own timeframe and shorter ones
+they stay where they were put. A line is only drawn, dashed or not, where it is
+on screen, however far past it it reaches.
+
 ## Trading journal
 
 Journal in the top bar (or the phone's menu). Every Long or Short position
@@ -187,15 +208,17 @@ take profits, partial cut losses and averaged entries, each a price and a
 percent of the size — that price fills as it reaches them. It is kept for a
 Telegram account: sign in (in the Journal, or in
 Settings) and it is written down, and follows you to any device you sign in on;
-until then positions are drawn as before, and none is recorded.
+until then positions are drawn as before, and none is recorded. The dashboard's
+P&L calendar ends each week with its total in R.
 
 ## Training
 
 Training in the top bar (or the phone's menu): paper trading on Binance's BTC,
 ETH and SOL perpetuals at their live prices, with 100,000 USDT to start. Market
 and limit orders, long and short, up to 100x on isolated margin, a take profit
-and stop loss; liquidation, fees and funding as Binance has them, the server
-filling everything as the prices come, browser open or not. The one-minute
+and stop loss; Reverse on a position turns it the other way at the market,
+as much against it, in one fill; liquidation, fees and funding as Binance has
+them, the server filling everything as the prices come, browser open or not. The one-minute
 chart takes indicators and drawings, and draws every trade where it was taken;
 the positions show what they make as the price moves, and the statistics —
 win rate, net, profit factor, drawdown, by coin, side and how each ended —
@@ -216,14 +239,22 @@ other market.
 
 ## Security
 
-There are no accounts: a browser's random id is what makes its drawings and
-layout its own, and the id never leaves it except to this server. What keeps
-one visitor from spoiling the server for the rest is in
+A browser that has not signed in is known by the random id it made, and that
+id is what makes its drawings and layout its own; it never leaves the browser
+except to this server. A browser signed in with Telegram holds a session
+instead — a random token of its own, of which the server keeps only a hash —
+so an account's id seen over a shoulder or in a screenshot opens nothing, and
+signing out of one browser, or of all of them (`/signout` to the bot), ends
+their sessions (`bins/server/src/session.rs`). The journal and training are
+for accounts only.
+
+What keeps one visitor from spoiling the server for the rest is in
 `bins/server/src/limits.rs` — a request rate per address, per kind of request;
 a cap on relayed and live streams per address; a shared rate per exchange host
-for the relay, below what would get the server's address banned; caps on
-drawings and workspaces per browser id and on new ids per address. Open
-interest records only coins some exchange lists a perpetual on.
+for the relay, below what would get the server's address banned, and a cap on
+how fast and how much a browser may send up a relayed stream; caps on drawings
+and workspaces per browser id and on new ids per address. Open interest records
+only coins some exchange lists a perpetual on.
 
 The server reads the visitor's address from nginx's `X-Real-IP`, so it must only
 be reachable through nginx — `deploy/compose.yml` publishes it on loopback.
@@ -250,8 +281,8 @@ Each browser makes a random id on first visit (Settings → Advanced) and its
 drawings, layout, watchlists, indicators and alerts are kept on the server
 under it: a private window or another browser starts empty. Sign in with
 Telegram (Settings → Account) and they follow you: on another device, or after
-clearing the browser's history, sign in again and the browser has the same id
-back. The tradoor bot asks you to confirm each sign-in in your Telegram chat.
+clearing the browser's history, sign in again and the browser has them back.
+The tradoor bot asks you to confirm each sign-in in your Telegram chat.
 Without a bot the id can still be carried by hand, pasted under Advanced.
 
 Drawings and the layout saved before browsers had ids belong to nobody. Give
