@@ -4,6 +4,8 @@ A trading terminal in the browser: TradingView-style charts and ExoCharts-style
 market profiles in a workspace you lay out yourself. Lightness and speed come
 first.
 
+![The workspace: a BTCUSDT chart, its TPO by day, its values, a watchlist and alerts](docs/screenshots/workspace.webp)
+
 | Part | What it is |
 |---|---|
 | Chart engine | Rust compiled to WebAssembly (about 155 KB gzip after wasm-opt), run in a Web Worker. Candles are drawn with WebGL2 on an OffscreenCanvas, text on a 2D layer and the liquidation feed on a third, so the page thread never touches a candle. |
@@ -12,6 +14,47 @@ first.
 | Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, and a day of liquidations for a few tickers. |
 | Database | PostgreSQL 18, for metadata only. Candles never enter it. |
 | UI | SolidJS (about 50 KB brotli): splits, tabs, docking by drag, link groups, command palette, theme; one chart and a menu on a phone. |
+
+## Screenshots
+
+**Market profile.** A chart split into TPO profiles by day, each session with
+its value area.
+
+![TPO profiles by day](docs/screenshots/tpo.webp)
+
+**Footprint.** Volume bought and sold at each price inside every bar, with the
+bar's value area, stats and profile.
+
+![A footprint chart](docs/screenshots/footprint.webp)
+
+**Liquidations.** One ticker's liquidations on every exchange, as a tape and as
+totals over the last hour to day.
+
+![The liquidations panel](docs/screenshots/liquidations.webp)
+
+**Flow.** Net taker flow on each exchange, over the last minute to day.
+
+![The flow panel](docs/screenshots/flow.webp)
+
+**Signals.** The screener's three drives on the 4H, 1D and 1W across 200 coins,
+each with its entry, targets and stop, and how it went.
+
+![The signal panel](docs/screenshots/signals.webp)
+
+**Trading journal.** The dashboard of closed trades: the figures that matter,
+the equity curve, the P&L calendar with each week's R, and the breakdowns by
+pair, side and strategy (sample trades).
+
+![The journal's dashboard](docs/screenshots/journal.webp)
+
+**Training.** Paper trading at live prices: the ticket, the chart, and an open
+position with its take profit, stop loss and Reverse.
+
+![Training](docs/screenshots/training.webp)
+
+**On a phone.** One chart and a menu.
+
+<img src="docs/screenshots/mobile.webp" alt="tradoor on a phone" width="300">
 
 ## Repository
 
