@@ -18,6 +18,7 @@
   <img alt="SolidJS" src="https://img.shields.io/badge/UI-SolidJS-2c4f7c?style=flat-square&logo=solid&logoColor=white">
   <img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-336791?style=flat-square&logo=postgresql&logoColor=white">
   <img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3a3a3a?style=flat-square">
+  <a href="https://github.com/rsalianto/tradoor/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/rsalianto/tradoor?style=flat-square&color=aafd35&labelColor=3a3a3a"></a>
   <br>
   <img alt="Binance · Bybit · OKX · Bitget · Hyperliquid · Kraken · Lighter" src="https://img.shields.io/badge/Binance%20%C2%B7%20Bybit%20%C2%B7%20OKX%20%C2%B7%20Bitget%20%C2%B7%20Hyperliquid%20%C2%B7%20Kraken%20%C2%B7%20Lighter-live-aafd35?style=flat-square">
 </p>
@@ -33,7 +34,8 @@
   <a href="#get-started">Get started</a> ·
   <a href="#self-hosting">Self-hosting</a> ·
   <a href="#security">Security</a> ·
-  <a href="docs/architecture.md">Architecture</a>
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="https://github.com/rsalianto/tradoor/discussions">Discussions</a>
 </p>
 
 <br>
