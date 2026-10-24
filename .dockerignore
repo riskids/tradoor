@@ -1,7 +1,6 @@
 target
 data
 .git
-.claude
 .env
 .env.*
 !.env.example
