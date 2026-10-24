@@ -226,11 +226,12 @@ impl ChartTimeframe {
         Source { interval, group }
     }
 
-    /// The kline stream that carries this timeframe's forming bar. The folded
-    /// timeframes have none: the exchange publishes nothing shaped like them.
-    pub fn live_interval(self) -> Option<Interval> {
+    /// The kline stream that carries this timeframe's forming bar: its own, or
+    /// for a folded one — the exchange publishes nothing shaped like it — the
+    /// days its history is kept at, combined into the bar as they stream.
+    pub fn live_interval(self) -> Interval {
         let source = self.source();
-        (source.group == 1).then_some(source.interval)
+        if source.group == 1 { source.interval } else { self.history_base() }
     }
 
     /// The resolution stored history is kept at for this timeframe. Everything
@@ -408,8 +409,10 @@ mod tests {
         assert_ne!(ChartTimeframe::M1.source(), ChartTimeframe::Mo1.source());
         assert_eq!(ChartTimeframe::parse("1M"), Some(ChartTimeframe::Mo1));
         assert_eq!(ChartTimeframe::Mo12.source().group, 12);
-        assert_eq!(ChartTimeframe::D3.live_interval(), None);
-        assert_eq!(ChartTimeframe::W1.live_interval(), Some(Interval::W1));
+        assert_eq!(ChartTimeframe::D3.live_interval(), Interval::D1);
+        assert_eq!(ChartTimeframe::W1.live_interval(), Interval::W1);
+        assert_eq!(ChartTimeframe::W2.live_interval(), Interval::D1, "built from the days its history is kept at, not from weeks");
+        assert_eq!(ChartTimeframe::Mo3.live_interval(), Interval::D1);
     }
 
     #[test]

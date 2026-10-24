@@ -3,7 +3,7 @@
  * canvases. The page sends input and settings; this sends back only what the
  * page shows in the DOM — legend, cursor, events and status.
  */
-import init, { ChartEngine, LiveFeedEngine, fold_candles, indicator_values, profile_spec, study_catalog, timeframe_info } from '../wasm/pkg/tradoor_wasm.js';
+import init, { ChartEngine, LiveFeedEngine, bar_start, fold_candles, indicator_values, profile_spec, study_catalog, timeframe_info } from '../wasm/pkg/tradoor_wasm.js';
 import wasmUrl from '../wasm/pkg/tradoor_wasm_bg.wasm?url';
 import { decimalsOf, MAX_PRICE_DECIMALS } from '../lib/format';
 import { demoHit } from '../lib/demo';
@@ -60,7 +60,8 @@ interface TfInfo {
   interval: string;
   group: number;
   base: string;
-  live: string | null;
+  /** The kline stream the forming bar is built from: its own length, or for a 2D, 3D, 2W or 3M bar the days it groups. */
+  live: string;
   barMs: number;
   baseMs: number;
   intervalMs: number;
@@ -143,20 +144,6 @@ async function openChartSeries(market: string, tf: TfInfo): Promise<CandleSeries
   return new RatioSeries([a!, b!], tf.timeframe, fold, (leg, bars) => baseBars(leg, tf, bars));
 }
 
-/** Where the chart's bar of `timeframe` that `t` falls in opens. */
-function barStart(timeframe: string, t: number): number {
-  const d = new Date(t);
-  if (timeframe === '1M') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-  if (timeframe === '1w') {
-    // The epoch was a Thursday; weeks open on Monday.
-    const week = 7 * 86_400_000;
-    const monday = 4 * 86_400_000;
-    return Math.floor((t - monday) / week) * week + monday;
-  }
-  const ms = intervalMs(timeframe);
-  return Math.floor(t / ms) * ms;
-}
-
 /**
  * Shorter klines combined into the chart's forming bar: the parts of it
  * already closed come from the loaded history, the rest as they stream.
@@ -165,7 +152,8 @@ function combiner(timeframe: string, history: Cols): (k: KlineMsg) => KlineMsg |
   const parts = new Map<number, KlineMsg>();
   let open = Number.NEGATIVE_INFINITY;
   return (k) => {
-    const start = barStart(timeframe, k.openTime);
+    // The engine's own calendar, so a 2D, 2W or 3M bar opens where its folded history does.
+    const start = bar_start(timeframe, k.openTime);
     if (start < open) return null;
     if (start > open) {
       open = start;
@@ -507,7 +495,7 @@ class Slot {
    */
   private liveEarly(tf: TfInfo): boolean {
     const ref = parseMarket(this.market);
-    return !ratioLegs(this.market) && ref !== null && tf.live !== null && marketInterval(this.market, ref.venue, tf.live) === tf.live;
+    return !ratioLegs(this.market) && ref !== null && tf.group === 1 && marketInterval(this.market, ref.venue, tf.live) === tf.live;
   }
 
   /**
@@ -519,9 +507,9 @@ class Slot {
    */
   private seed(gen: number, tf: TfInfo): void {
     const ref = parseMarket(this.market);
-    if (!ref || !tf.live || ratioLegs(this.market)) return;
+    if (!ref || ratioLegs(this.market)) return;
     const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
-    const start = barStart(this.timeframe, Date.now());
+    const start = bar_start(this.timeframe, Date.now());
     void formingRows(this.market, marketInterval(this.market, ref.venue, tf.live), start)
       .then((rows) => {
         if (gen !== this.gen || rows.length === 0 || feed.bar() !== null) return;
@@ -640,21 +628,22 @@ class Slot {
     // for at once, before the stream has even found its feet again.
     this.cleanup.push(onWake(() => void this.series?.refreshTail(true).catch(() => undefined)));
     const legs = ratioLegs(this.market);
-    if (legs && tf.live && this.series?.source === 'ratio') {
-      this.startRatioLive(gen, tf.live, legs, this.series as RatioSeries);
+    if (legs && this.series?.source === 'ratio') {
+      this.startRatioLive(gen, tf, legs, this.series as RatioSeries);
       return;
     }
     const ref = parseMarket(this.market);
-    if (!ref || !tf.live) {
+    if (!ref) {
       this.setStatus({ live: 'off' });
       const timer = setInterval(() => void this.series?.refreshTail(), POLL_MS);
       this.cleanup.push(() => clearInterval(timer));
       return;
     }
     const feed = (this.feed ??= new LiveFeedEngine(this.timeframe));
-    // An exchange without this length streams a shorter one, combined here into the chart's bar.
+    // A bar of several days streams them, and an exchange without this length
+    // a shorter one: either is combined here into the chart's bar.
     const streamed = marketInterval(this.market, ref.venue, tf.live);
-    const combine = streamed !== tf.live ? combiner(this.timeframe, this.series?.cols ?? emptyCols()) : null;
+    const combine = streamed !== tf.live || tf.group > 1 ? combiner(this.timeframe, this.series?.cols ?? emptyCols()) : null;
     const listener: StreamListener = {
       message: (m: StreamMsg) => {
         if (gen !== this.gen) return;
@@ -692,7 +681,7 @@ class Slot {
    * chart's bar where its exchange streams a shorter one — and the two divided
    * whenever both stand on the same bar. It is live when both are.
    */
-  private startRatioLive(gen: number, live: string, legs: [string, string], series: RatioSeries): void {
+  private startRatioLive(gen: number, tf: TfInfo, legs: [string, string], series: RatioSeries): void {
     const feed = new LiveFeedEngine(this.timeframe);
     this.feed = feed;
     let off = false;
@@ -701,8 +690,8 @@ class Slot {
     });
     legs.forEach((leg, i) => {
       const ref = parseMarket(leg) as MarketRef;
-      const streamed = marketInterval(leg, ref.venue, live);
-      const combine = streamed !== live ? combiner(this.timeframe, series.legs[i]!.cols) : null;
+      const streamed = marketInterval(leg, ref.venue, tf.live);
+      const combine = streamed !== tf.live || tf.group > 1 ? combiner(this.timeframe, series.legs[i]!.cols) : null;
       const listener: StreamListener = {
         message: (m: StreamMsg) => {
           if (gen !== this.gen || m.kind !== 'kline') return;

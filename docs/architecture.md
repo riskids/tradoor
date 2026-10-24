@@ -57,7 +57,10 @@ row.
 3. `fold_candles` builds the chart timeframe from the base bars — 4h from 1h, a
    Monday-aligned week from days — and drops a bucket that has not closed.
 4. The kline stream (plus aggregate trades on Binance) feeds `LiveFeedEngine`,
-   which never lets a stale kline rewind trades already folded. When the bar
+   which never lets a stale kline rewind trades already folded. A bar of
+   several — 2D, 3D, 2W, 3M — streams the days it is folded from, combined
+   with the days of it already closed into one forming bar opening where the
+   engine's calendar says (`bar_start`). When the bar
    rolls over, the finished bar is kept as closed until REST confirms it. The
    stream is asked for beside the history rather than after it, and the forming
    bar is first read from REST (`formingRows`) — a quiet market's stream can say

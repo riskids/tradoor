@@ -562,6 +562,13 @@ pub fn decode_partition(bytes: &[u8]) -> Result<Object, JsValue> {
     Ok(o)
 }
 
+/// Where the chart bar holding `t` opens: a 2D bar on even days from the
+/// epoch, a 2W one on every other Monday, a 3M one on the quarter.
+#[wasm_bindgen]
+pub fn bar_start(tf: &str, t: f64) -> Result<f64, JsValue> {
+    Ok(timeframe(tf)?.align(t as i64) as f64)
+}
+
 /// Fold candles into a chart timeframe, dropping a bucket that has not closed.
 #[wasm_bindgen]
 pub fn fold_candles(tf: &str, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], now: f64) -> Result<Object, JsValue> {
@@ -599,7 +606,7 @@ pub fn timeframe_info(tf: &str) -> Result<Object, JsValue> {
     set(&o, "interval", source.interval.as_str());
     set(&o, "group", source.group);
     set(&o, "base", tf.history_base().as_str());
-    set(&o, "live", tf.live_interval().map_or(JsValue::NULL, |i| JsValue::from_str(i.as_str())));
+    set(&o, "live", tf.live_interval().as_str());
     set(&o, "barMs", approx(source.interval) * f64::from(source.group));
     set(&o, "baseMs", approx(tf.history_base()));
     set(&o, "intervalMs", approx(source.interval));
