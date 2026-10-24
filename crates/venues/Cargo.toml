@@ -2,6 +2,7 @@
 name = "tradoor-venues"
 description = "Exchange URLs and response parsers for Binance and Bybit. No networking: callers fetch, this crate only knows the shapes."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

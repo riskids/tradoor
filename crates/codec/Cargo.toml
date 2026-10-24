@@ -2,6 +2,7 @@
 name = "tradoor-codec"
 description = "The candle partition format: integer ticks, delta + varint columns. Decoding has no dependencies so it runs in the browser worker."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

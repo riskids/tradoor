@@ -2,6 +2,7 @@
 name = "tradoor-ingest"
 description = "Fetch closed candles from exchange archives and REST, roll them up, keep them on disk."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

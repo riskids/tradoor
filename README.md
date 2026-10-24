@@ -1,62 +1,222 @@
-# tradoor
+<p align="center">
+  <a href="https://tradoor.rsalianto.com/">
+    <img src="web/public/logo.svg" width="112" height="112" alt="tradoor: a lime door ajar on a dark tile">
+  </a>
+</p>
 
-A trading terminal in the browser: TradingView-style charts and ExoCharts-style
-market profiles in a workspace you lay out yourself. Lightness and speed come
-first.
+<h1 align="center">tradoor</h1>
 
-![The workspace: a BTCUSDT chart, its TPO by day, its values, a watchlist and alerts](docs/screenshots/workspace.webp)
+<p align="center">
+  <b>A trading terminal in the browser, built for speed.</b><br>
+  TradingView-style charts and ExoCharts-style market profiles in a workspace you lay out yourself,<br>
+  drawn by a Rust engine in WebAssembly and fed live from the exchanges.
+</p>
+
+<p align="center">
+  <img alt="Rust and WebAssembly" src="https://img.shields.io/badge/Rust-WebAssembly-b7410e?style=flat-square&logo=rust">
+  <img alt="WebGL2" src="https://img.shields.io/badge/WebGL2-OffscreenCanvas-990000?style=flat-square&logo=webgl&logoColor=white">
+  <img alt="SolidJS" src="https://img.shields.io/badge/UI-SolidJS-2c4f7c?style=flat-square&logo=solid&logoColor=white">
+  <img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-336791?style=flat-square&logo=postgresql&logoColor=white">
+  <img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3a3a3a?style=flat-square">
+  <br>
+  <img alt="Binance · Bybit · OKX · Bitget · Hyperliquid · Kraken · Lighter" src="https://img.shields.io/badge/Binance%20%C2%B7%20Bybit%20%C2%B7%20OKX%20%C2%B7%20Bitget%20%C2%B7%20Hyperliquid%20%C2%B7%20Kraken%20%C2%B7%20Lighter-live-aafd35?style=flat-square">
+</p>
+
+<p align="center">
+  <a href="https://tradoor.rsalianto.com/"><img alt="Open tradoor" src="https://img.shields.io/badge/Open%20tradoor-tradoor.rsalianto.com-aafd35?style=for-the-badge&labelColor=070907" height="36"></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#everything-in-the-box">Everything in the box</a> ·
+  <a href="#under-the-hood">Under the hood</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#self-hosting">Self-hosting</a> ·
+  <a href="#security">Security</a> ·
+  <a href="docs/architecture.md">Architecture</a>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="docs/screenshots/workspace.webp" alt="The workspace: a BTCUSDT hourly chart with its EMA ribbon and Stoch RSI, the same market as TPO profiles by day, its values, a watchlist and alerts" width="100%">
+  <br>
+  <sub>One workspace: a chart, its market profile by day, its values, a watchlist and alerts, linked by colour.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="25%" valign="top">
+      <h3>⚡ Light and fast</h3>
+      The chart engine is Rust in a Web Worker, drawing with WebGL2 on an OffscreenCanvas, so the page thread never touches a candle. A minute chart with months behind it costs what one opened today does.
+    </td>
+    <td width="25%" valign="top">
+      <h3>📊 Market profile</h3>
+      TPO profiles by session, footprints with bid and ask at every price, value areas, and a Values panel that reads a market at a glance.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🔥 Live from the source</h3>
+      Exchange streams straight to the browser: trades fold into the forming bar, liquidations land from twelve exchanges, and net taker flow is counted per venue.
+    </td>
+    <td width="25%" valign="top">
+      <h3>📓 Journal and training</h3>
+      Every position you draw becomes a trade that price settles, and a paper account trades Binance's perpetuals at their live prices.
+    </td>
+  </tr>
+</table>
+
+<br>
+
+## Features
+
+Every screenshot is the live site, or for the journal and training a local one with sample trades.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/tpo.webp" alt="BTCUSDT hourly bars as TPO profiles by day, each with its value area high and low marked" width="100%">
+      <br>
+      <sub>An hourly chart split into a TPO profile per day.</sub>
+      <h3>Market profile</h3>
+      Any chart can be read as TPO profiles — by day, week or month — each session with its value area, point of control and single prints, and the price axis, drawings and indicators still in place.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/footprint.webp" alt="A 15-minute BTCUSDT footprint chart: each bar split into the volume sold and bought at every price" width="100%">
+      <br>
+      <sub>Fifteen-minute bars as footprints, sold against bought at every price.</sub>
+      <h3>Footprint</h3>
+      Volume bought and sold at each price inside every bar — split, delta, total, cluster or ladder — with each bar's value area, stats and profile.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/liquidations.webp" alt="The liquidations panel for BTCUSDT: totals for the last hour, 4 hours, 12 hours and day, and a tape of each liquidation with its exchange, side, price and size" width="100%">
+      <br>
+      <sub>BTCUSDT's liquidations on every exchange, as totals and as a tape.</sub>
+      <h3>Liquidations</h3>
+      One ticker's liquidations from twelve exchanges as they land: a tape with each one's venue, side, price and size, totals over the last hour to day, and a feed riding up the chart above the volume.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/signals.webp" alt="The signal panel: three-drive patterns found across 200 coins on the 4H, 1D and 1W, each with its entry, targets and stop, and the triggered ones with how they went" width="100%">
+      <br>
+      <sub>The screener's three drives across 200 coins.</sub>
+      <h3>Signals</h3>
+      A screener scans 200 coins on the 4H, 1D and 1W for three drives into a line, with each one's entry, targets and stop, follows it until it is filled, stopped or gone, and can tell Telegram.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/journal.webp" alt="The journal's dashboard: net P&L, win rate, total R, profit factor, drawdown and streak; the equity curve; the P&L calendar with each week's R; and the breakdowns by pair, side and strategy" width="100%">
+      <br>
+      <sub>The journal's dashboard, with sample trades.</sub>
+      <h3>Trading journal</h3>
+      Every Long or Short position drawn on a chart is a trade, kept in step as you move it and settled by price — entry, then target or stop — with partial exits, averaged entries, strategies and notes. The dashboard reads it back: the figures that matter, the equity curve, a P&L calendar with each week's R, and a weekly review.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/training.webp" alt="Training: a one-minute BTCUSDT chart, the order ticket with leverage and size, and an open long with its take profit, stop loss, Reverse and Close" width="100%">
+      <br>
+      <sub>Paper trading at live prices, an open long with its take profit and stop loss.</sub>
+      <h3>Training</h3>
+      100,000 USDT on Binance's BTC, ETH and SOL perpetuals at their live prices: market and limit orders, up to 100× on isolated margin, take profit, stop loss and Reverse, with liquidation, fees and funding as Binance has them — filled by the server, browser open or not.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/flow.webp" alt="The flow panel: BTC's net taker flow on each exchange over the last minute, hour, 4 hours, 12 hours and day" width="100%">
+      <br>
+      <sub>BTC's net taker flow per exchange.</sub>
+      <h3>Flow</h3>
+      Net taker flow on each exchange, spot and perpetual, over the last minute to day, and the minutes that ran hard one way marked on the chart where they traded.
+    </td>
+    <td width="50%" valign="top" align="center">
+      <img src="docs/screenshots/mobile.webp" alt="tradoor on a phone: a 15-minute BTCUSDT chart with its tools down the side" width="46%">
+      <br>
+      <sub>On a phone: one chart and a menu.</sub>
+      <h3>Everywhere</h3>
+      The same terminal on a phone, with touch gestures, and on any browser that runs WebGL2 — falling back to a 2D canvas where it does not.
+    </td>
+  </tr>
+</table>
+
+<br>
+
+## Everything in the box
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>Charts</h4>
+      <ul>
+        <li>One minute to a year; 2D, 3D, 2W, 3M, 6M and 12M folded from days with a live forming bar</li>
+        <li>An open world for 15 minutes and shorter: a window of the newest bars, widened as you pan back</li>
+        <li>EMA 12/25 ribbon, EMA 200, RSI, Stoch RSI, volume, key levels, anchored VWAP, open interest</li>
+        <li>Linear or log price axis, auto scale, panes you size yourself</li>
+        <li>A 4K picture of any chart to the clipboard</li>
+      </ul>
+    </td>
+    <td width="33%" valign="top">
+      <h4>Drawing</h4>
+      <ul>
+        <li>Trendline, ray, horizontal, path, brush, zone, parallel channel, fib, note, measure</li>
+        <li>Long and short positions with risk, reward and legs</li>
+        <li>A weak or strong magnet to the candles</li>
+        <li>Drawings belong to the market and show on every timeframe, standing on the bar that holds them</li>
+        <li>Undo and redo, lock, hide per timeframe</li>
+      </ul>
+    </td>
+    <td width="33%" valign="top">
+      <h4>Workspace</h4>
+      <ul>
+        <li>Splits, tabs and docking by drag</li>
+        <li>Colour link groups: one symbol, many panels</li>
+        <li>Command palette, symbol search across every venue, keyboard first</li>
+        <li>Watchlists, price alerts to Telegram, themes</li>
+        <li>Signed in with Telegram, the same workspace on every device</li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>Markets</h4>
+      <ul>
+        <li>Spot and perpetuals on Binance, Bybit, OKX, Bitget, Kraken; perpetuals on Hyperliquid and Lighter</li>
+        <li>TOTAL, TOTAL2, TOTAL3, TOTALES, OTHERS, BTC.D, ETH.D, USDT.D, OTHERS.D and the VIX</li>
+        <li>The S&amp;P 500 and Nasdaq-100 as trade.xyz's perpetuals</li>
+        <li>One market priced in another, as a ratio</li>
+      </ul>
+    </td>
+    <td width="33%" valign="top">
+      <h4>History</h4>
+      <ul>
+        <li>Columnar partitions of about 16 bytes a minute: five years of BTCUSDT minutes in 42 MB</li>
+        <li>Served from disk or a CDN, cached by the browser for a year</li>
+        <li>Markets not archived chart straight from the exchange's REST API</li>
+      </ul>
+    </td>
+    <td width="33%" valign="top">
+      <h4>Server</h4>
+      <ul>
+        <li>Rust — Axum and Tokio — with PostgreSQL 18 for metadata only</li>
+        <li>A day of liquidations, open interest and flow for the tickers it follows</li>
+        <li>Rate limits per address and per exchange host</li>
+        <li>One Docker image, deployed from CI</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+<br>
+
+## Under the hood
 
 | Part | What it is |
 |---|---|
 | Chart engine | Rust compiled to WebAssembly (about 155 KB gzip after wasm-opt), run in a Web Worker. Candles are drawn with WebGL2 on an OffscreenCanvas, text on a 2D layer and the liquidation feed on a third, so the page thread never touches a candle. |
 | History | Immutable columnar partition files, about 16 bytes per 1-minute bar: five years of BTCUSDT perpetual minutes is 42 MB. Served from disk or a CDN and cached by the browser for a year. |
 | Live | Exchange WebSockets straight to the browser: trades folded into the forming bar between kline updates, and liquidations feeding a ticker above the volume and a tape of their own as they land. |
-| Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, and a day of liquidations for a few tickers. |
+| Server | Rust — Axum and Tokio — for the market catalogue, drawings and workspaces, accounts, the journal and training, and a day of liquidations for a few tickers. |
 | Database | PostgreSQL 18, for metadata only. Candles never enter it. |
 | UI | SolidJS (about 50 KB brotli): splits, tabs, docking by drag, link groups, command palette, theme; one chart and a menu on a phone. |
-
-## Screenshots
-
-**Market profile.** A chart split into TPO profiles by day, each session with
-its value area.
-
-![TPO profiles by day](docs/screenshots/tpo.webp)
-
-**Footprint.** Volume bought and sold at each price inside every bar, with the
-bar's value area, stats and profile.
-
-![A footprint chart](docs/screenshots/footprint.webp)
-
-**Liquidations.** One ticker's liquidations on every exchange, as a tape and as
-totals over the last hour to day.
-
-![The liquidations panel](docs/screenshots/liquidations.webp)
-
-**Flow.** Net taker flow on each exchange, over the last minute to day.
-
-![The flow panel](docs/screenshots/flow.webp)
-
-**Signals.** The screener's three drives on the 4H, 1D and 1W across 200 coins,
-each with its entry, targets and stop, and how it went.
-
-![The signal panel](docs/screenshots/signals.webp)
-
-**Trading journal.** The dashboard of closed trades: the figures that matter,
-the equity curve, the P&L calendar with each week's R, and the breakdowns by
-pair, side and strategy (sample trades).
-
-![The journal's dashboard](docs/screenshots/journal.webp)
-
-**Training.** Paper trading at live prices: the ticket, the chart, and an open
-position with its take profit, stop loss and Reverse.
-
-![Training](docs/screenshots/training.webp)
-
-**On a phone.** One chart and a menu.
-
-<img src="docs/screenshots/mobile.webp" alt="tradoor on a phone" width="300">
-
-## Repository
 
 ```text
 crates/core      candles, timeframes, indicators and studies with Pine Script semantics; no dependencies
@@ -74,16 +234,18 @@ migrations/      PostgreSQL schema, applied by every binary on start
 deploy/          systemd units and an nginx site
 ```
 
-How the pieces fit is in [docs/architecture.md](docs/architecture.md).
+How the pieces fit is in [docs/architecture.md](docs/architecture.md), and the partition format in [docs/format.md](docs/format.md).
 
-## Requirements
+## Get started
+
+**Requirements**
 
 - Rust 1.95 with the `wasm32-unknown-unknown` target, and `wasm-bindgen-cli` 0.2.128
 - Deno 2
 - Docker, for PostgreSQL
 - Optional: `wasm-opt` from binaryen, which `scripts/build-wasm.sh` uses when present
 
-## Run it locally
+**Run it locally**
 
 ```sh
 cp .env.example .env          # choose a database password
@@ -107,11 +269,24 @@ the market measures the server works out itself. A market that has not been
 backfilled still charts: its candles come from the exchange's REST API instead
 of partitions.
 
+**Tests**
+
 `cargo test` runs the Rust tests; `deno task check` type-checks the web app,
 `deno task test` replays recorded exchange payloads through the stream hub, and
 `deno task size` checks the bundle budget after `deno task build`.
 
-## Production
+**Keyboard**
+
+`a–z` search a symbol · `← →` timeframe · `/` or `Ctrl K` commands · `?` help ·
+`Esc` cancel a tool or deselect · `Delete` remove the selected drawing · drag a
+tab onto another group, or its edge, to dock it.
+
+## Self-hosting
+
+<details>
+<summary><b>Production on a server</b></summary>
+
+<br>
 
 The `Dockerfile` builds one image holding the three binaries and the web app.
 `deploy/compose.yml` runs it beside PostgreSQL and copies the web app out to
@@ -149,14 +324,20 @@ To update, rebuild and load the image again, then `docker compose up -d` on the
 server; that also refreshes `web/`. Without Docker, `deploy/systemd` runs the
 binaries directly.
 
-## CI and deploy
+</details>
+
+<details>
+<summary><b>CI and deploy</b></summary>
+
+<br>
 
 `.github/workflows/ci.yml` runs on every push and pull request: Rust tests, the
 WASM engine, and the web app's type check, build and size budget. A push to
 `main` then builds the image with its dependency layers cached, pushes it to
 GitHub Container Registry as `ghcr.io/<owner>/tradoor:<commit>`, copies
 `deploy/compose.yml` to the server, points `TRADOOR_IMAGE` in `.env` at that
-commit, runs `docker compose up -d` and waits for `/api/health`.
+commit, runs `docker compose up -d` and waits for `/api/health`. Pull requests
+from forks run the tests only, without the repository's secrets.
 
 One-time setup, after the server runs the stack as described above:
 
@@ -176,7 +357,12 @@ ssh-keyscan -p <port> <server> | gh secret set VPS_KNOWN_HOSTS
 To roll back, set `TRADOOR_IMAGE` in `/var/www/tradoor/.env` to an earlier
 commit's tag and run `docker compose up -d`.
 
-## Search engines and link previews
+</details>
+
+<details>
+<summary><b>Search engines and link previews</b></summary>
+
+<br>
 
 Set the repository variable `SITE_URL` to the site's address (`gh variable set
 SITE_URL --body https://your-domain`). The image build passes it to the web
@@ -187,7 +373,12 @@ messages link each pattern to its chart. Without it the page still has
 its title, description, preview tags and structured data, but no canonical URL,
 sitemap or links in the messages.
 
-## Analytics
+</details>
+
+<details>
+<summary><b>Analytics</b></summary>
+
+<br>
 
 Set the repository variable `GA_ID` to a Google Analytics 4 measurement id
 (`gh variable set GA_ID --body G-XXXXXXXXXX`) and the next build adds Google's
@@ -196,7 +387,12 @@ tag host (`web/site.ts`). Google sets its own cookie; the browser id tradoor
 keeps drawings and layouts under is not given to it. Without `GA_ID` the page
 loads nothing from Google.
 
-## Partner exchanges
+</details>
+
+<details>
+<summary><b>Partner exchanges</b></summary>
+
+<br>
 
 Rewards in the top bar (Partner exchanges in a phone's menu) lists the Bybit
 and Binance referral links (`web/src/components/Referrals.tsx`). A card offers
@@ -204,7 +400,12 @@ them once per browser, a minute into its first visit, and not again once
 closed or used; a click is counted in Analytics as `referral_click`. Open the
 site once with `?noreferral` on a device and the card is never offered there.
 
-## Flow of other coins
+</details>
+
+<details>
+<summary><b>Flow of other coins</b></summary>
+
+<br>
 
 The Flow panel always shows BTC and ETH. To let a browser add other coins from the
 panel's `+` (each is recorded for 24 hours, 7 days, or until stopped; Keep renews it), copy its id
@@ -218,57 +419,12 @@ TRADOOR_ADMINS=<browser id>,<another browser id>
 
 Without it the panel only reads the coins already recorded.
 
-## Charts
+</details>
 
-Timeframes run from one minute to a year. Those of several bars — 2D, 3D, 2W,
-3M, 6M, 12M — are folded from days, and their forming bar is built from the
-day's stream, so every timeframe shows the same price at the same moment.
+<details>
+<summary><b>Indices, the S&amp;P 500 and the Nasdaq</b></summary>
 
-A chart of 15 minutes or shorter keeps an open world: it holds a window of the
-newest bars (6,000, or back to the week's open if more), widened as you pan
-back into history and let go again once you are back at the newest, and it
-zooms out no further than 1,500 bars on screen. A minute chart with months
-behind it costs what one opened today does.
-
-Drawings belong to the market and show on every timeframe. On a timeframe
-longer than the one a drawing was made on, its points stand on the bar holding
-their time, as TradingView places them; at its own timeframe and shorter ones
-they stay where they were put. A line is only drawn, dashed or not, where it is
-on screen, however far past it it reaches.
-
-## Trading journal
-
-Journal in the top bar (or the phone's menu). Every Long or Short position
-drawn on a chart (Alt+L, Alt+S) is a trade there, kept in step as you move it,
-and price decides how it went — open at the entry, then the target or the
-stop — on Binance, Bybit, Hyperliquid, OKX and Bitget; trades elsewhere, and
-those added by hand, are closed by hand. Its risk is the position's own
-settings (1% of a 1,000 account until set). A dashboard, the history with each
-trade's strategy and notes, and a weekly review, as rsalianto's journal has
-them. A position's settings are a trade form: its strategy, picked from
-sketched cards, its notes, a close by hand, and legs drawn with it — partial
-take profits, partial cut losses and averaged entries, each a price and a
-percent of the size — that price fills as it reaches them. It is kept for a
-Telegram account: sign in (in the Journal, or in
-Settings) and it is written down, and follows you to any device you sign in on;
-until then positions are drawn as before, and none is recorded. The dashboard's
-P&L calendar ends each week with its total in R.
-
-## Training
-
-Training in the top bar (or the phone's menu): paper trading on Binance's BTC,
-ETH and SOL perpetuals at their live prices, with 100,000 USDT to start. Market
-and limit orders, long and short, up to 100x on isolated margin, a take profit
-and stop loss; Reverse on a position turns it the other way at the market,
-as much against it, in one fill; liquidation, fees and funding as Binance has
-them, the server filling everything as the prices come, browser open or not. The one-minute
-chart takes indicators and drawings, and draws every trade where it was taken;
-the positions show what they make as the price moves, and the statistics —
-win rate, net, profit factor, drawdown, by coin, side and how each ended —
-cover the run. Reset starts a new run; the ones before stay to look back on. It
-is kept for a Telegram account, as the journal is.
-
-## Indices, the S&P 500 and the Nasdaq
+<br>
 
 Search TOTAL, TOTAL2, TOTAL3, TOTALES, OTHERS, BTC.D, ETH.D, USDT.D,
 OTHERS.D or VIX (TradingView's `CRYPTOCAP:TOTAL2` works too): the server works
@@ -279,6 +435,49 @@ Cboe's, delayed: daily since 1990, and by the minute from when the server first
 ran. The S&P 500 and the Nasdaq-100 are trade.xyz's perpetuals on
 Hyperliquid, `SP500USD` and `XYZ100USD` (or search SPX, NASDAQ), live like any
 other market.
+
+</details>
+
+<details>
+<summary><b>Drawings and layouts belong to a browser</b></summary>
+
+<br>
+
+Each browser makes a random id on first visit (Settings → Advanced) and its
+drawings, layout, watchlists, indicators and alerts are kept on the server
+under it: a private window or another browser starts empty. Sign in with
+Telegram (Settings → Account) and they follow you: on another device, or after
+clearing the browser's history, sign in again and the browser has them back.
+The tradoor bot asks you to confirm each sign-in in your Telegram chat.
+Without a bot the id can still be carried by hand, pasted under Advanced.
+
+Drawings and the layout saved before browsers had ids belong to nobody. Give
+them to your browser's id once:
+
+```sh
+docker compose exec server tradoor-server adopt <your-browser-id>
+```
+
+To move drawings from rsalianto:
+
+```sh
+RSALIANTO_DATABASE_URL=postgres://… scripts/export-rsalianto-drawings.sh > drawings.jsonl
+./target/release/tradoor-server import-drawings drawings.jsonl --owner <your-browser-id>
+```
+
+</details>
+
+<details>
+<summary><b>Weighing the signals</b></summary>
+
+<br>
+
+```sh
+ssh user@server 'bash -s' < scripts/export-signals.sh > signals.tar.gz   # the live record, as CSV
+./target/release/tradoor-server signal-research signals.jsonl           # the rules over ~500 days of bars
+```
+
+</details>
 
 ## Security
 
@@ -318,39 +517,10 @@ Cloudflare (`allow` its ranges, `deny all`) — it is deliberately not nginx's
 its HTTPS block, merge `tradoor.conf`'s locations into the site by hand rather
 than copying it over.
 
-## Drawings and layouts belong to a browser
+## License
 
-Each browser makes a random id on first visit (Settings → Advanced) and its
-drawings, layout, watchlists, indicators and alerts are kept on the server
-under it: a private window or another browser starts empty. Sign in with
-Telegram (Settings → Account) and they follow you: on another device, or after
-clearing the browser's history, sign in again and the browser has them back.
-The tradoor bot asks you to confirm each sign-in in your Telegram chat.
-Without a bot the id can still be carried by hand, pasted under Advanced.
+tradoor is free software: you can redistribute it and modify it under the terms
+of the [GNU Affero General Public License, version 3](LICENSE). If you run a
+modified version for others over a network, you must offer them its source.
 
-Drawings and the layout saved before browsers had ids belong to nobody. Give
-them to your browser's id once:
-
-```sh
-docker compose exec server tradoor-server adopt <your-browser-id>
-```
-
-## Moving drawings from rsalianto
-
-```sh
-RSALIANTO_DATABASE_URL=postgres://… scripts/export-rsalianto-drawings.sh > drawings.jsonl
-./target/release/tradoor-server import-drawings drawings.jsonl --owner <your-browser-id>
-```
-
-## Weighing the signals
-
-```sh
-ssh user@server 'bash -s' < scripts/export-signals.sh > signals.tar.gz   # the live record, as CSV
-./target/release/tradoor-server signal-research signals.jsonl           # the rules over ~500 days of bars
-```
-
-## Keyboard
-
-`a–z` search a symbol · `← →` timeframe · `/` or `Ctrl K` commands · `?` help ·
-`Esc` cancel a tool or deselect · `Delete` remove the selected drawing · drag a
-tab onto another group, or its edge, to dock it.
+Copyright © 2026 rsalianto.

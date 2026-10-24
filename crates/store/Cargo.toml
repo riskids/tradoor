@@ -2,6 +2,7 @@
 name = "tradoor-store"
 description = "Partition files on disk and their index in Postgres."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

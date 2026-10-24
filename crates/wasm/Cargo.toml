@@ -2,6 +2,7 @@
 name = "tradoor-wasm"
 description = "The browser worker's engine: the chart drawn with WebGL2 and a 2D canvas for text, plus decoding, folding and live-bar folding."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
