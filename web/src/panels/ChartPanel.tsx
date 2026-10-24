@@ -530,7 +530,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
       list: [
         ...drawings()
           .filter((d) => visibleOn(d.style, tf))
-          .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style })),
+          .map((d) => ({ id: d.id, kind: d.kind, points: d.points, label: d.label, style: d.style, timeframe: d.timeframe })),
         ...(p ? patternParts(p).map((d, i) => ({ id: -1_000_000 - i, ...d, style: { ...d.style, locked: true } })) : []),
         ...(props.training?.overlay() ?? []).map((d, i) => ({ id: -2_000_000 - i, ...d, style: { ...d.style, locked: true } })),
       ],

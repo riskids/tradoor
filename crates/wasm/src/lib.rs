@@ -236,6 +236,7 @@ impl ChartEngine {
                     points,
                     label: get(&v, "label").and_then(|l| l.as_string()),
                     style: get(&v, "style").map_or_else(DrawingStyle::default, |s| style(&s)),
+                    timeframe: get(&v, "timeframe").and_then(|t| t.as_string()).and_then(|t| ChartTimeframe::parse(&t)),
                 })
             })
             .collect();

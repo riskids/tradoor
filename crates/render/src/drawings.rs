@@ -1,6 +1,7 @@
 //! Drawing tools: what each kind is, how it is styled, and how it is painted.
 
 use tradoor_core::format::format_price;
+use tradoor_core::ChartTimeframe;
 
 use crate::color::Color;
 use crate::geometry::{distance_to_drawing, distance_to_segment};
@@ -283,11 +284,14 @@ pub struct DrawingShape {
     pub points: Vec<Anchor>,
     pub label: Option<String>,
     pub style: DrawingStyle,
+    /// The timeframe it was drawn at: on a longer one its points stand on the
+    /// bars holding their times. `None`: the chart's own.
+    pub timeframe: Option<ChartTimeframe>,
 }
 
 impl DrawingShape {
     pub fn new(id: Option<i64>, kind: DrawingKind, points: Vec<Anchor>) -> Self {
-        Self { id, kind, points, label: None, style: DrawingStyle::default() }
+        Self { id, kind, points, label: None, style: DrawingStyle::default(), timeframe: None }
     }
 }
 

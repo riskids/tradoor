@@ -8,6 +8,7 @@ use tradoor_core::live::LiveBar;
 use tradoor_core::studies::{compute_study_with, idle_study, open_interest_live, parse_studies, ComputedStudy, Group, LineStyle, LineType, StudyInputs, StudyKind, StudySpec, Tone};
 use tradoor_core::time::DAY;
 use tradoor_core::{Candle, ChartTimeframe, Interval};
+use tradoor_core::timeframe::Source;
 
 use crate::color::Color;
 use crate::drawings::{self, Anchor, Dash, DrawingKind, DrawingShape, DrawingStyle, Placed, MAX_POINTS};
@@ -1783,11 +1784,26 @@ impl Chart {
         }
     }
 
+    /// Where a drawing's point stands on the bars. On a timeframe longer than
+    /// the one it was drawn at, on the middle of the bar holding its time, as
+    /// TradingView places it: an entry at 08:00 on the 4H stands on that day's
+    /// bar on the 1D, not a third of a bar past it. At its own timeframe and
+    /// shorter ones, where it was put; and before the first bar and past the
+    /// newest, between bar positions, so a box drawn out into the future keeps
+    /// its length.
+    fn drawing_logical(&self, shape: &DrawingShape, time: f64) -> Option<f64> {
+        let logical = time_to_logical(&self.times, time)?;
+        let longer = shape.timeframe.is_some_and(|tf| bar_span(tf) < bar_span(self.timeframe));
+        let newest = self.bar(self.total_bars().checked_sub(1)?)?.time;
+        let held = self.times.first().is_some_and(|first| time >= *first) && time < self.timeframe.end(newest) as f64;
+        Some(if longer && held { logical.floor() } else { logical })
+    }
+
     fn place<'a>(&self, shape: &'a DrawingShape, draft: bool) -> Option<Placed<'a>> {
         let pane = self.panes.first()?;
         let mut points = Vec::with_capacity(shape.points.len());
         for a in &shape.points {
-            let x = self.time.x(time_to_logical(&self.times, a.time)?) as f32;
+            let x = self.time.x(self.drawing_logical(shape, a.time)?) as f32;
             let y = pane.scale.y(a.price) as f32;
             if !(x.is_finite() && y.is_finite()) {
                 return None;
@@ -1795,7 +1811,7 @@ impl Chart {
             points.push((x, y));
         }
         let bars = match (shape.points.first(), shape.points.get(1)) {
-            (Some(a), Some(b)) => (time_to_logical(&self.times, b.time)? - time_to_logical(&self.times, a.time)?).round() as i64,
+            (Some(a), Some(b)) => (self.drawing_logical(shape, b.time)? - self.drawing_logical(shape, a.time)?).round() as i64,
             _ => 0,
         };
         let last = self.candles.last().map(|c| c.close);
@@ -2609,6 +2625,12 @@ impl Chart {
 /// A candle body in device pixels, odd once it is wide enough so the wick sits on
 /// its centre, and the wick in CSS pixels: one pixel at any zoom, as on
 /// TradingView — a wick that thickens with the body reads as a second body.
+/// About how long a bar of `tf` lasts — a month as thirty days — to tell a longer timeframe from a shorter.
+fn bar_span(tf: ChartTimeframe) -> i64 {
+    let Source { interval, group } = tf.source();
+    interval.ms().unwrap_or(30 * DAY) * i64::from(group)
+}
+
 fn candle_widths(bar_spacing: f64, dpr: f32) -> (f32, f32) {
     let mut body = (bar_spacing as f32 * dpr * 0.8).floor().max(1.0);
     if body >= 3.0 && (body as i32) % 2 == 0 {
@@ -3067,6 +3089,36 @@ mod tests {
         // The newest hits are the ones kept.
         assert!(frame.texts.iter().any(|t| t.text == "LONG $20K"), "the newest hit is in the feed");
         assert!(!frame.texts.iter().any(|t| t.text == "LONG $1K"), "the oldest has been pushed out");
+    }
+
+    #[test]
+    fn a_point_drawn_at_a_shorter_timeframe_stands_on_the_bar_holding_it() {
+        // A day chart and an hour chart over the same days.
+        let base = 1_700_006_400_000 - 1_700_006_400_000 % DAY;
+        let days: Vec<Candle> = candles(60).into_iter().enumerate().map(|(i, c)| Candle { open_time: base + i as i64 * DAY, ..c }).collect();
+        let mut d = Chart::new(ChartTimeframe::D1);
+        d.resize(1_000.0, 600.0, 1.0);
+        d.set_candles(days);
+        d.render(1_800_000_000_000);
+        // A long entered at 08:00 on day 50, out at 20:00 on day 51, drawn on the 4H.
+        let (from, to) = ((base + 50 * DAY + 8 * HOUR) as f64, (base + 51 * DAY + 20 * HOUR) as f64);
+        let mut long = DrawingShape::new(Some(1), DrawingKind::Long, vec![Anchor { time: from, price: 100.0 }, Anchor { time: from, price: 95.0 }, Anchor { time: to, price: 110.0 }]);
+        long.timeframe = Some(ChartTimeframe::H4);
+        let xs = |c: &Chart, s: &DrawingShape| c.place(s, false).unwrap().points.iter().map(|p| p.0).collect::<Vec<f32>>();
+        let on_day = xs(&d, &long);
+        assert!((on_day[0] - d.time.x(50.0) as f32).abs() < 0.01, "on day 50's bar, not a third of a bar past it");
+        assert!((on_day[2] - d.time.x(51.0) as f32).abs() < 0.01, "and out on day 51's");
+
+        // At its own timeframe, and at shorter ones, where it was put.
+        long.timeframe = Some(ChartTimeframe::D1);
+        assert!((xs(&d, &long)[0] - d.time.x(50.0 + 8.0 / 24.0) as f32).abs() < 0.01, "drawn on the day chart, between bars as it was put");
+        long.timeframe = None;
+        assert!((xs(&d, &long)[0] - d.time.x(50.0 + 8.0 / 24.0) as f32).abs() < 0.01, "a shape with no timeframe is the chart's own");
+
+        // Past the newest bar it runs on, so a box into the future keeps its length.
+        long.timeframe = Some(ChartTimeframe::H4);
+        long.points[2].time = (base + 63 * DAY + 12 * HOUR) as f64;
+        assert!((xs(&d, &long)[2] - d.time.x(63.5) as f32).abs() < 0.01);
     }
 
     #[test]

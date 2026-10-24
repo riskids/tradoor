@@ -67,6 +67,8 @@ export interface DrawingShape {
   points: DrawingPoint[];
   label: string | null;
   style: Record<string, string | number | boolean>;
+  /** Where it was drawn: on a longer timeframe its points stand on the bars holding them. */
+  timeframe?: string;
 }
 
 export type ChartEvent =
