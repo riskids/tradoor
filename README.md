@@ -396,8 +396,8 @@ loads nothing from Google.
 
 <br>
 
-Rewards in the top bar (Partner exchanges in a phone's menu) lists the Bybit
-and Binance referral links (`web/src/components/Referrals.tsx`). A card offers
+Rewards in the top bar (Partner exchanges in a phone's menu) lists the Nado,
+Bybit and Binance referral links (`web/src/components/Referrals.tsx`). A card offers
 them once per browser, a minute into its first visit, and not again once
 closed or used; a click is counted in Analytics as `referral_click`. Open the
 site once with `?noreferral` on a device and the card is never offered there.

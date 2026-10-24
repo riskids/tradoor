@@ -109,7 +109,7 @@ function commands(): Command[] {
   list.push(
     { group: 'App', label: 'Settings and colours…', run: () => setOverlay({ kind: 'settings' }) },
     { group: 'App', label: 'Keyboard shortcuts', hint: '?', run: () => setOverlay({ kind: 'help' }) },
-    { group: 'App', label: 'Partner exchanges — sign-up rewards', run: () => setOverlay({ kind: 'referrals' }) },
+    { group: 'App', label: 'Partner exchanges — Nado, Bybit and Binance', run: () => setOverlay({ kind: 'referrals' }) },
     {
       group: 'App',
       label: 'Reset workspace to default',
@@ -476,7 +476,7 @@ export function App() {
           <span>{doc.name}</span>
         </span>
         <span class="spacer" />
-        <button class="item ref-btn" data-tip="Partner exchanges: sign-up rewards on Bybit and Binance" onClick={() => setOverlay({ kind: 'referrals' })}>
+        <button class="item ref-btn" data-tip="Partner exchanges: Nado, Bybit and Binance" onClick={() => setOverlay({ kind: 'referrals' })}>
           <Icon name="gift" size={13} /> <span>Rewards</span>
         </button>
         <Health />

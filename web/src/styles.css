@@ -708,7 +708,10 @@ table.venues tr.off td { color: var(--dim); }
 .ref-row:hover { border-color: color-mix(in oklab, var(--primary) 55%, transparent); background: var(--surface-3); }
 .ref-row .xlogo { flex: none; }
 .ref-row .who { flex: 1; display: grid; gap: 4px; min-width: 0; }
-.ref-row .who b { font-size: 13px; font-weight: 600; }
+.ref-row .who b { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.ref-row.lead { border-color: color-mix(in oklab, var(--primary) 40%, transparent); background: color-mix(in oklab, var(--primary) 6%, var(--surface-2)); }
+.ref-row.lead .who span { white-space: normal; line-height: 1.45; }
+.ref-row .new, .ref-card .new { padding: 1px 5px; border: 1px solid color-mix(in oklab, var(--primary) 50%, transparent); color: var(--primary); font-size: 9px; font-style: normal; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
 .ref-row .who span { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ref-row .go { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid color-mix(in oklab, var(--primary) 45%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; transition: background 0.12s, color 0.12s; }
 .ref-row:hover .go { background: var(--primary); color: var(--bg); }
@@ -718,6 +721,13 @@ table.venues tr.off td { color: var(--dim); }
 .ref-card .x { display: flex; padding: 5px; color: var(--dim); }
 .ref-card .x:hover { color: var(--text); }
 .ref-card p { margin: 6px 12px 12px; color: var(--muted); line-height: 1.55; }
+.ref-card .lead { display: flex; align-items: center; gap: 10px; margin: 0 12px 6px; padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--primary) 40%, transparent); background: color-mix(in oklab, var(--primary) 6%, var(--surface-2)); color: var(--text); text-decoration: none; transition: border-color 0.12s; }
+.ref-card .lead:hover { border-color: var(--primary); }
+.ref-card .lead .xlogo { flex: none; }
+.ref-card .lead .who { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.ref-card .lead .who b { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+.ref-card .lead .who span { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ref-card .lead > svg:last-child { flex: none; color: var(--dim); }
 .ref-card .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 12px; }
 .ref-card .pair a { display: flex; align-items: center; justify-content: center; gap: 7px; height: 36px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; transition: border-color 0.12s, color 0.12s; }
 .ref-card .pair a svg:last-child { color: var(--dim); }
