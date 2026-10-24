@@ -41,9 +41,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/screenshots/workspace.webp" alt="The workspace: a BTCUSDT hourly chart with its EMA ribbon and Stoch RSI, the same market as TPO profiles by day, its values, a watchlist and alerts" width="100%">
+  <img src="docs/screenshots/demo.webp" alt="A tour of the live site: a BTCUSDT chart panned and zoomed, the same chart as TPO profiles by day and as a footprint, the liquidations tape and the signal screener" width="100%">
   <br>
-  <sub>One workspace: a chart, its market profile by day, its values, a watchlist and alerts, linked by colour.</sub>
+  <sub>A tour of the live site: pan and zoom, TPO profiles, a footprint, liquidations and signals.</sub>
 </p>
 
 <table>
