@@ -124,9 +124,9 @@ Every screenshot is the live site, or for the journal and training a local one w
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/flow.webp" alt="The flow panel: BTC's net taker flow on each exchange over the last minute, hour, 4 hours, 12 hours and day" width="100%">
+      <img src="docs/screenshots/flow.webp" alt="The flow panel: BTC's net taker flow on each exchange over the last minute, hour, 4 hours, 12 hours and day, and below it the minutes that crossed a size" width="100%">
       <br>
-      <sub>BTC's net taker flow per exchange.</sub>
+      <sub>BTC's net taker flow per exchange, and the big minutes.</sub>
       <h3>Flow</h3>
       Net taker flow on each exchange, spot and perpetual, over the last minute to day, and the minutes that ran hard one way marked on the chart where they traded.
     </td>
