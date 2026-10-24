@@ -229,6 +229,8 @@ export interface FlowCoin {
   until: number | null;
   /** One of those always recorded — BTC and ETH — that nobody stops. */
   fixed?: boolean;
+  /** For one of this reader's own: false while the server has no room to record it. */
+  recorded?: boolean;
 }
 
 /** How long a coin is recorded: a day, a week, or until it is stopped. */
@@ -240,9 +242,12 @@ export interface FlowState {
   windowMs?: number;
   /** The coin shown: the one asked for, or BTC once that one has lapsed. */
   coin?: string;
+  /** BTC and ETH, then this reader's own, in the order they were asked for. */
   coins?: FlowCoin[];
-  /** Whether this browser may choose the coins followed. */
-  admin?: boolean;
+  /** Whether this browser is signed in, and so may follow coins of its own. */
+  signedIn?: boolean;
+  /** How many coins one reader may follow besides BTC and ETH. */
+  perReader?: number;
   markets: FlowMarket[];
   events: FlowEvent[];
 }

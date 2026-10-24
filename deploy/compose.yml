@@ -15,7 +15,6 @@ x-app: &app
     # Settings named here reach the program; the rest of .env only fills in this
     # file. Empty is the same as unset: no bot, and Settings says so.
     TRADOOR_TELEGRAM_TOKEN: ${TRADOOR_TELEGRAM_TOKEN:-}
-    TRADOOR_ADMINS: ${TRADOOR_ADMINS:-}
     TRADOOR_SITE_URL: ${TRADOOR_SITE_URL:-}
   volumes:
     - data:/data

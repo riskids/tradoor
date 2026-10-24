@@ -11,11 +11,13 @@
 //! filling up as you watch. The crossings are per reader: the threshold is
 //! theirs to set, and only the markets they asked for reach their Telegram.
 //!
-//! BTC and ETH are always followed. Another coin is followed once one of the server's
-//! admins asks for it from the panel, on each exchange BTC is read from that
-//! lists it, for a day or a week from when they last asked, or until they stop
-//! it; then it lapses and its streams are closed, so what the server reads
-//! stays what someone wants.
+//! BTC and ETH are always followed, for everyone. Besides them each signed-in
+//! reader keeps a list of their own, of up to seven coins, each for a day or a
+//! week from when they last asked, or until they stop it. The server records a
+//! coin once however many follow it — one stream per market, one set of
+//! minutes — on each exchange BTC is read from that lists it, while one of its
+//! followers was here in the last two weeks; then its streams are closed, so
+//! what the server reads stays what someone wants.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -59,7 +61,7 @@ const MARKETS: [(&str, f64); 11] = [
 /// The coin always followed; `MARKETS` are its markets.
 const ALWAYS: &str = "BTC";
 /// Coins followed always after BTC, on whatever lists them, in this order
-/// before any an admin adds — and not to be stopped or counted among those.
+/// before any a reader adds — and not to be stopped or counted among those.
 const PERMANENT: [&str; 1] = ["ETH"];
 
 /// BTC, or one of the coins followed with it always.
@@ -70,8 +72,14 @@ fn permanent(coin: &str) -> bool {
 /// week or no end is asked for (`Span`).
 const FOLLOW_MS: i64 = 24 * 3_600_000;
 const FOLLOW_WEEK_MS: i64 = 7 * FOLLOW_MS;
-/// Coins followed at once besides BTC: each is up to eleven more streams.
-const MAX_COINS: i64 = 10;
+/// Coins recorded at once besides BTC and ETH, however many readers follow
+/// each: every one is up to eleven more streams from this server's address.
+const MAX_COINS: i64 = 20;
+/// Coins one reader follows besides BTC and ETH.
+const PER_READER: i64 = 7;
+/// A coin none of whose followers was here for this long is not recorded
+/// until one comes back.
+const AWAY_MS: i64 = 14 * FOLLOW_MS;
 /// A new coin's threshold until a few minutes of its flow say what is usual.
 const FRESH_THRESHOLD: f64 = 100_000.0;
 /// How far back a crossing looks: the flow of the last minute.
@@ -142,12 +150,11 @@ fn notional(venue: Venue, price: f64, qty: f64, contract: f64) -> f64 {
     if venue == Venue::OkxPerp { price * qty * contract } else { price * qty }
 }
 
-/// A coin followed besides BTC: until when — none until it is stopped — on
-/// which markets, and whether it is one of those followed always.
+/// A coin recorded besides BTC: on which markets, and whether it is one of
+/// those followed always.
 #[derive(Clone, Debug)]
 struct Followed {
     coin: String,
-    ends_at: Option<i64>,
     markets: Vec<String>,
     fixed: bool,
 }
@@ -197,9 +204,7 @@ pub struct Flow {
     said: Mutex<HashMap<(String, String, bool), ()>>,
     /// The coins in one contract, where a size is counted in contracts.
     contracts: Mutex<HashMap<String, f64>>,
-    /// Browser ids that may choose the coins followed.
-    admins: Vec<String>,
-    /// The coins followed besides BTC, as last read from `flow_coin`.
+    /// The coins recorded besides BTC, as last read from `flow_follow`.
     coins: Mutex<Vec<Followed>>,
     /// The stream reading each market followed, to close when it is not.
     streams: Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -208,7 +213,7 @@ pub struct Flow {
 }
 
 impl Flow {
-    pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, catalog: Arc<Catalog>, telegram: Option<Arc<Telegram>>, admins: Vec<String>) -> Arc<Self> {
+    pub fn start(pool: deadpool_postgres::Pool, doh: Arc<Doh>, catalog: Arc<Catalog>, telegram: Option<Arc<Telegram>>) -> Arc<Self> {
         let http = reqwest::Client::builder().dns_resolver(doh.resolver()).timeout(Duration::from_secs(20)).build().unwrap_or_default();
         let flow = Arc::new(Self {
             pool,
@@ -221,7 +226,6 @@ impl Flow {
             watches: Mutex::new(Vec::new()),
             said: Mutex::new(HashMap::new()),
             contracts: Mutex::new(HashMap::new()),
-            admins,
             coins: Mutex::new(Vec::new()),
             streams: Mutex::new(HashMap::new()),
             typical: Mutex::new(HashMap::new()),
@@ -233,12 +237,13 @@ impl Flow {
         }
         tokio::spawn(keep(flow.clone()));
         tokio::spawn(weigh(flow.clone()));
-        tracing::info!(markets = ?btc_markets(), admins = flow.admins.len(), "watching flow");
+        tracing::info!(markets = ?btc_markets(), "watching flow");
         flow
     }
 
-    pub fn is_admin(&self, owner: &str) -> bool {
-        self.admins.iter().any(|a| a == owner)
+    /// How many coins readers asked for are recorded now: the server's room is `MAX_COINS`.
+    fn recorded(&self) -> i64 {
+        self.coins.lock().map_or(0, |c| c.iter().filter(|f| !f.fixed).count() as i64)
     }
 
     /// Every market followed: BTC's, then each coin's in the order they were asked for.
@@ -262,23 +267,36 @@ impl Flow {
         self.coins.lock().ok().and_then(|c| c.iter().find(|f| f.coin == coin).map(|f| f.markets.clone())).unwrap_or_default()
     }
 
-    /// Brings the streams in line with the coins asked for: a coin added has its
-    /// markets read, one lapsed or stopped has them closed.
+    /// Brings the streams in line with the coins asked for: a coin someone
+    /// follows has its markets read, once however many do; one nobody follows
+    /// any more, or whose followers have all been away, has them closed.
     async fn sync(self: &Arc<Self>) -> anyhow::Result<()> {
-        let rows = self.pool.get().await?.query("SELECT coin, ends_at FROM flow_coin WHERE ends_at IS NULL OR ends_at > $1 ORDER BY added_at", &[&now_ms()]).await?;
+        let now = now_ms();
+        let fixed = PERMANENT.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query(
+                "SELECT f.coin FROM flow_follow f JOIN account a ON a.owner = f.owner
+                 WHERE (f.ends_at IS NULL OR f.ends_at > $1) AND a.seen_at > $2 AND f.coin <> ALL($3)
+                 GROUP BY f.coin ORDER BY min(f.added_at) LIMIT $4",
+                &[&now, &(now - AWAY_MS), &fixed, &MAX_COINS],
+            )
+            .await?;
         let held = self.coins.lock().map(|c| c.clone()).unwrap_or_default();
-        // The coins followed always first, then those asked for, in the order they were.
-        let asked = rows.iter().map(|r| (r.get::<_, String>(0), r.get::<_, Option<i64>>(1))).filter(|(coin, _)| !permanent(coin));
-        let wanted = PERMANENT.iter().map(|c| (c.to_string(), None)).chain(asked).collect::<Vec<_>>();
+        // The coins followed always first, then those asked for, in the order they first were.
+        let asked = rows.iter().map(|r| r.get::<_, String>(0));
+        let wanted = fixed.iter().cloned().chain(asked).collect::<Vec<_>>();
         let mut coins = Vec::new();
-        for (coin, ends_at) in wanted {
+        for coin in wanted {
             // Where a coin trades is asked of the catalogue once, not every pass.
             let markets = match held.iter().find(|f| f.coin == coin && !f.markets.is_empty()) {
                 Some(f) => f.markets.clone(),
                 None => coin_markets(&self.catalog, &coin).await,
             };
             let fixed = permanent(&coin);
-            coins.push(Followed { coin, ends_at, markets, fixed });
+            coins.push(Followed { coin, markets, fixed });
         }
         if let Ok(mut held) = self.coins.lock() {
             *held = coins;
@@ -523,7 +541,7 @@ async fn trim(pool: &deadpool_postgres::Pool) -> anyhow::Result<()> {
     let cutoff = now_ms() - KEPT_MS;
     client.execute("DELETE FROM flow_minute WHERE minute < $1", &[&cutoff]).await?;
     client.execute("DELETE FROM flow_event WHERE at < $1", &[&cutoff]).await?;
-    client.execute("DELETE FROM flow_coin WHERE ends_at < $1", &[&cutoff]).await?;
+    client.execute("DELETE FROM flow_follow WHERE ends_at < $1", &[&cutoff]).await?;
     Ok(())
 }
 
@@ -616,18 +634,26 @@ pub struct StateQuery {
 
 /// `GET /api/flow?coin=ETH`: one coin's flow on every market it is followed on,
 /// now and over the last day, this reader's settings and the crossings they
-/// were told about there, and the coins followed. A coin no longer followed
-/// answers with BTC's, which always is.
+/// were told about there, and the coins this reader follows. A coin that is
+/// not theirs, or not recorded, answers with BTC's, which always is.
 pub async fn state(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<StateQuery>) -> ApiResult<Json<Value>> {
     let owner = owner(&headers)?;
     let Some(flow) = state.flow.as_ref() else {
         return Ok(Json(json!({ "watching": false, "markets": [], "watches": [], "events": [] })));
     };
-    let asked = q.coin.unwrap_or_default().trim().to_ascii_uppercase();
-    let coin = if flow.markets_of(&asked).is_empty() { ALWAYS.to_string() } else { asked };
-    let wanted = flow.markets_of(&coin);
     let client = state.pool.get().await?;
     let now = now_ms();
+    let mine = client
+        .query("SELECT coin, ends_at FROM flow_follow WHERE owner = $1 AND (ends_at IS NULL OR ends_at > $2) ORDER BY added_at", &[&owner, &now])
+        .await?
+        .iter()
+        .map(|r| (r.get::<_, String>(0), r.get::<_, Option<i64>>(1)))
+        .filter(|(coin, _)| !permanent(coin))
+        .collect::<Vec<_>>();
+    let asked = q.coin.unwrap_or_default().trim().to_ascii_uppercase();
+    let theirs = permanent(&asked) || mine.iter().any(|(coin, _)| *coin == asked);
+    let coin = if theirs && !flow.markets_of(&asked).is_empty() { asked } else { ALWAYS.to_string() };
+    let wanted = flow.markets_of(&coin);
     let sums = client
         .query(
             "SELECT market,
@@ -670,16 +696,20 @@ pub async fn state(State(state): State<AppState>, headers: HeaderMap, Query(q): 
             })
         })
         .collect::<Vec<_>>();
+    // BTC and ETH for everyone, then this reader's own; one the server has no
+    // room for yet is listed, and says it is not recorded.
     let mut coins = vec![json!({ "coin": ALWAYS, "until": null, "fixed": true })];
     if let Ok(held) = flow.coins.lock() {
-        coins.extend(held.iter().filter(|c| !c.markets.is_empty()).map(|c| json!({ "coin": c.coin, "until": c.ends_at, "fixed": c.fixed })));
+        coins.extend(held.iter().filter(|c| c.fixed && !c.markets.is_empty()).map(|c| json!({ "coin": c.coin, "until": null, "fixed": true })));
     }
+    coins.extend(mine.iter().map(|(coin, until)| json!({ "coin": coin, "until": until, "recorded": !flow.markets_of(coin).is_empty() })));
     Ok(Json(json!({
         "watching": true,
         "windowMs": WINDOW_MS,
         "coin": coin,
         "coins": coins,
-        "admin": flow.is_admin(&owner),
+        "signedIn": state.sessions.is_account(&owner),
+        "perReader": PER_READER,
         "markets": markets,
         "events": events.iter().map(row_json).collect::<Vec<_>>(),
     })))
@@ -693,9 +723,14 @@ pub struct FollowQuery {
 
 /// `PUT /api/flow/coins/{coin}?for=day|week|always`: follow a coin's flow for
 /// the next day (the default), the next week, or until it is stopped — from
-/// now, if it already is. The server's admins choose.
+/// now, if it already is. A signed-in reader's own list, of up to seven; a coin
+/// someone else follows is recorded already and takes none of the server's room.
 pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>, Query(q): Query<FollowQuery>) -> ApiResult<Json<Value>> {
-    let flow = admin(&state, &headers)?;
+    let owner = owner(&headers)?;
+    let flow = state.flow.as_ref().ok_or_else(|| ApiError::not_found("this server follows no flow"))?;
+    if !state.sessions.is_account(&owner) {
+        return Err(ApiError::forbidden("sign in with Telegram to follow another coin's flow"));
+    }
     let coin = coin.trim().to_ascii_uppercase();
     if !valid_coin(&coin) {
         return Err(ApiError::bad_request("a coin is its ticker less the quote, like ETH or 1000PEPE"));
@@ -715,24 +750,27 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
         return Err(ApiError::bad_request(format!("none of the exchanges flow is read from lists {coin}")));
     }
     let client = state.pool.get().await?;
-    // Those followed always are no admin's to count, whatever an older row says.
-    let fixed = PERMANENT.iter().map(|c| c.to_string()).collect::<Vec<_>>();
     let others: i64 = client
-        .query_one("SELECT count(*) FROM flow_coin WHERE (ends_at IS NULL OR ends_at > $1) AND coin <> $2 AND coin <> ALL($3)", &[&now, &coin, &fixed])
+        .query_one("SELECT count(*) FROM flow_follow WHERE owner = $1 AND coin <> $2 AND (ends_at IS NULL OR ends_at > $3)", &[&owner, &coin, &now])
         .await?
         .get(0);
-    if others >= MAX_COINS {
-        return Err(ApiError::bad_request(format!("{MAX_COINS} coins are followed already — stop one first")));
+    if others >= PER_READER {
+        return Err(ApiError::bad_request(format!("you follow {PER_READER} coins already — stop one first")));
+    }
+    if flow.markets_of(&coin).is_empty() && flow.recorded() >= MAX_COINS {
+        return Err(ApiError::bad_request(format!("this server records {MAX_COINS} coins already — follow one of those, or try again later")));
     }
     // A coin still followed keeps its place in the list; one that lapsed comes back at the end.
     client
         .execute(
-            "INSERT INTO flow_coin (coin, added_by, added_at, ends_at) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (coin) DO UPDATE SET ends_at = EXCLUDED.ends_at, added_by = EXCLUDED.added_by,
-                 added_at = CASE WHEN flow_coin.ends_at IS NULL OR flow_coin.ends_at > EXCLUDED.added_at THEN flow_coin.added_at ELSE EXCLUDED.added_at END",
-            &[&coin, &owner(&headers)?, &now, &ends_at],
+            "INSERT INTO flow_follow (owner, coin, added_at, ends_at) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (owner, coin) DO UPDATE SET ends_at = EXCLUDED.ends_at,
+                 added_at = CASE WHEN flow_follow.ends_at IS NULL OR flow_follow.ends_at > EXCLUDED.added_at THEN flow_follow.added_at ELSE EXCLUDED.added_at END",
+            &[&owner, &coin, &now, &ends_at],
         )
         .await?;
+    // Here now, whatever the hourly note of it says yet: the coin is recorded from this pass.
+    client.execute("UPDATE account SET seen_at = $2 WHERE owner = $1", &[&owner, &now]).await?;
     if let Err(e) = flow.sync().await {
         tracing::warn!(error = %e, "following the coins asked for");
     }
@@ -740,29 +778,21 @@ pub async fn follow_coin(State(state): State<AppState>, headers: HeaderMap, Path
     Ok(Json(json!({ "coin": coin, "until": ends_at, "markets": markets })))
 }
 
-/// `DELETE /api/flow/coins/{coin}`: stop following a coin before its time is up.
+/// `DELETE /api/flow/coins/{coin}`: take a coin off this reader's list before its
+/// time is up. It is still recorded while anyone else follows it.
 pub async fn unfollow_coin(State(state): State<AppState>, headers: HeaderMap, Path(coin): Path<String>) -> ApiResult<Json<Value>> {
-    let flow = admin(&state, &headers)?;
+    let owner = owner(&headers)?;
+    let flow = state.flow.as_ref().ok_or_else(|| ApiError::not_found("this server follows no flow"))?;
     let coin = coin.trim().to_ascii_uppercase();
     if permanent(&coin) {
         return Err(ApiError::bad_request(format!("{coin} is always followed")));
     }
-    state.pool.get().await?.execute("DELETE FROM flow_coin WHERE coin = $1", &[&coin]).await?;
+    state.pool.get().await?.execute("DELETE FROM flow_follow WHERE owner = $1 AND coin = $2", &[&owner, &coin]).await?;
     if let Err(e) = flow.sync().await {
         tracing::warn!(error = %e, "following the coins asked for");
     }
-    tracing::info!(coin, "no longer following a coin's flow");
+    tracing::info!(coin, "a reader no longer follows a coin's flow");
     Ok(Json(json!({ "coin": coin })))
-}
-
-/// The flow collector, for one of the server's admins only.
-fn admin<'a>(state: &'a AppState, headers: &HeaderMap) -> ApiResult<&'a Arc<Flow>> {
-    let owner = owner(headers)?;
-    let flow = state.flow.as_ref().ok_or_else(|| ApiError::not_found("this server follows no flow"))?;
-    if !flow.is_admin(&owner) {
-        return Err(ApiError::forbidden("only this server's admins choose the coins whose flow it follows"));
-    }
-    Ok(flow)
 }
 
 /// `GET /api/flow/minutes?market=…`: the minutes of the last two days whose
@@ -872,7 +902,6 @@ mod tests {
             watches: Mutex::new(Vec::new()),
             said: Mutex::new(HashMap::new()),
             contracts: Mutex::new(HashMap::new()),
-            admins: Vec::new(),
             coins: Mutex::new(Vec::new()),
             streams: Mutex::new(HashMap::new()),
             typical: Mutex::new(HashMap::new()),

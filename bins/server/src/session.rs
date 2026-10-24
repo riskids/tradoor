@@ -13,7 +13,7 @@
 //! `middleware` writes the session's account there, over whatever was sent.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -35,7 +35,12 @@ pub struct Sessions {
     accounts: RwLock<HashSet<String>>,
     /// Each live session's token hash, and the id of its account.
     live: RwLock<HashMap<String, String>>,
+    /// When each account was last written down as seen (`account.seen_at`).
+    seen: Mutex<HashMap<String, i64>>,
 }
+
+/// How often an account's `seen_at` is written: to the hour is close enough.
+const SEEN_EVERY_MS: i64 = 3_600_000;
 
 /// What is kept of a token: its SHA-256, in hex. A leaked table opens nothing.
 fn hash(token: &str) -> String {
@@ -55,7 +60,24 @@ impl Sessions {
         let accounts = client.query("SELECT owner FROM account", &[]).await?.iter().map(|r| r.get(0)).collect();
         let live = client.query("SELECT token_hash, owner FROM account_session", &[]).await?.iter().map(|r| (r.get(0), r.get(1))).collect();
         drop(client);
-        Ok(Arc::new(Self { pool, accounts: RwLock::new(accounts), live: RwLock::new(live) }))
+        Ok(Arc::new(Self { pool, accounts: RwLock::new(accounts), live: RwLock::new(live), seen: Mutex::new(HashMap::new()) }))
+    }
+
+    /// A request from the account: written down as seen, once an hour at most.
+    fn saw(&self, owner: &str) {
+        let now = now_ms();
+        let Ok(mut seen) = self.seen.lock() else { return };
+        if seen.get(owner).is_some_and(|at| now - at < SEEN_EVERY_MS) {
+            return;
+        }
+        seen.insert(owner.to_string(), now);
+        let (pool, owner) = (self.pool.clone(), owner.to_string());
+        tokio::spawn(async move {
+            let written = async { pool.get().await?.execute("UPDATE account SET seen_at = $2 WHERE owner = $1", &[&owner, &now]).await.map_err(anyhow::Error::from) };
+            if let Err(e) = written.await {
+                tracing::warn!(error = %e, "writing when an account was seen");
+            }
+        });
     }
 
     pub fn is_account(&self, owner: &str) -> bool {
@@ -149,6 +171,7 @@ pub async fn middleware(State(state): State<AppState>, mut req: Request, next: N
     match who(&state.sessions, req.headers()) {
         Who::Account(owner) => match HeaderValue::from_str(&owner) {
             Ok(v) => {
+                state.sessions.saw(&owner);
                 req.headers_mut().insert(OWNER_HEADER, v);
             }
             Err(_) => return signed_out("this session's account cannot be read"),
@@ -176,6 +199,7 @@ mod tests {
             pool,
             accounts: RwLock::new(accounts.iter().map(|a| a.to_string()).collect()),
             live: RwLock::new(live.iter().map(|(t, o)| (hash(t), o.to_string())).collect()),
+            seen: Mutex::new(HashMap::new()),
         }
     }
 

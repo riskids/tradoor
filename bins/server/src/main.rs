@@ -69,10 +69,6 @@ struct Cli {
     /// Without it the Telegram section of Settings says it is not set up.
     #[arg(long, env = "TRADOOR_TELEGRAM_TOKEN", default_value = "")]
     telegram_token: String,
-    /// Browser ids (Settings → Browser id) that may choose which coins' flow the
-    /// server follows besides BTC. Without one, only BTC's is followed.
-    #[arg(long, env = "TRADOOR_ADMINS", default_value = "", value_delimiter = ',')]
-    admins: Vec<String>,
     /// The site's address (https://your-domain), for the link in a Telegram
     /// message that opens its chart. Without it the messages carry none.
     #[arg(long, env = "TRADOOR_SITE_URL", default_value = "")]
@@ -148,10 +144,6 @@ async fn main() -> anyhow::Result<()> {
             if let Some(bad) = tickers.iter().find(|t| !liquidations::is_ticker(t)) {
                 anyhow::bail!("TRADOOR_LIQUIDATIONS: {bad:?} is not a ticker — write them like BTCUSDT,ETHUSDT");
             }
-            let admins: Vec<String> = cli.admins.iter().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
-            if admins.iter().any(|a| !api::valid_owner(a)) {
-                anyhow::bail!("TRADOOR_ADMINS: a browser id is 16 to 64 letters, digits and dashes — copy it from Settings");
-            }
             let doh = dns::Doh::new()?;
             let coins: Vec<String> = cli.open_interest.iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
             if let Some(bad) = coins.iter().find(|c| open_interest::Coin::parse(c).is_none()) {
@@ -166,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
             catalog.list_indices(indices.clone());
             catalog.keep_fresh();
             alert_watch::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone());
-            let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone(), admins));
+            let flow = Some(flow::Flow::start(pool.clone(), doh.clone(), catalog.clone(), telegram.clone()));
             footprint::Footprint::start(pool.clone(), doh.clone(), catalog.clone());
             journal::start(pool.clone(), &doh, catalog.clone());
             let site = Some(cli.site_url.trim().to_string()).filter(|s| !s.is_empty());

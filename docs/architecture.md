@@ -153,7 +153,7 @@ The file format is described in [format.md](format.md).
 | `PATCH DELETE /api/drawings/{id}` | move, relabel or restyle one drawing; remove it |
 | `GET /api/liquidations/{ticker}/live` | every exchange's liquidations of a followed ticker as they happen, as server-sent events |
 | `GET /api/flow?coin=` · `GET /api/flow/minutes?market=` · `PUT /api/flow/{market}` | one coin's flow on every market it is followed on, the coins followed, and this reader's crossings; the minutes a chart marks; the threshold and whether to be told |
-| `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | an admin's (`TRADOOR_ADMINS`): follow a coin's flow for the next day, week (`?for=week`) or until stopped (`?for=always`), or stop |
+| `PUT /api/flow/coins/{coin}` · `DELETE /api/flow/coins/{coin}` | a signed-in reader's: follow a coin's flow for the next day, week (`?for=week`) or until stopped (`?for=always`), seven at most; or take it off their list |
 | `GET /api/signals` · `PUT /api/signals/notify` · `GET /api/signals/stats` | what the latest screener scan found, with when it ran and runs next; whether this reader is told on Telegram when a pattern turns; the record — the history replayed, the live patterns since, and the latest of them |
 | `GET /api/open-interest?coin=&step=&from=&venues=` | aggregated open interest as candles of `step`, in coins; asking for a coin any exchange lists a perpetual on starts recording it |
 | `GET POST DELETE /api/alerts` | this browser's price alerts and their log; create; delete the stopped, active or all |
@@ -173,7 +173,7 @@ Drawings and workspaces are scoped by the `x-tradoor-owner` header, the browser'
 | `open_interest` | each venue's open interest in coins, a row a minute (backfilled at five minutes where the exchange keeps history), kept 35 days |
 | `alert`, `alert_log` | price alerts per browser id, and each trigger (the last 500); the server follows the active ones' markets and fires them |
 | `signal_scan`, `signal`, `signal_setup`, `signal_watch`, `signal_backtest_run`, `signal_backtest`, `signal_touch_backtest` | each screener scan, every pattern found (kept with the last scan that saw it, for ninety days, with how it played out), who is told when one turns, and the latest replay of the rules over the history |
-| `flow_minute`, `flow_watch`, `flow_event`, `flow_coin` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins followed besides BTC with when each lapses, none for one followed until stopped |
+| `flow_minute`, `flow_watch`, `flow_event`, `flow_follow` | net taker flow by the minute for two days, what each reader asks of each market, the crossings they were told about, and the coins each reader follows besides BTC and ETH with when each lapses, none for one followed until stopped |
 | `telegram_chat`, `telegram_link` | chats an alert is sent to, per browser id, and the one-use codes that link them |
 | `account`, `account_signin`, `account_session` | a Telegram user and the browser id their things are kept under, the sign-ins waiting on their yes, and each signed-in browser's session (the token's SHA-256) |
 | `telegram_message` | what the bot sent and when to take it back |
@@ -218,15 +218,20 @@ its flow falls back to half the threshold, so one push does not ring over.
 
 BTC and ETH are always followed, in that order (`PERMANENT` in `flow`), ETH on
 each exchange that lists it as BTC's markets are quoted, its threshold found as
-an added coin's is; neither can be stopped nor counts among the ten. An admin —
-a browser id listed in `TRADOOR_ADMINS` — adds another coin from the panel's `+`, and the server follows it on each of
-those exchanges that lists it, quoted as BTC is there, for a day or a week from
-when it was last asked for, or until it is stopped (`flow_coin.ends_at` empty);
-Keep 24h, 7d or Always asks again, Stop or the chip's × ends it, and at the end
-of its time it lapses and its streams close. Its threshold until the reader sets one is
-three times its usual minute over the last day. Anyone can read the coins being
-followed, and drag the chips into the order they like (kept with the panel);
-only an admin chooses them, at most ten at once.
+an added coin's is; neither can be stopped nor counts among anyone's seven.
+Besides them each signed-in reader keeps a list of their own (`flow_follow`):
+they add a coin from the panel's `+`, seven at most, for a day or a week from
+when they last asked for it, or until they stop it (`ends_at` empty); Keep 24h,
+7d or Always asks again, Stop or the chip's × takes it off their list. Nobody
+else sees it there. The server records the coins of every list together, once
+each however many follow one — a stream per market, one set of minutes — on
+each exchange BTC is read from that lists it, quoted as BTC is there, at most
+twenty coins at once (a coin already recorded takes no room). A coin none of
+whose followers was here for two weeks (`account.seen_at`, written to the hour
+by the session middleware) stops being recorded, and starts again when one is
+back; a coin with no live follow left lapses, and its streams close. Its threshold until the reader sets one is
+three times its usual minute over the last day. Anyone drags the chips into
+the order they like (kept with the panel).
 
 Beside the exchanges' markets the server works out a few series itself, under
 the `index` venue (`indices`; `index:TOTAL`): the crypto market's capitalisation

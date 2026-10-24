@@ -3,10 +3,11 @@
  * market the server follows one coin on, with the minutes that ran hard enough
  * to be worth a word beneath them.
  *
- * BTC and ETH are always followed. The server's admins add another coin from here, and
- * the server records it for a day or a week from when they last asked, or for
- * as long as they leave it, until they stop it with the chip's ×; anyone can
- * read the coins being recorded, and drag the chips into the order they like.
+ * BTC and ETH are always followed, for everyone. A signed-in reader adds up to
+ * seven coins of their own from here, each for a day or a week from when they
+ * last asked, or for as long as they leave it, until they stop it with the
+ * chip's ×. The list is theirs alone; a coin two readers follow is still
+ * recorded once. Anyone drags the chips into the order they like.
  *
  * The list is the panel; what counts as hard — a size per market, and whether
  * Telegram hears about it — sits under the gear, since it is set once and read
@@ -19,6 +20,7 @@ import { useDismiss } from '../lib/dismiss';
 import { formatPrice, formatTurnover, priceDecimals } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { parseMarket, venueLabel } from '../lib/markets';
+import { setOverlay } from '../app/ui';
 import { readUsd, shortUsd } from '../lib/flow';
 import { formatClock, formatDateTime } from '../lib/timezone';
 import { toast } from '../lib/toasts';
@@ -45,11 +47,11 @@ const coinFrom = (text: string): string => text.trim().toUpperCase().replace(/^(
 const ALWAYS: FlowCoin = { coin: 'BTC', until: null, fixed: true };
 /** Recorded always, nobody's to stop: BTC and ETH, as the server says. */
 const fixed = (c: FlowCoin): boolean => c.fixed === true || c.coin === ALWAYS.coin;
-/** How long an admin can have a coin recorded, as the buttons and the notice say it. */
+/** How long a reader can follow a coin, as the buttons and the notice say it. */
 const SPANS: { span: FlowSpan; label: string; told: string }[] = [
   { span: 'day', label: '24h', told: 'for 24 hours' },
   { span: 'week', label: '7d', told: 'for 7 days' },
-  { span: 'always', label: 'Always', told: 'until it is stopped' },
+  { span: 'always', label: 'Always', told: 'until you stop it' },
 ];
 
 /** `Binance Perp` — which exchange and which kind, since all of them are one coin. */
@@ -105,6 +107,21 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
   };
   const recording = () => coins().find((c) => c.coin === shown() && !fixed(c));
   const choose = (name: string) => patchPanel(props.panel.id, { coin: name });
+  /** This reader's own coins, and how many they may have. */
+  const mine = () => coins().filter((c) => !fixed(c)).length;
+  const room = () => state()?.perReader ?? 7;
+  /** The `+`: the box to name a coin, or what stands in the way of one. */
+  const add = () => {
+    if (!state()?.signedIn) {
+      toast({ tone: 'info', title: 'Sign in to follow more coins', body: 'BTC and ETH are here for everyone. Sign in with Telegram in Settings to follow up to seven coins of your own.', action: () => setOverlay({ kind: 'settings' }) });
+      return;
+    }
+    if (mine() >= room()) {
+      toast({ tone: 'warn', title: `You follow ${room()} coins already`, body: 'Stop one with its × to add another.' });
+      return;
+    }
+    setAdding(true);
+  };
 
   // Dragging a chip along the toolbar: where it would land, as an index among the chips.
   const [drag, setDrag] = createSignal<{ coin: string; to: number } | null>(null);
@@ -165,24 +182,24 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
       const followed = await api.flowFollow(name, span);
       setAdding(false);
       const told = SPANS.find((s) => s.span === span)!.told;
-      toast({ tone: 'info', title: `${followed.coin} flow recorded ${told}`, body: `On ${followed.markets.length} market${followed.markets.length === 1 ? '' : 's'}` });
+      toast({ tone: 'info', title: `Following ${followed.coin}'s flow ${told}`, body: `On ${followed.markets.length} market${followed.markets.length === 1 ? '' : 's'}` });
       if (followed.coin === coin()) await load();
       else choose(followed.coin);
     } catch (e) {
-      toast({ tone: 'warn', title: `${name} not recorded`, body: errorText(e) });
+      toast({ tone: 'warn', title: `${name} not followed`, body: errorText(e) });
     } finally {
       setBusy(false);
     }
   };
 
   const stop = async (name: string) => {
-    if (!confirm(`Stop recording ${name}'s flow? What is recorded so far is kept for two days.`)) return;
+    if (!confirm(`Stop following ${name}'s flow? What is recorded so far is kept for two days.`)) return;
     try {
       await api.flowUnfollow(name);
       if (coin() === name) choose('BTC');
       else await load();
     } catch (e) {
-      toast({ tone: 'warn', title: `${name} still recorded`, body: errorText(e) });
+      toast({ tone: 'warn', title: `${name} still followed`, body: errorText(e) });
     }
   };
 
@@ -215,6 +232,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
                 class="fl-chip"
                 classList={{
                   on: c.coin === shown(),
+                  paused: c.recorded === false,
                   dragging: drag()?.coin === c.coin,
                   grab: grab() === c.coin,
                   before: drag()?.to === i(),
@@ -227,7 +245,15 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
                 <button
                   class="tb fl-coin"
                   classList={{ on: c.coin === shown() }}
-                  data-tip={c.until !== null ? `Recorded until ${lapses(c.until, now())} · drag to reorder` : fixed(c) ? 'Always recorded · drag to reorder' : 'Recorded until it is stopped · drag to reorder'}
+                  data-tip={
+                    c.recorded === false
+                      ? 'Not recorded yet: the server records as many coins as it can, and this one starts once there is room'
+                      : c.until !== null
+                        ? `Followed until ${lapses(c.until, now())} · drag to reorder`
+                        : fixed(c)
+                          ? 'Always recorded · drag to reorder'
+                          : 'Followed until you stop it · drag to reorder'
+                  }
                   onClick={() => {
                     if (performance.now() - draggedAt > 300) choose(c.coin);
                   }}
@@ -237,8 +263,8 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
                     {(until) => <span class="left">{left(until(), now())}</span>}
                   </Show>
                 </button>
-                <Show when={state()?.admin && !fixed(c)}>
-                  <button class="x" aria-label={`Stop recording ${c.coin}`} data-tip={`Stop recording ${c.coin}`} onClick={() => void stop(c.coin)}>
+                <Show when={!fixed(c)}>
+                  <button class="x" aria-label={`Stop following ${c.coin}`} data-tip={`Stop following ${c.coin}`} onClick={() => void stop(c.coin)}>
                     <Icon name="close" size={9} stroke={2.4} />
                   </button>
                 </Show>
@@ -246,11 +272,15 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
             )}
           </For>
         </span>
-        <Show when={state()?.admin}>
+        <Show when={state()?.watching}>
           <Show
             when={adding()}
             fallback={
-              <button class="iconbtn" data-tip="Record another coin's flow" onClick={() => setAdding(true)}>
+              <button
+                class="iconbtn"
+                data-tip={state()?.signedIn ? `Follow another coin's flow · ${mine()} of ${room()}` : 'Follow another coin: sign in with Telegram first'}
+                onClick={add}
+              >
                 <Icon name="plus" size={13} />
               </button>
             }
@@ -280,7 +310,7 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
               />
               <For each={SPANS}>
                 {(s, i) => (
-                  <button class="tb" classList={{ on: i() === 0 }} type="submit" value={s.span} disabled={busy()} data-tip={`Record it ${s.told}`}>
+                  <button class="tb" classList={{ on: i() === 0 }} type="submit" value={s.span} disabled={busy()} data-tip={`Follow it ${s.told}`}>
                     {s.label}
                   </button>
                 )}
@@ -304,27 +334,25 @@ export function FlowPanel(props: { panel: FlowPanelState }) {
         {(c) => (
           <div class="fl-note">
             <span class="grow">
-              {c().until === null ? `${c().coin} recorded until it is stopped` : `${c().coin} recorded for ${left(c().until!, now())} more`}
+              {c().until === null ? `You follow ${c().coin} until you stop it` : `You follow ${c().coin} for ${left(c().until!, now())} more`}
             </span>
-            <Show when={state()?.admin}>
-              <span class="dim">Keep</span>
-              <For each={SPANS}>
-                {(s) => (
-                  <button
-                    class="tb"
-                    classList={{ on: s.span === 'always' && c().until === null }}
-                    data-tip={s.span === 'always' ? 'Record it until it is stopped' : `Record it ${s.told} from now`}
-                    disabled={busy()}
-                    onClick={() => void follow(c().coin, s.span)}
-                  >
-                    {s.label}
-                  </button>
-                )}
-              </For>
-              <button class="tb danger" data-tip="Stop recording it now" onClick={() => void stop(c().coin)}>
-                Stop
-              </button>
-            </Show>
+            <span class="dim">Keep</span>
+            <For each={SPANS}>
+              {(s) => (
+                <button
+                  class="tb"
+                  classList={{ on: s.span === 'always' && c().until === null }}
+                  data-tip={s.span === 'always' ? 'Follow it until you stop it' : `Follow it ${s.told} from now`}
+                  disabled={busy()}
+                  onClick={() => void follow(c().coin, s.span)}
+                >
+                  {s.label}
+                </button>
+              )}
+            </For>
+            <button class="tb danger" data-tip="Stop following it now" onClick={() => void stop(c().coin)}>
+              Stop
+            </button>
           </div>
         )}
       </Show>

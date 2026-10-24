@@ -409,17 +409,11 @@ site once with `?noreferral` on a device and the card is never offered there.
 
 <br>
 
-The Flow panel always shows BTC and ETH. To let a browser add other coins from the
-panel's `+` (each is recorded for 24 hours, 7 days, or until stopped; Keep renews it), copy its id
-from Settings → Browser id into `/var/www/tradoor/.env` on the server
-(`deploy/compose.yml` passes it on) and recreate the server container
-(`docker compose up -d server`):
-
-```
-TRADOOR_ADMINS=<browser id>,<another browser id>
-```
-
-Without it the panel only reads the coins already recorded.
+The Flow panel always shows BTC and ETH. Signed in with Telegram, each reader
+adds up to seven coins of their own from the panel's `+` (each for 24 hours,
+7 days, or until stopped; Keep renews it), and only they see them. The server
+records a coin once however many readers follow it, at most twenty coins at a
+time, and stops recording one whose followers have all been away for two weeks.
 
 </details>
 
