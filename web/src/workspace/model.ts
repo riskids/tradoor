@@ -222,15 +222,20 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   }
 }
 
-const tabsFor = (panel: Panel): TabsNode => ({ kind: 'tabs', id: uid('tabs'), panels: [panel.id], active: panel.id });
+/** A group of tabs, the first of them showing. */
+const tabsFor = (first: Panel, ...rest: Panel[]): TabsNode => ({ kind: 'tabs', id: uid('tabs'), panels: [first, ...rest].map((p) => p.id), active: first.id });
 
+/** What a first visit opens: the chart over TPO and Values; the watchlist with flow, signals and alerts behind it; liquidations under them. */
 export function defaultWorkspace(): WorkspaceDoc {
   const group = { link: 'green' as const, market: DEFAULT_MARKET, timeframe: DEFAULT_TIMEFRAME };
   const chart = newPanel('chart', group);
   const tpo = newPanel('tpo', group);
   const values = newPanel('values', group);
   const watchlist = newPanel('watchlist', group);
+  const flow = newPanel('flow', group);
+  const signals = newPanel('signals', group);
   const alerts = newPanel('alerts', group);
+  const liquidations = newPanel('liquidations', group);
   const links = {} as Record<LinkColor, LinkState>;
   for (const c of LINK_COLORS) links[c] = { market: DEFAULT_MARKET, timeframe: DEFAULT_TIMEFRAME };
   return {
@@ -250,10 +255,10 @@ export function defaultWorkspace(): WorkspaceDoc {
           sizes: [0.7, 0.3],
           children: [tabsFor(chart), { kind: 'split', id: uid('split'), dir: 'row', sizes: [0.62, 0.38], children: [tabsFor(tpo), tabsFor(values)] }],
         },
-        { kind: 'split', id: uid('split'), dir: 'column', sizes: [0.6, 0.4], children: [tabsFor(watchlist), tabsFor(alerts)] },
+        { kind: 'split', id: uid('split'), dir: 'column', sizes: [0.6, 0.4], children: [tabsFor(watchlist, flow, signals, alerts), tabsFor(liquidations)] },
       ],
     },
-    panels: { [chart.id]: chart, [tpo.id]: tpo, [values.id]: values, [watchlist.id]: watchlist, [alerts.id]: alerts },
+    panels: Object.fromEntries([chart, tpo, values, watchlist, flow, signals, alerts, liquidations].map((p) => [p.id, p])),
     links,
     theme: {},
     timeframes: [...FAVORITE_TIMEFRAMES],
