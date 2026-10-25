@@ -1519,10 +1519,9 @@ impl Chart {
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
             // Bands under their lines, so the strokes sit on top of the fill.
             for (li, line) in study.lines.iter().enumerate() {
+                // The fill has its own row in the settings (`{key}.fill`), so hiding the
+                // line leaves the band; an unwanted band is made transparent there.
                 let Some(partner_key) = line.fill_to else { continue };
-                if self.line_hidden(&study.id, line.key) {
-                    continue;
-                }
                 let Some(partner) = study.lines.iter().find(|l| l.key == partner_key) else { continue };
                 let color = self.fill_color(&study.id, line, index, li);
                 self.paint_band(f, &pane.scale, &line.values, &partner.values, i0, i1, color);
