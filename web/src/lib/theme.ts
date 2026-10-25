@@ -50,7 +50,7 @@ export const FONT_PX = { name: 'fontPx', value: '11' };
 export const UI_THEME: readonly (ThemeKey & { css: string })[] = [
   { name: 'ui.primary', css: '--primary', label: 'Accent', value: '#2962ff' },
   { name: 'ui.bg', css: '--bg', label: 'Page', value: '#131722' },
-  { name: 'ui.surface', css: '--surface', label: 'Panels', value: '#1e222d' },
+  { name: 'ui.surface', css: '--surface', label: 'Toolbars and panels', value: '#131722' },
   { name: 'ui.border', css: '--border', label: 'Borders', value: '#2a2e39' },
   { name: 'ui.text', css: '--text', label: 'Text', value: '#d1d4dc' },
   { name: 'ui.bull', css: '--bull', label: 'Up', value: '#26a69a' },
