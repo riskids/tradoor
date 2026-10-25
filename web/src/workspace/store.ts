@@ -12,7 +12,8 @@ import { readJson, readPref, writePref } from '../lib/prefs';
 import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
 import { TIMEFRAMES } from '../lib/timeframes';
 
-const LOCAL_KEY = 'workspace';
+// ponytail: key bumped once so browsers holding the old three-row layout open the TradingView-like default.
+const LOCAL_KEY = 'workspace-tv';
 /** Whose the local copy is, written beside it. */
 const LOCAL_OWNER_KEY = 'workspace-owner';
 const SERVER_ID = 'default';

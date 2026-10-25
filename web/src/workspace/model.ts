@@ -174,7 +174,7 @@ export interface WorkspaceDoc {
 export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom';
 
 export const DEFAULT_STUDIES = 'rsi:14,stochrsi:14:14:3:3';
-export const DEFAULT_TIMEFRAME = '1h';
+export const DEFAULT_TIMEFRAME = '1m';
 /** The coins, then the market around them: the index perpetuals, the VIX, and the crypto market's own measures. */
 const DEFAULT_WATCHLIST = [
   'binance-perp:BTCUSDT',
@@ -242,21 +242,13 @@ export function defaultWorkspace(): WorkspaceDoc {
     v: 1,
     name: 'Default',
     savedAt: 0,
+    // TradingView-like: one big chart, today's TPO beside it, the watchlist on the right.
     root: {
       kind: 'split',
       id: uid('split'),
       dir: 'row',
-      sizes: [0.8, 0.2],
-      children: [
-        {
-          kind: 'split',
-          id: uid('split'),
-          dir: 'column',
-          sizes: [0.7, 0.3],
-          children: [tabsFor(chart), { kind: 'split', id: uid('split'), dir: 'row', sizes: [0.62, 0.38], children: [tabsFor(tpo), tabsFor(values)] }],
-        },
-        { kind: 'split', id: uid('split'), dir: 'column', sizes: [0.6, 0.4], children: [tabsFor(watchlist, flow, signals, alerts), tabsFor(liquidations)] },
-      ],
+      sizes: [0.64, 0.18, 0.18],
+      children: [tabsFor(chart), tabsFor(tpo, values), tabsFor(watchlist, liquidations, flow, signals, alerts)],
     },
     panels: Object.fromEntries([chart, tpo, values, watchlist, flow, signals, alerts, liquidations].map((p) => [p.id, p])),
     links,
