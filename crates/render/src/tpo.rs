@@ -716,7 +716,7 @@ mod tests {
     use tradoor_core::time::HOUR;
 
     fn bar(i: i64, low: f64, high: f64, volume: f64) -> Candle {
-        Candle { open_time: i * HOUR, open: low, high, low, close: high, volume, quote_volume: None }
+        Candle { open_time: i * HOUR, open: low, high, low, close: high, volume, quote_volume: None, taker_buy_volume: None }
     }
 
     #[test]

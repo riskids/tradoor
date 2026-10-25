@@ -20,13 +20,15 @@ export interface Cols {
   low: Float64Array;
   close: Float64Array;
   volume: Float64Array;
+  /** Binance's taker buy volume per bar; NaN where the exchange does not report it. */
+  taker_buy_volume: Float64Array;
 }
 
-const KEYS = ['time', 'open', 'high', 'low', 'close', 'volume'] as const;
+const KEYS = ['time', 'open', 'high', 'low', 'close', 'volume', 'taker_buy_volume'] as const;
 
 export function emptyCols(): Cols {
   const e = () => new Float64Array(0);
-  return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e() };
+  return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e(), taker_buy_volume: e() };
 }
 
 /** Whether two runs of bars are the same bars, to the last figure. */
@@ -35,7 +37,7 @@ export function sameCols(a: Cols, b: Cols): boolean {
   for (const key of KEYS) {
     const x = a[key];
     const y = b[key];
-    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i] && !(Number.isNaN(x[i]) && Number.isNaN(y[i]))) return false;
   }
   return true;
 }
@@ -264,7 +266,7 @@ async function rowsIn(ref: MarketRef, interval: string, range: Range, limit: num
     if (range.end !== undefined) query += `&endTime=${range.end}`;
     const body = ref.venue === 'binance-perp' ? await getJson(`https://fapi.binance.com${query}`) : await binanceSpot(query);
     if (!Array.isArray(body)) throw new Error('Binance sent an unexpected kline response');
-    rows = (body as unknown[][]).map((r) => [Number(r[0]), Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5])]);
+    rows = (body as unknown[][]).map((r) => [Number(r[0]), Number(r[1]), Number(r[2]), Number(r[3]), Number(r[4]), Number(r[5]), Number(r[9] ?? NaN)]);
   } else if (ref.venue.startsWith('bybit')) {
     const category = ref.venue === 'bybit-perp' ? 'linear' : 'spot';
     let url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${ref.symbol}&interval=${BYBIT_INTERVAL[interval] ?? interval}&limit=${limit}`;

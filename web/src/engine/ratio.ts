@@ -16,7 +16,7 @@ import type { SocketState } from './streams';
 
 const empty = (): Cols => {
   const e = () => new Float64Array(0);
-  return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e() };
+  return { time: e(), open: e(), high: e(), low: e(), close: e(), volume: e(), taker_buy_volume: e() };
 };
 
 export interface Ohlc {
@@ -45,7 +45,7 @@ export function ratioBar(a: Ohlc, b: Ohlc): Ohlc | null {
 /** The bars both have, each of `a`'s divided by `b`'s at the same time. */
 export function divide(a: Cols, b: Cols): Cols {
   const n = Math.min(a.time.length, b.time.length);
-  const out = { time: new Float64Array(n), open: new Float64Array(n), high: new Float64Array(n), low: new Float64Array(n), close: new Float64Array(n), volume: new Float64Array(n) };
+  const out = { time: new Float64Array(n), open: new Float64Array(n), high: new Float64Array(n), low: new Float64Array(n), close: new Float64Array(n), volume: new Float64Array(n), taker_buy_volume: new Float64Array(n).fill(NaN) };
   let k = 0;
   for (let i = 0, j = 0; i < a.time.length && j < b.time.length; ) {
     const ta = a.time[i]!;
@@ -66,7 +66,7 @@ export function divide(a: Cols, b: Cols): Cols {
       j += 1;
     }
   }
-  return { time: out.time.subarray(0, k), open: out.open.subarray(0, k), high: out.high.subarray(0, k), low: out.low.subarray(0, k), close: out.close.subarray(0, k), volume: out.volume.subarray(0, k) };
+  return { time: out.time.subarray(0, k), open: out.open.subarray(0, k), high: out.high.subarray(0, k), low: out.low.subarray(0, k), close: out.close.subarray(0, k), volume: out.volume.subarray(0, k), taker_buy_volume: out.taker_buy_volume.subarray(0, k) };
 }
 
 /**

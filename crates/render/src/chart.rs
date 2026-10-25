@@ -923,6 +923,7 @@ impl Chart {
                 "macd" => Group::Macd,
                 "atr" => Group::Atr,
                 "oi" => Group::Oi,
+                "delta" => Group::Delta,
                 _ => continue,
             };
             if let Ok(w) = weight.trim().parse::<f64>() {
@@ -1328,7 +1329,7 @@ impl Chart {
         };
         let bars: Vec<Candle> = (0..self.total_bars())
             .filter_map(|i| self.bar(i))
-            .map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None })
+            .map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None, taker_buy_volume: None })
             .collect();
         if self.tpo_profiles.as_ref().is_some_and(|p| p.fresh(split, &bars, &self.tpo_settings)) {
             return;
@@ -1394,7 +1395,7 @@ impl Chart {
         let tpo = self.tpo().is_some() && self.tpo_profiles.is_some();
         let foot = !tpo && self.footprint_shown && !self.footprint.is_empty();
         if let (true, Some(profiles)) = (tpo, self.tpo_profiles.as_ref()) {
-            let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None }).collect();
+            let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None, taker_buy_volume: None }).collect();
             let x = |l: f64| self.time.x(l) as f32;
             let y = |p: f64| price.scale.y(p) as f32;
             let view = tpo::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, precision: self.precision(), x: &x, y: &y, bars: &bars };
@@ -1473,7 +1474,7 @@ impl Chart {
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
             for (li, line) in study.lines.iter().enumerate() {
                 match (line.kind, line.style) {
-                    (LineType::Histogram, _) => self.paint_histogram(f, &pane.scale, &line.values, i0, i1, body),
+                    (LineType::Histogram, _) => self.paint_histogram(f, &pane.scale, &line.values, i0, i1, body, line.color.and_then(Color::parse), line.neg_color.and_then(Color::parse)),
                     (LineType::Line, LineStyle::None) => {}
                     (LineType::Line, style) => self.paint_series(f, &pane.scale, &line.values, i0, i1, self.line_color(line, index, li), line.width, style),
                 }
@@ -1772,14 +1773,14 @@ impl Chart {
         }
     }
 
-    fn paint_histogram(&self, f: &mut Frame, scale: &PriceScale, values: &[Option<f64>], i0: usize, i1: usize, body: f32) {
+    fn paint_histogram(&self, f: &mut Frame, scale: &PriceScale, values: &[Option<f64>], i0: usize, i1: usize, body: f32, pos: Option<Color>, neg: Option<Color>) {
         let zero = scale.y(0.0) as f32;
         let w = (body * 0.7).max(1.0 / f.dpr);
         for i in i0..=i1.min(values.len().saturating_sub(1)) {
             let Some(v) = values[i] else { continue };
             let y = scale.y(v) as f32;
             let x = f.snap(self.time.x(i as f64) as f32);
-            let color = if v >= 0.0 { self.theme.bull } else { self.theme.bear };
+            let color = if v >= 0.0 { pos.unwrap_or(self.theme.bull) } else { neg.unwrap_or(self.theme.bear) };
             f.crisp_rect(x - w / 2.0, y.min(zero), w, (y - zero).abs().max(1.0 / f.dpr), color.with_alpha(0x80));
         }
     }
@@ -2648,7 +2649,7 @@ mod tests {
         (0..n)
             .map(|i| {
                 let p = 100.0 + (i as f64 / 7.0).sin() * 10.0 + i as f64 * 0.05;
-                Candle { open_time: 1_700_000_000_000 - 1_700_000_000_000 % HOUR + i as i64 * HOUR, open: p - 0.5, high: p + 1.5, low: p - 2.0, close: p + 0.5, volume: 10.0 + i as f64, quote_volume: None }
+                Candle { open_time: 1_700_000_000_000 - 1_700_000_000_000 % HOUR + i as i64 * HOUR, open: p - 0.5, high: p + 1.5, low: p - 2.0, close: p + 0.5, volume: 10.0 + i as f64, quote_volume: None, taker_buy_volume: None }
             })
             .collect()
     }
@@ -2657,7 +2658,7 @@ mod tests {
     fn a_trade_that_moves_only_hidden_volume_draws_nothing_and_the_view_says_where_it_starts() {
         let mut c = chart();
         let forming = candles(500)[499].open_time + HOUR;
-        let tick = |close: f64, volume: f64| Some(LiveBar { open_time: forming, open: 130.0, high: 131.0, low: 129.0, close, volume, closed: false });
+        let tick = |close: f64, volume: f64| Some(LiveBar { open_time: forming, open: 130.0, high: 131.0, low: 129.0, close, volume, taker_buy_volume: None, closed: false });
         c.set_live(tick(130.0, 1.0));
         c.render(1_800_000_000_000);
         c.set_live(tick(130.0, 2.0));
@@ -2684,7 +2685,7 @@ mod tests {
         c.set_studies("oi:255:1:0,stochrsi:14:14:3:3");
         assert!(c.studies.iter().all(|s| s.lines.is_empty()), "hidden studies are not worked out");
         let forming = bars[499].open_time + HOUR;
-        let tick = |close: f64| LiveBar { open_time: forming, open: 130.0, high: 131.0, low: 129.0, close, volume: 1.0, closed: false };
+        let tick = |close: f64| LiveBar { open_time: forming, open: 130.0, high: 131.0, low: 129.0, close, volume: 1.0, taker_buy_volume: None, closed: false };
         c.set_live(Some(tick(130.0)));
         c.set_hidden("stochrsi:14:14:3:3");
         assert!(!c.studies[0].lines.is_empty() && c.studies[1].lines.is_empty(), "shown again, worked out at once");
@@ -2766,7 +2767,7 @@ mod tests {
         c.render(1_800_000_000_000);
         let before = c.tpo_profiles.as_ref().unwrap().list.last().unwrap().session.periods.len();
         let last = *c.candles().last().unwrap();
-        c.set_live(Some(LiveBar { open_time: last.open_time + HOUR, open: last.close, high: last.close + 5.0, low: last.close - 5.0, close: last.close, volume: 1.0, closed: false }));
+        c.set_live(Some(LiveBar { open_time: last.open_time + HOUR, open: last.close, high: last.close + 5.0, low: last.close - 5.0, close: last.close, volume: 1.0, taker_buy_volume: None, closed: false }));
         c.render(1_800_000_000_000);
         let session = &c.tpo_profiles.as_ref().unwrap().list.last().unwrap().session;
         // The live hour opens a bracket in the current day, or starts the next day.
@@ -3657,12 +3658,12 @@ mod tests {
         let mut c = chart();
         c.set_log_scale(true);
         let last = *c.candles().last().unwrap();
-        c.set_live(Some(LiveBar { open_time: last.open_time + HOUR, open: 120.0, high: 125.0, low: 119.0, close: 124.0, volume: 3.0, closed: false }));
+        c.set_live(Some(LiveBar { open_time: last.open_time + HOUR, open: 120.0, high: 125.0, low: 119.0, close: 124.0, volume: 3.0, taker_buy_volume: None, closed: false }));
         let frame = c.render(1_800_000_000_000);
         assert!(frame.vertex_count() > 0);
         assert!(c.panes[0].scale.y(125.0) < c.panes[0].scale.y(119.0));
         assert_eq!(c.legend().index, Some(500));
-        c.set_live(Some(LiveBar { open_time: last.open_time, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1.0, closed: false }));
+        c.set_live(Some(LiveBar { open_time: last.open_time, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1.0, taker_buy_volume: None, closed: false }));
         assert!(c.live.is_none(), "a bar that is already stored is not forming");
     }
 

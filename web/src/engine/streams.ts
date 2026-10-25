@@ -27,6 +27,8 @@ export interface KlineMsg {
   low: number;
   close: number;
   volume: number;
+  /** Binance's taker buy volume for the bar; NaN on every other venue. */
+  taker: number;
   /** Last trade folded into the kline, comparable with a trade's id. */
   lastTradeId: number;
   closed: boolean;
@@ -117,6 +119,7 @@ function binance(urls: string[]): Protocol {
           low: num(k.l),
           close: num(k.c),
           volume: num(k.v),
+          taker: num(k.V),
           lastTradeId: typeof k.L === 'number' ? k.L : -1,
           closed: k.x === true,
         });
@@ -180,7 +183,7 @@ function bybit(urls: string[]): Protocol {
       if (topic.startsWith('kline.') && Array.isArray(m.data)) {
         for (const k of m.data as Json[]) {
           // No trades are folded here, so every kline is taken whole: id 0.
-          emit(topic, { kind: 'kline', openTime: num(k.start), open: num(k.open), high: num(k.high), low: num(k.low), close: num(k.close), volume: num(k.volume), lastTradeId: 0, closed: k.confirm === true });
+          emit(topic, { kind: 'kline', openTime: num(k.start), open: num(k.open), high: num(k.high), low: num(k.low), close: num(k.close), volume: num(k.volume), taker: NaN, lastTradeId: 0, closed: k.confirm === true });
         }
       } else if (topic.startsWith('allLiquidation.') && Array.isArray(m.data)) {
         for (const l of m.data as Json[]) {

@@ -121,19 +121,21 @@ impl ChartEngine {
         Ok(())
     }
 
-    pub fn set_candles(&mut self, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64]) {
-        self.chart.set_candles(candles(time, open, high, low, close, volume));
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_candles(&mut self, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], taker_buy_volume: &[f64]) {
+        self.chart.set_candles(candles(time, open, high, low, close, volume, taker_buy_volume));
     }
 
     /// The daily bars the chart's own were folded from, for key levels that open
     /// inside a bar longer than a day. Empty clears them.
     pub fn set_days(&mut self, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64]) {
         let volume = vec![0.0; time.len()];
-        self.chart.set_days(candles(time, open, high, low, close, &volume));
+        self.chart.set_days(candles(time, open, high, low, close, &volume, &[]));
     }
 
-    pub fn set_live(&mut self, open_time: f64, open: f64, high: f64, low: f64, close: f64, volume: f64) {
-        self.chart.set_live(Some(LiveBar { open_time: open_time as i64, open, high, low, close, volume, closed: false }));
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_live(&mut self, open_time: f64, open: f64, high: f64, low: f64, close: f64, volume: f64, taker_buy_volume: f64) {
+        self.chart.set_live(Some(LiveBar { open_time: open_time as i64, open, high, low, close, volume, taker_buy_volume: taker_buy_volume.is_finite().then_some(taker_buy_volume), closed: false }));
     }
 
     pub fn clear_live(&mut self) {
@@ -572,8 +574,9 @@ pub fn bar_start(tf: &str, t: f64) -> Result<f64, JsValue> {
 
 /// Fold candles into a chart timeframe, dropping a bucket that has not closed.
 #[wasm_bindgen]
-pub fn fold_candles(tf: &str, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], now: f64) -> Result<Object, JsValue> {
-    Ok(columns(&fold(&candles(time, open, high, low, close, volume), timeframe(tf)?, now as i64)))
+#[allow(clippy::too_many_arguments)]
+pub fn fold_candles(tf: &str, time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], taker_buy_volume: &[f64], now: f64) -> Result<Object, JsValue> {
+    Ok(columns(&fold(&candles(time, open, high, low, close, volume, taker_buy_volume), timeframe(tf)?, now as i64)))
 }
 
 #[wasm_bindgen]
@@ -657,8 +660,18 @@ impl LiveFeedEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn apply_kline(&mut self, open_time: f64, open: f64, high: f64, low: f64, close: f64, volume: f64, last_trade_id: f64, closed: bool) -> bool {
-        self.feed.apply_kline(Kline { open_time: open_time as i64, open, high, low, close, volume, last_trade_id: last_trade_id as i64, closed })
+    pub fn apply_kline(&mut self, open_time: f64, open: f64, high: f64, low: f64, close: f64, volume: f64, taker_buy_volume: f64, last_trade_id: f64, closed: bool) -> bool {
+        self.feed.apply_kline(Kline {
+            open_time: open_time as i64,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            taker_buy_volume: taker_buy_volume.is_finite().then_some(taker_buy_volume),
+            last_trade_id: last_trade_id as i64,
+            closed,
+        })
     }
 
     pub fn apply_trade(&mut self, time: f64, price: f64, qty: f64, last_trade_id: f64) -> bool {
@@ -677,6 +690,7 @@ impl LiveFeedEngine {
                 set(&o, "low", b.low);
                 set(&o, "close", b.close);
                 set(&o, "volume", b.volume);
+                set(&o, "taker", b.taker_buy_volume.unwrap_or(f64::NAN));
                 set(&o, "closed", b.closed);
                 o.into()
             }
@@ -719,7 +733,7 @@ pub fn indicator_values(
     basis: &str,
 ) -> Result<JsValue, JsValue> {
     let tf = timeframe(tf)?;
-    let bars = candles(time, open, high, low, close, volume);
+    let bars = candles(time, open, high, low, close, volume, &[]);
     let Some(last) = bars.last() else { return Ok(JsValue::NULL) };
     let engine = engine_series(&bars);
     let closes: Vec<Option<f64>> = bars.iter().map(|c| Some(c.close)).collect();
@@ -738,7 +752,7 @@ pub fn indicator_values(
         None => JsValue::NULL,
         Some(spec) => {
             let basis = if basis == "tpo" { ProfileBasis::Tpo } else { ProfileBasis::Volume };
-            let source = candles(src_time, src_open, src_high, src_low, src_close, src_volume);
+            let source = candles(src_time, src_open, src_high, src_low, src_close, src_volume, &[]);
             let overlay = profile_overlay(&bars, &source, spec, basis);
             let p = obj();
             set(&p, "session", spec.session.as_str());

@@ -36,7 +36,7 @@ function okx(urls: string[], channel: 'candle' | 'tickers'): Protocol {
       if (ch.startsWith('candle')) {
         const swap = inst.endsWith('-SWAP');
         for (const r of m.data as string[][]) {
-          emit(`${ch}|${inst}`, { kind: 'kline', openTime: num(r[0]), open: num(r[1]), high: num(r[2]), low: num(r[3]), close: num(r[4]), volume: num(r[swap ? 6 : 5]), lastTradeId: 0, closed: r[8] === '1' });
+          emit(`${ch}|${inst}`, { kind: 'kline', openTime: num(r[0]), open: num(r[1]), high: num(r[2]), low: num(r[3]), close: num(r[4]), volume: num(r[swap ? 6 : 5]), taker: NaN, lastTradeId: 0, closed: r[8] === '1' });
         }
       } else if (ch === 'tickers') {
         const d = (m.data as Json[])[0];
@@ -71,7 +71,7 @@ function bitget(urls: string[]): Protocol {
       if (!arg || !Array.isArray(m.data)) return;
       const topic = `${arg.instType}|${arg.channel}|${arg.instId}`;
       if (String(arg.channel).startsWith('candle')) {
-        for (const r of m.data as string[][]) emit(topic, { kind: 'kline', openTime: num(r[0]), open: num(r[1]), high: num(r[2]), low: num(r[3]), close: num(r[4]), volume: num(r[5]), lastTradeId: 0, closed: false });
+        for (const r of m.data as string[][]) emit(topic, { kind: 'kline', openTime: num(r[0]), open: num(r[1]), high: num(r[2]), low: num(r[3]), close: num(r[4]), volume: num(r[5]), taker: NaN, lastTradeId: 0, closed: false });
       } else if (arg.channel === 'ticker') {
         const d = (m.data as Json[])[0];
         if (!d) return;
@@ -97,7 +97,7 @@ function hyperliquid(urls: string[]): Protocol {
       const d = m.data as Json | undefined;
       if (!d) return;
       if (m.channel === 'candle') {
-        emit(`candle|${d.s}|${d.i}`, { kind: 'kline', openTime: num(d.t), open: num(d.o), high: num(d.h), low: num(d.l), close: num(d.c), volume: num(d.v), lastTradeId: 0, closed: false });
+        emit(`candle|${d.s}|${d.i}`, { kind: 'kline', openTime: num(d.t), open: num(d.o), high: num(d.h), low: num(d.l), close: num(d.c), volume: num(d.v), taker: NaN, lastTradeId: 0, closed: false });
       } else if (m.channel === 'activeAssetCtx') {
         const ctx = d.ctx as Json;
         emit(`ctx|${d.coin}`, ticker(num(ctx.markPx), num(ctx.prevDayPx), num(ctx.dayNtlVlm)));
@@ -121,7 +121,7 @@ function krakenSpot(urls: string[]): Protocol {
       if (!Array.isArray(m.data)) return;
       for (const d of m.data as Json[]) {
         if (m.channel === 'ohlc') {
-          emit(`ohlc|${d.symbol}|${d.interval}`, { kind: 'kline', openTime: Date.parse(String(d.interval_begin)), open: num(d.open), high: num(d.high), low: num(d.low), close: num(d.close), volume: num(d.volume), lastTradeId: 0, closed: false });
+          emit(`ohlc|${d.symbol}|${d.interval}`, { kind: 'kline', openTime: Date.parse(String(d.interval_begin)), open: num(d.open), high: num(d.high), low: num(d.low), close: num(d.close), volume: num(d.volume), taker: NaN, lastTradeId: 0, closed: false });
         } else if (m.channel === 'ticker') {
           emit(`ticker|${d.symbol}`, { kind: 'ticker', last: num(d.last), changePct: num(d.change_pct), quoteVolume: num(d.volume) * num(d.vwap) });
         }
@@ -145,7 +145,7 @@ function krakenFutures(urls: string[]): Protocol {
       const feed = typeof m.feed === 'string' ? m.feed : '';
       if (feed.startsWith('candles_trade_') && m.candle && typeof m.candle === 'object') {
         const c = m.candle as Json;
-        emit(`${feed.replace(/_snapshot$/, '')}|${m.product_id}`, { kind: 'kline', openTime: num(c.time), open: num(c.open), high: num(c.high), low: num(c.low), close: num(c.close), volume: num(c.volume), lastTradeId: 0, closed: false });
+        emit(`${feed.replace(/_snapshot$/, '')}|${m.product_id}`, { kind: 'kline', openTime: num(c.time), open: num(c.open), high: num(c.high), low: num(c.low), close: num(c.close), volume: num(c.volume), taker: NaN, lastTradeId: 0, closed: false });
       } else if (feed === 'ticker') {
         const change = m.change ?? m.change24h;
         emit(`ticker|${m.product_id}`, { kind: 'ticker', last: num(m.last), changePct: change === undefined ? null : num(change), quoteVolume: m.volumeQuote === undefined ? null : num(m.volumeQuote) });
@@ -267,7 +267,7 @@ export class Poller {
       const rows = got.get(key);
       if (!listeners) continue;
       for (const l of listeners) l.state(rows ? 'live' : 'retrying', false);
-      for (const k of rows ?? []) for (const l of listeners) l.message({ kind: 'kline', openTime: k[0], open: k[1], high: k[2], low: k[3], close: k[4], volume: k[5], lastTradeId: 0, closed: false });
+      for (const k of rows ?? []) for (const l of listeners) l.message({ kind: 'kline', openTime: k[0], open: k[1], high: k[2], low: k[3], close: k[4], volume: k[5], taker: NaN, lastTradeId: 0, closed: false });
     }
   }
 }

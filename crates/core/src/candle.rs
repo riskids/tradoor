@@ -12,4 +12,6 @@ pub struct Candle {
     pub volume: f64,
     /// Turnover in the quote asset, when the exchange reports it.
     pub quote_volume: Option<f64>,
+    /// Volume bought by takers, when the exchange reports it (Binance).
+    pub taker_buy_volume: Option<f64>,
 }

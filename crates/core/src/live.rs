@@ -17,6 +17,8 @@ pub struct LiveBar {
     pub low: f64,
     pub close: f64,
     pub volume: f64,
+    /// Binance's taker buy volume for the forming bar, when it reports one.
+    pub taker_buy_volume: Option<f64>,
     /// The exchange has marked the bar final. It is still not stored.
     pub closed: bool,
 }
@@ -29,6 +31,7 @@ pub struct Kline {
     pub low: f64,
     pub close: f64,
     pub volume: f64,
+    pub taker_buy_volume: Option<f64>,
     /// Last trade id included, or -1. Bybit has no comparable id and passes
     /// `i64::MAX`, so its kline always wins.
     pub last_trade_id: i64,
@@ -57,7 +60,7 @@ impl LiveFeed {
         if !k.close.is_finite() {
             return false;
         }
-        let fresh = LiveBar { open_time: k.open_time, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume, closed: k.closed };
+        let fresh = LiveBar { open_time: k.open_time, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume, taker_buy_volume: k.taker_buy_volume, closed: k.closed };
         match self.bar {
             // The final kline for a bar the tape has already left.
             Some(bar) if k.open_time < bar.open_time => return false,
@@ -88,7 +91,7 @@ impl LiveFeed {
             if time >= self.timeframe.end(end) {
                 return false;
             }
-            self.bar = Some(LiveBar { open_time: end, open: price, high: price, low: price, close: price, volume: qty, closed: false });
+            self.bar = Some(LiveBar { open_time: end, open: price, high: price, low: price, close: price, volume: qty, taker_buy_volume: None, closed: false });
         } else {
             if bar.closed {
                 return false;
@@ -112,7 +115,7 @@ mod tests {
     }
 
     fn kline(open_time: i64, o: f64, h: f64, l: f64, c: f64, v: f64, last: i64, closed: bool) -> Kline {
-        Kline { open_time, open: o, high: h, low: l, close: c, volume: v, last_trade_id: last, closed }
+        Kline { open_time, open: o, high: h, low: l, close: c, volume: v, taker_buy_volume: None, last_trade_id: last, closed }
     }
 
     #[test]
@@ -121,7 +124,7 @@ mod tests {
         feed.apply_kline(kline(t(), 100.0, 101.0, 99.0, 100.0, 5.0, 1000, false));
         feed.apply_trade(t() + 1_000, 102.0, 2.0, 1001);
         feed.apply_trade(t() + 2_000, 98.0, 3.0, 1002);
-        assert_eq!(feed.current(), Some(LiveBar { open_time: t(), open: 100.0, high: 102.0, low: 98.0, close: 98.0, volume: 10.0, closed: false }));
+        assert_eq!(feed.current(), Some(LiveBar { open_time: t(), open: 100.0, high: 102.0, low: 98.0, close: 98.0, volume: 10.0, taker_buy_volume: None, closed: false }));
     }
 
     #[test]
@@ -150,7 +153,7 @@ mod tests {
         let mut feed = LiveFeed::new(ChartTimeframe::M15);
         feed.apply_kline(kline(t(), 100.0, 101.0, 99.0, 100.0, 5.0, 1000, false));
         feed.apply_trade(t() + M15 + 10, 107.0, 2.0, 1020);
-        assert_eq!(feed.current(), Some(LiveBar { open_time: t() + M15, open: 107.0, high: 107.0, low: 107.0, close: 107.0, volume: 2.0, closed: false }));
+        assert_eq!(feed.current(), Some(LiveBar { open_time: t() + M15, open: 107.0, high: 107.0, low: 107.0, close: 107.0, volume: 2.0, taker_buy_volume: None, closed: false }));
         feed.apply_kline(kline(t(), 100.0, 101.0, 99.0, 100.0, 5.0, 1000, true));
         assert_eq!(feed.current().unwrap().open_time, t() + M15);
 

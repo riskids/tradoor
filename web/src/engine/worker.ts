@@ -74,6 +74,8 @@ interface Bar {
   low: number;
   close: number;
   volume: number;
+  /** Binance's taker buy volume, NaN where the exchange does not report it. */
+  taker: number;
   closed: boolean;
 }
 
@@ -111,6 +113,7 @@ function barCols(bars: readonly Bar[]): Cols {
     low: Float64Array.from(bars, (b) => b.low),
     close: Float64Array.from(bars, (b) => b.close),
     volume: Float64Array.from(bars, (b) => b.volume),
+    taker_buy_volume: Float64Array.from(bars, (b) => b.taker),
   };
 }
 
@@ -138,7 +141,7 @@ async function openChartSeries(market: string, tf: TfInfo): Promise<CandleSeries
   const legs = ratioLegs(market);
   if (!legs) return openSeries(market, tf.base, tf.interval);
   const [a, b] = await Promise.all(legs.map((leg) => openSeries(leg, tf.base, tf.interval)));
-  const fold = (c: Cols) => fold_candles(tf.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
+  const fold = (c: Cols) => fold_candles(tf.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, c.taker_buy_volume, Date.now()) as unknown as Cols;
   // Loaded only here: a chart of one market never pays for it.
   const { RatioSeries } = await import('./ratio');
   return new RatioSeries([a!, b!], tf.timeframe, fold, (leg, bars) => baseBars(leg, tf, bars));
@@ -160,7 +163,7 @@ function combiner(timeframe: string, history: Cols): (k: KlineMsg) => KlineMsg |
       parts.clear();
       for (let i = lowerBound(history.time, start); i < history.time.length; i += 1) {
         const t = history.time[i]!;
-        parts.set(t, { kind: 'kline', openTime: t, open: history.open[i]!, high: history.high[i]!, low: history.low[i]!, close: history.close[i]!, volume: history.volume[i]!, lastTradeId: 0, closed: true });
+        parts.set(t, { kind: 'kline', openTime: t, open: history.open[i]!, high: history.high[i]!, low: history.low[i]!, close: history.close[i]!, volume: history.volume[i]!, taker: history.taker_buy_volume[i]!, lastTradeId: 0, closed: true });
       }
     }
     parts.set(k.openTime, k);
@@ -173,6 +176,7 @@ function combiner(timeframe: string, history: Cols): (k: KlineMsg) => KlineMsg |
       low: Math.min(...list.map((p) => p.low)),
       close: list[list.length - 1]!.close,
       volume: list.reduce((sum, p) => sum + p.volume, 0),
+      taker: list.some((p) => Number.isNaN(p.taker)) ? NaN : list.reduce((sum, p) => sum + p.taker, 0),
       lastTradeId: 0,
       closed: false,
     };
@@ -516,7 +520,8 @@ class Slot {
         const high = Math.max(...rows.map((r) => r[2]!));
         const low = Math.min(...rows.map((r) => r[3]!));
         const volume = rows.reduce((sum, r) => sum + r[5]!, 0);
-        if (feed.apply_kline(start, rows[0]![1]!, high, low, rows[rows.length - 1]![4]!, volume, -1, false)) this.onLive(feed.bar() as Bar | null);
+        const taker = rows.some((r) => !Number.isFinite(r[6])) ? NaN : rows.reduce((sum, r) => sum + r[6]!, 0);
+        if (feed.apply_kline(start, rows[0]![1]!, high, low, rows[rows.length - 1]![4]!, volume, taker, -1, false)) this.onLive(feed.bar() as Bar | null);
       })
       .catch(() => undefined);
   }
@@ -528,7 +533,7 @@ class Slot {
   private fail(error: string): void {
     this.fresh = false;
     this.engine.set_loading(false);
-    this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
+    this.engine.set_candles(EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY);
     this.engine.set_message(`Could not load candles — ${error}`);
     this.setStatus({ loading: false, error });
   }
@@ -548,7 +553,7 @@ class Slot {
       this.rest = rest;
     }
     const c = this.tail(series);
-    const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
+    const folded = fold_candles(this.timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, c.taker_buy_volume, Date.now()) as unknown as Cols;
     const last = folded.time.length > 0 ? folded.time[folded.time.length - 1]! : Number.NEGATIVE_INFINITY;
     this.foldedLast = last;
     // A ratio has no exchange's tick to keep to: its decimals come from its own
@@ -603,7 +608,7 @@ class Slot {
   private pushCandles(): void {
     const all = this.closed;
     const k = all.time.length > this.window ? sliceCols(all, all.time.length - this.window) : all;
-    this.engine.set_candles(k.time, k.open, k.high, k.low, k.close, k.volume);
+    this.engine.set_candles(k.time, k.open, k.high, k.low, k.close, k.volume, k.taker_buy_volume);
     if (this.fresh && k.time.length > 0) {
       // A market of its own opens at its own last bars, not where the one
       // before was scrolled to.
@@ -650,7 +655,7 @@ class Slot {
         let changed: boolean;
         if (m.kind === 'kline') {
           const k = combine ? combine(m) : m;
-          changed = k !== null && feed.apply_kline(k.openTime, k.open, k.high, k.low, k.close, k.volume, k.lastTradeId, k.closed);
+          changed = k !== null && feed.apply_kline(k.openTime, k.open, k.high, k.low, k.close, k.volume, k.taker, k.lastTradeId, k.closed);
         } else {
           changed = m.kind === 'trade' && feed.apply_trade(m.time, m.price, m.qty, m.lastTradeId);
         }
@@ -697,7 +702,7 @@ class Slot {
           if (gen !== this.gen || m.kind !== 'kline') return;
           const k = combine ? combine(m) : m;
           const r = k && series.join(i as 0 | 1, k);
-          if (r && feed.apply_kline(r.openTime, r.open, r.high, r.low, r.close, 0, 0, r.closed)) this.onLive(feed.bar() as Bar | null);
+          if (r && feed.apply_kline(r.openTime, r.open, r.high, r.low, r.close, 0, NaN, 0, r.closed)) this.onLive(feed.bar() as Bar | null);
         },
         state: (state: SocketState, viaRelay: boolean) => {
           if (gen !== this.gen) return;
@@ -777,7 +782,7 @@ class Slot {
 
   private pushLive(): void {
     const b = this.live;
-    if (b && b.time > this.lastClosedTime()) this.engine.set_live(b.time, b.open, b.high, b.low, b.close, b.volume);
+    if (b && b.time > this.lastClosedTime()) this.engine.set_live(b.time, b.open, b.high, b.low, b.close, b.volume, b.taker);
   }
 
   private setPrice(price: number): void {
@@ -924,7 +929,7 @@ async function valuesCall({ market, timeframe, basis, profile = true, bars: want
   let src: Awaited<ReturnType<typeof hold>> | null = null;
   try {
     const c = chart.series.cols;
-    const bars = fold_candles(timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols;
+    const bars = fold_candles(timeframe, c.time, c.open, c.high, c.low, c.close, c.volume, c.taker_buy_volume, Date.now()) as unknown as Cols;
     let s = emptyCols();
     if (spec) {
       // Enough source bars to cover the prior session of the last bar, and the view.
@@ -945,7 +950,7 @@ async function dailyCall({ market, days }: Calls['daily']['args']): Promise<Dail
   const held = await hold(market, '1d', Math.max(1, Math.min(CHART_BARS, days)));
   try {
     const c = held.series.cols;
-    const bars = lastBars(fold_candles('1d', c.time, c.open, c.high, c.low, c.close, c.volume, Date.now()) as unknown as Cols, days);
+    const bars = lastBars(fold_candles('1d', c.time, c.open, c.high, c.low, c.close, c.volume, c.taker_buy_volume, Date.now()) as unknown as Cols, days);
     return { time: [...bars.time], open: [...bars.open], high: [...bars.high], low: [...bars.low], close: [...bars.close], precision: precisionOf(bars) };
   } finally {
     held.release();

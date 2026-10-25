@@ -302,6 +302,10 @@ pub fn fold(source: &[Candle], tf: ChartTimeframe, now: i64) -> Vec<Candle> {
                 bucket.close = candle.close;
                 bucket.volume += candle.volume;
                 bucket.quote_volume = Some(bucket.quote_volume.unwrap_or(0.0) + quote);
+                bucket.taker_buy_volume = match (bucket.taker_buy_volume, candle.taker_buy_volume) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    _ => None,
+                };
             }
             _ => out.push(Candle {
                 open_time: start,
@@ -311,6 +315,7 @@ pub fn fold(source: &[Candle], tf: ChartTimeframe, now: i64) -> Vec<Candle> {
                 close: candle.close,
                 volume: candle.volume,
                 quote_volume: Some(quote),
+                taker_buy_volume: candle.taker_buy_volume,
             }),
         }
     }
@@ -334,7 +339,7 @@ mod tests {
             .enumerate()
             .map(|(i, d)| {
                 let i = i as f64;
-                Candle { open_time: t(d), open: i, high: i + 1.0, low: i - 1.0, close: i, volume: 1.0, quote_volume: None }
+                Candle { open_time: t(d), open: i, high: i + 1.0, low: i - 1.0, close: i, volume: 1.0, quote_volume: None, taker_buy_volume: None }
             })
             .collect()
     }

@@ -239,6 +239,7 @@ mod tests {
                 close: high,
                 volume,
                 quote_volume: None,
+                taker_buy_volume: None,
             })
             .collect()
     }

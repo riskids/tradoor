@@ -799,7 +799,8 @@ pub(crate) fn candles_of(klines: &[OwnedKline]) -> anyhow::Result<(Vec<Candle>, 
     let taker = klines.iter().map(|k| k.taker_buy_volume.as_deref()?.parse::<f64>().ok()).collect::<Option<Vec<f64>>>();
     let candles = klines
         .iter()
-        .map(|k| {
+        .enumerate()
+        .map(|(i, k)| {
             Ok(Candle {
                 open_time: k.open_time,
                 open: k.open.parse()?,
@@ -808,6 +809,7 @@ pub(crate) fn candles_of(klines: &[OwnedKline]) -> anyhow::Result<(Vec<Candle>, 
                 close: k.close.parse()?,
                 volume: k.volume.parse()?,
                 quote_volume: k.quote_volume.as_deref().and_then(|q| q.parse().ok()),
+                taker_buy_volume: taker.as_ref().map(|t| t[i]),
             })
         })
         .collect::<anyhow::Result<Vec<Candle>>>()?;

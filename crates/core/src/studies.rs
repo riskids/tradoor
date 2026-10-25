@@ -22,6 +22,7 @@ pub enum StudyKind {
     OpenInterest,
     Flow,
     Dvwap,
+    Delta,
 }
 
 impl StudyKind {
@@ -40,6 +41,7 @@ impl StudyKind {
             Self::OpenInterest => "oi",
             Self::Flow => "flow",
             Self::Dvwap => "dvwap",
+            Self::Delta => "delta",
         }
     }
 }
@@ -52,6 +54,8 @@ pub enum Group {
     Atr,
     /// Open interest: its own pane, in coins or dollars.
     Oi,
+    /// Volume delta and CVD: its own pane, in base units.
+    Delta,
 }
 
 impl Group {
@@ -62,6 +66,7 @@ impl Group {
             Self::Macd => "macd",
             Self::Atr => "atr",
             Self::Oi => "oi",
+            Self::Delta => "delta",
         }
     }
 }
@@ -86,7 +91,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 13] = [
+pub static STUDIES: [StudyDefinition; 14] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -114,6 +119,14 @@ pub static STUDIES: [StudyDefinition; 13] = [
         // `venues` is a bit per venue in the server's order; `measure` 0 coins, 1 dollars; `view` 0 candles, 1 line.
         params: &[p("venues", OI_ALL_VENUES, 1, OI_ALL_VENUES), p("measure", 0, 0, 1), p("view", 0, 0, 1)],
         about: "Open interest summed across Binance, Bybit, OKX, Deribit and Hyperliquid perpetuals, stablecoin- and coin-margined, as candles. Recorded by the tradoor server.",
+    },
+    StudyDefinition {
+        kind: StudyKind::Delta,
+        name: "Volume Delta",
+        short: "Delta",
+        group: Group::Delta,
+        params: &[],
+        about: "Taker buy minus taker sell per bar, from the exchange's taker volume, and its running total. Binance perps only.",
     },
 ];
 
@@ -227,7 +240,11 @@ pub struct StudyLine {
     pub values: Series,
     pub style: LineStyle,
     /// Fixed colour for lines told apart BY colour; otherwise the chart's palette.
+    /// For a histogram, its positive bars — negative ones take `neg_color`,
+    /// falling back to the chart's own bull/bear when neither is set.
     pub color: Option<&'static str>,
+    /// A histogram's negative-bar colour, paired with `color`.
+    pub neg_color: Option<&'static str>,
     pub width: f32,
     /// Whether its last value gets a badge on the axis.
     pub badge: bool,
@@ -235,7 +252,7 @@ pub struct StudyLine {
 
 impl StudyLine {
     fn line(key: &'static str, label: impl Into<String>, values: Series) -> Self {
-        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, width: 1.0, badge: true }
+        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, neg_color: None, width: 1.0, badge: true }
     }
 }
 
@@ -342,6 +359,7 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
         StudyKind::Dvwap => study.lines = daily_vwap(candles, [param(0) as f64, param(1) as f64, param(2) as f64]),
         StudyKind::SwingMap => (study.lines, study.markers, study.stats) = swing_map(candles, param(0), param(1)),
+        StudyKind::Delta => study.lines = volume_delta(candles),
         StudyKind::OpenInterest => {
             let usd = param(1) == 1;
             let (mut bars, closes) = open_interest_bars(candles, inputs);
@@ -362,6 +380,33 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
 }
 
 const OI_COLOR: &str = "#f0b90b";
+
+/// Taker buy minus taker sell per bar (`2 * taker_buy - volume`), and its
+/// running total reset at each UTC day boundary. `None` where the exchange
+/// does not report taker volume — Binance perps only.
+// ponytail: daily reset only, no param. Add a `reset` u32 (0=never,1=daily) if
+// weekly/session resets are asked for.
+fn volume_delta(candles: &[Candle]) -> Vec<StudyLine> {
+    let delta: Series = candles.iter().map(|c| c.taker_buy_volume.map(|t| 2.0 * t - c.volume)).collect();
+    let mut cvd: Series = Vec::with_capacity(candles.len());
+    let mut day: Option<i64> = None;
+    let mut running = 0.0;
+    for (c, d) in candles.iter().zip(&delta) {
+        let today = c.open_time.div_euclid(DAY);
+        if day != Some(today) {
+            day = Some(today);
+            running = 0.0;
+        }
+        cvd.push(d.map(|d| {
+            running += d;
+            running
+        }));
+    }
+    vec![
+        StudyLine { kind: LineType::Histogram, color: Some("#26a69a"), neg_color: Some("#ef5350"), ..StudyLine::line("delta", "Delta", delta) },
+        StudyLine { color: Some("#2962ff"), width: 1.5, ..StudyLine::line("cvd", "CVD", cvd) },
+    ]
+}
 
 /// Fold open interest steps into the chart's bars, the forming one last: each
 /// bar is the candle of the steps that start inside it. A bar no step starts in
@@ -731,7 +776,7 @@ mod tests {
             .map(|i| {
                 let base = 100.0 + i as f64;
                 let (o, h, l, c, v) = shape(i);
-                Candle { open_time: t0 + i as i64 * step, open: o.unwrap_or(base), high: h.unwrap_or(base + 1.0), low: l.unwrap_or(base - 1.0), close: c.unwrap_or(base), volume: v.unwrap_or(1.0), quote_volume: None }
+                Candle { open_time: t0 + i as i64 * step, open: o.unwrap_or(base), high: h.unwrap_or(base + 1.0), low: l.unwrap_or(base - 1.0), close: c.unwrap_or(base), volume: v.unwrap_or(1.0), quote_volume: None, taker_buy_volume: None }
             })
             .collect()
     }
@@ -882,8 +927,8 @@ mod tests {
 
         let t0 = parse_iso("2026-08-03").unwrap();
         let heavy = vec![
-            Candle { open_time: t0, open: 100.0, high: 100.0, low: 100.0, close: 100.0, volume: 1.0, quote_volume: None },
-            Candle { open_time: t0 + DAY, open: 200.0, high: 200.0, low: 200.0, close: 200.0, volume: 99.0, quote_volume: None },
+            Candle { open_time: t0, open: 100.0, high: 100.0, low: 100.0, close: 100.0, volume: 1.0, quote_volume: None, taker_buy_volume: None },
+            Candle { open_time: t0 + DAY, open: 200.0, high: 200.0, low: 200.0, close: 200.0, volume: 99.0, quote_volume: None, taker_buy_volume: None },
         ];
         assert!(line(&compute_study(&parse_studies("avwap", 12)[0], &heavy), "weekly")[1].unwrap() > 198.0);
 
@@ -904,7 +949,7 @@ mod tests {
     #[test]
     fn daily_vwap_weights_bands_and_resets() {
         let t0 = parse_iso("2026-08-03").unwrap();
-        let bar = |open_time, price: f64, volume| Candle { open_time, open: price, high: price, low: price, close: price, volume, quote_volume: None };
+        let bar = |open_time, price: f64, volume| Candle { open_time, open: price, high: price, low: price, close: price, volume, quote_volume: None, taker_buy_volume: None };
         let candles = vec![
             bar(t0, 100.0, 1.0),
             bar(t0 + HOUR, 200.0, 1.0),
@@ -922,6 +967,40 @@ mod tests {
     }
 
     #[test]
+    fn volume_delta_and_cvd_reset_each_utc_day() {
+        let t0 = parse_iso("2026-08-03T00:00:00Z").unwrap();
+        let bar = |open_time, volume: f64, taker: f64| Candle { open_time, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume, quote_volume: None, taker_buy_volume: Some(taker) };
+        let candles = vec![
+            bar(t0, 10.0, 6.0),             // delta = 2*6-10 = 2
+            bar(t0 + HOUR, 10.0, 3.0),       // delta = 2*3-10 = -4
+            bar(t0 + 2 * HOUR, 5.0, 5.0),    // delta = 2*5-5 = 5
+            bar(t0 + DAY, 8.0, 2.0),         // next day: delta = 2*2-8 = -4
+        ];
+        let study = compute_study(&parse_studies("delta", 12)[0], &candles);
+        assert_eq!(line(&study, "delta")[..], [Some(2.0), Some(-4.0), Some(5.0), Some(-4.0)]);
+        assert_eq!(line(&study, "cvd")[..], [Some(2.0), Some(-2.0), Some(3.0), Some(-4.0)], "cvd resets at the day boundary");
+
+        let missing = vec![Candle { taker_buy_volume: None, ..candles[0] }];
+        let study = compute_study(&parse_studies("delta", 12)[0], &missing);
+        assert_eq!(line(&study, "delta")[0], None);
+        assert_eq!(line(&study, "cvd")[0], None);
+    }
+
+    #[test]
+    fn folding_sums_taker_buy_volume_or_drops_it() {
+        let t0 = parse_iso("2026-08-03T00:00:00Z").unwrap();
+        let bar = |open_time, taker: Option<f64>| Candle { open_time, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10.0, quote_volume: None, taker_buy_volume: taker };
+        let minutes = vec![bar(t0, Some(3.0)), bar(t0 + 60_000, Some(4.0))];
+        let folded = crate::timeframe::fold(&minutes, crate::ChartTimeframe::M5, t0 + 10 * 60_000);
+        assert_eq!(folded.len(), 1);
+        assert_eq!(folded[0].taker_buy_volume, Some(7.0));
+
+        let partial = vec![bar(t0, Some(3.0)), bar(t0 + 60_000, None)];
+        let folded = crate::timeframe::fold(&partial, crate::ChartTimeframe::M5, t0 + 10 * 60_000);
+        assert_eq!(folded[0].taker_buy_volume, None, "a bar missing taker volume drops the bucket's");
+    }
+
+    #[test]
     fn swing_map_tags_confirmed_turns() {
         let mut prices = Vec::new();
         for leg in 0..4 {
@@ -934,7 +1013,7 @@ mod tests {
         let candles: Vec<Candle> = prices
             .iter()
             .enumerate()
-            .map(|(i, &p)| Candle { open_time: t0 + i as i64 * DAY, open: p, high: p + 0.5, low: p - 0.5, close: p, volume: 1.0, quote_volume: None })
+            .map(|(i, &p)| Candle { open_time: t0 + i as i64 * DAY, open: p, high: p + 0.5, low: p - 0.5, close: p, volume: 1.0, quote_volume: None, taker_buy_volume: None })
             .collect();
         let study = compute_study(&parse_studies("swingmap:3:3", 12)[0], &candles);
         assert!(study.markers.len() >= 2);

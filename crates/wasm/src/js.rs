@@ -27,9 +27,21 @@ pub fn point(time: f64, price: f64) -> Object {
     o
 }
 
-pub fn candles(time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64]) -> Vec<Candle> {
+/// `taker`: Binance's taker buy volume per bar, NaN where unknown.
+pub fn candles(time: &[f64], open: &[f64], high: &[f64], low: &[f64], close: &[f64], volume: &[f64], taker: &[f64]) -> Vec<Candle> {
     let n = time.len().min(open.len()).min(high.len()).min(low.len()).min(close.len()).min(volume.len());
-    (0..n).map(|i| Candle { open_time: time[i] as i64, open: open[i], high: high[i], low: low[i], close: close[i], volume: volume[i], quote_volume: None }).collect()
+    (0..n)
+        .map(|i| Candle {
+            open_time: time[i] as i64,
+            open: open[i],
+            high: high[i],
+            low: low[i],
+            close: close[i],
+            volume: volume[i],
+            quote_volume: None,
+            taker_buy_volume: taker.get(i).copied().filter(|t| t.is_finite()),
+        })
+        .collect()
 }
 
 pub fn columns(candles: &[Candle]) -> Object {
@@ -41,5 +53,6 @@ pub fn columns(candles: &[Candle]) -> Object {
     set(&o, "low", col(|c| c.low));
     set(&o, "close", col(|c| c.close));
     set(&o, "volume", col(|c| c.volume));
+    set(&o, "taker_buy_volume", col(|c| c.taker_buy_volume.unwrap_or(f64::NAN)));
     o
 }

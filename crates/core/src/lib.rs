@@ -67,6 +67,7 @@ pub(crate) mod fixtures {
                 close: c,
                 volume,
                 quote_volume: Some(volume * c),
+                taker_buy_volume: None,
             })
             .collect()
     }

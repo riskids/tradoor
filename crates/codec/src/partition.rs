@@ -303,6 +303,7 @@ impl TickCandles {
                 close: to_f64(self.close[i], self.price_scale),
                 volume: to_f64(self.volume[i] as i64, self.volume_scale),
                 quote_volume: self.quote_volume.as_ref().map(|q| to_f64(q[i] as i64, self.quote_scale)),
+                taker_buy_volume: self.taker_buy_volume.as_ref().map(|t| to_f64(t[i] as i64, self.volume_scale)),
             })
             .collect()
     }
