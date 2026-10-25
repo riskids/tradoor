@@ -67,7 +67,7 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 
 /* ------------------------------------------------------------ shell */
-.shell { display: grid; grid-template-rows: 38px minmax(0, 1fr) 22px; height: 100%; }
+.shell { display: grid; grid-template-rows: 38px minmax(0, 1fr) 20px; height: 100%; }
 .topbar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--surface); min-width: 0; }
 .brand { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--text); font-weight: 600; font-size: 12px; }
 .brand svg { color: var(--primary); }
@@ -76,8 +76,7 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 .topbar button.item.on { color: #fff; background: var(--primary); }
 /* A button that is only an icon, or the help's question mark: square to the bar, its mark in the middle. */
 .topbar .item.icon { justify-content: center; min-width: 34px; padding: 0 8px; }
-.statusbar { display: flex; align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--border); background: var(--surface); font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; }
-.statusbar .hint-key { display: flex; align-items: center; gap: 4px; }
+.statusbar { display: flex; align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--border); background: var(--surface); font-size: 10px; color: var(--dim); white-space: nowrap; overflow: hidden; }
 /* Text in the bars of fixed height sits on its cap height, not on the font's
    whole line box: digits and capitals carry no descender, so a line box leaves
    the space under them empty and the text reads a pixel or two high — plain to
@@ -86,7 +85,7 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 /* So does a label beside the icon it is centred with, and a chip's text in its border. */
 button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap alphabetic; }
 .banner { padding: 3px 8px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--bear) 12%, transparent); color: var(--bear); font-size: 11px; }
-.workspace { position: relative; flex: 1; min-height: 0; min-width: 0; padding: 3px; display: flex; }
+.workspace { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; }
 /* Under the journal or training: kept as it is, sized, but not styled, laid out or painted. */
 .workspace.covered { content-visibility: hidden; }
 
@@ -94,13 +93,21 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .split { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .split.column { flex-direction: column; }
 .cell { position: relative; display: flex; min-width: 0; min-height: 0; }
-.gutter { flex: 0 0 4px; z-index: 2; transition: background 0.1s; }
+.gutter { position: relative; flex: 0 0 4px; z-index: 2; transition: background 0.1s; }
+.gutter::before { content: ''; position: absolute; background: var(--border); }
 .split.row > .gutter { cursor: col-resize; }
+.split.row > .gutter::before { top: 0; bottom: 0; left: 1.5px; width: 1px; }
 .split.column > .gutter { cursor: row-resize; }
+.split.column > .gutter::before { left: 0; right: 0; top: 1.5px; height: 1px; }
 .gutter:hover, .gutter.active { background: color-mix(in oklab, var(--primary) 40%, transparent); }
-.tabs { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--border); background: var(--surface); }
-.tabs.focused { border-color: color-mix(in oklab, var(--primary) 40%, var(--border)); }
+.tabs { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--surface); }
+.tabs.focused { outline: 1px solid color-mix(in oklab, var(--primary) 40%, transparent); outline-offset: -1px; }
 .tabstrip { display: flex; align-items: stretch; flex: 0 0 22px; height: 22px; background: var(--surface-2); border-bottom: 1px solid var(--border); min-width: 0; }
+/* One panel in the group: nothing in its bar is worth a row at rest — it
+   collapses to a 4px strip, and opens on hover, focus-within, or its own
+   menu, so Split/Add/the tab's close stay reachable without a click to show. */
+.tabs.solo .tabstrip { flex-basis: 4px; height: 4px; overflow: hidden; border-bottom: 0; opacity: 0; transition: flex-basis 0.1s, height 0.1s, opacity 0.1s; }
+.tabs.solo .tabstrip:hover, .tabs.solo .tabstrip:focus-within, .tabs.solo .tabstrip.forced { flex-basis: 22px; height: 22px; opacity: 1; border-bottom: 1px solid var(--border); }
 .tablist { display: flex; align-items: stretch; min-width: 0; overflow: hidden; }
 .tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px; border-right: 1px solid var(--border); font-size: 11px; color: var(--dim); white-space: nowrap; min-width: 0; max-width: 220px; cursor: default; user-select: none; }
 .tab:hover { color: var(--muted); }
@@ -252,19 +259,25 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .tb { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; font-size: 11px; color: var(--muted); }
 .tb:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
 .tb.on { background: var(--primary); color: #fff; }
+/* Candles / Footprint / TPO, as TV's segmented text toggle: one bar, the
+   current choice lit, the rest plain until hovered. */
+.segmented { display: inline-flex; align-items: center; gap: 1px; }
+.seg { padding: 2px 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.seg:hover:not(.on) { color: var(--text); background: var(--surface-3); }
+.seg.on { color: var(--primary); }
 /* The chart's watchlist button: a star, filled once the market is in it. */
-.tb.wl-toggle { border: 1px solid var(--border); margin-left: 2px; }
-.tb.wl-toggle.in, .tb.wl-toggle.in:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 40%, transparent); }
+.wl-toggle.in, .wl-toggle.in:hover:not(:disabled) { color: var(--primary); }
 .symbol { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px 0 2px; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .symbol:hover { color: var(--primary); }
 .live { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; font-size: 11px; }
-.live .state { display: inline-flex; align-items: center; height: 14px; font-size: 9px; letter-spacing: 0.12em; line-height: 1; padding: 0 5px; border: 1px solid color-mix(in oklab, currentColor 45%, transparent); background: color-mix(in oklab, currentColor 10%, transparent); }
+.live .state { display: inline-flex; align-items: center; height: 14px; font-size: 9px; letter-spacing: 0.1em; line-height: 1; }
 /* Exchange marks and market tags. */
 .xlogo { display: block; flex: none; }
 .venue { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
 .venue-name { font-size: 11px; color: var(--muted); }
-.kind { font-size: 9px; letter-spacing: 0.08em; line-height: 13px; padding: 0 3px; border: 1px solid var(--border); color: var(--dim); flex: none; }
+.kind { font-size: 9px; letter-spacing: 0.06em; line-height: 13px; color: var(--dim); flex: none; }
 .health { display: flex; }
+.health-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 /* Floats over the plot, clear of the time axis: appearing must never resize
    the canvas under a tool the user is already aiming with. */
 .hint { position: absolute; left: 50%; bottom: 28px; z-index: 6; transform: translateX(-50%); max-width: calc(100% - 20px); padding: 2px 8px; border: 1px solid var(--border); background: color-mix(in oklab, var(--surface) 86%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
@@ -274,21 +287,21 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .pattern-bar .tb { border: 1px solid var(--border); }
 @media (max-width: 760px) { .pattern-bar { gap: 6px; padding-left: 8px; } .pattern-bar .dim { display: none; } }
 .chartwrap { display: flex; flex: 1; min-height: 0; min-width: 0; }
-.rail { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 38px; padding: 4px 0; scrollbar-width: none; border-right: 1px solid var(--border); background: var(--surface-2); overflow-y: auto; overflow-x: hidden; }
-.rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; color: var(--muted); }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 38px; padding: 4px 0; scrollbar-width: none; border-right: 1px solid var(--border); background: var(--surface-2); overflow-y: auto; overflow-x: hidden; }
+.rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; color: var(--muted); }
 .rail button svg { width: 18px; height: 18px; }
 .rail button:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
 .rail button.on { background: var(--primary); color: #fff; }
 .rail button.del:hover:not(:disabled) { color: var(--bear); }
-.rail hr { width: 18px; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
+.rail hr { width: 20px; margin: 2px 0; border: 0; border-top: 1px solid var(--border); }
 .rail .count { font-size: 11px; color: var(--dim); }
 .canvasbox { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.legend { position: absolute; top: 4px; left: 6px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: calc(100% - 90px); pointer-events: none; font-size: 11px; }
-.legend .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 10px; padding: 0 3px; }
-.legend .title { font-weight: 700; color: var(--text); }
-.layer { display: flex; align-items: center; gap: 6px; padding: 0 3px; pointer-events: auto; background: color-mix(in oklab, var(--surface) 72%, transparent); }
-.layer .name { color: var(--muted); }
+.legend { position: absolute; top: 4px; left: 6px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 0; max-width: calc(100% - 90px); pointer-events: none; font-size: 11px; line-height: 16px; }
+.legend .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; padding: 0 3px; }
+.legend .title { font-weight: 600; color: var(--text); }
+.layer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 0 3px; pointer-events: auto; background: color-mix(in oklab, var(--surface) 72%, transparent); }
+.layer .name { flex: none; color: var(--muted); }
 .layer.off .name { color: var(--dim); text-decoration: line-through; }
 /* The eye, the settings and the remove: invisible until the pointer is on
    their own row, they were not so much discreet as undiscoverable. Anywhere
@@ -312,10 +325,14 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .layer .val { font-variant-numeric: tabular-nums; }
 .rangebar { display: flex; align-items: center; gap: 1px; flex: 0 0 22px; height: 22px; padding: 0 4px; border-top: 1px solid var(--border); background: var(--surface-2); font-size: 11px; white-space: nowrap; overflow: hidden; }
 .rangebar .tb { padding: 1px 5px; font-size: 10px; color: var(--dim); }
+.rb-note { font-size: 10px; color: var(--dim); }
+.rb-scale { padding: 0 4px; font-size: 10px; color: var(--dim); }
+.rb-scale:hover { color: var(--text); }
+.rb-scale.on { color: var(--muted); }
 
 /* The symbol takes what the numbers leave; narrow panels drop the tag, then the change. */
 .wl { container-type: inline-size; }
-.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 68px 62px 56px; gap: 6px; align-items: center; padding: 0 8px; min-height: 24px; font-size: 11px; }
+.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 58px 58px 52px; gap: 6px; align-items: center; padding: 0 8px; min-height: 24px; font-size: 11px; }
 .wl-head { flex: none; color: var(--dim); border-bottom: 1px solid var(--border); }
 .wl-list { position: relative; }
 .wl-row { position: relative; cursor: pointer; user-select: none; }
@@ -342,9 +359,9 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .wl-flags { display: flex; gap: 6px; padding: 6px 8px; }
 .menu .wl-flags button.swatch { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: var(--flag); outline-offset: 2px; }
 .menu .wl-flags button.swatch:hover, .menu .wl-flags button.swatch.on { outline: 2px solid var(--flag); background: var(--flag); }
-@container (max-width: 290px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 68px 56px; } .wl .chgabs { display: none; } }
+@container (max-width: 290px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 58px 52px; } .wl .chgabs { display: none; } }
 @container (max-width: 250px) { .wl-row .kind { display: none; } }
-@container (max-width: 180px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 68px; } .wl .chg { display: none; } }
+@container (max-width: 180px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 58px; } .wl .chg { display: none; } }
 .wl-row .x:hover { color: var(--bear); }
 .scroll { flex: 1; min-height: 0; overflow: auto; }
 
@@ -424,9 +441,8 @@ table.venues tr.off td { color: var(--dim); }
   /* The chart's own toolbar is the top of the app; the desktop bar above it
      only took height, and everything on it is in the menu. Its row goes with
      it, or the grid would hand the space to the row below. */
-  .shell { grid-template-rows: minmax(0, 1fr) 22px; }
+  .shell { grid-template-rows: minmax(0, 1fr) 20px; }
   .topbar { display: none; }
-  .statusbar .hint-key { display: none; }
   /* A toolbar wider than a phone scrolls sideways instead of cutting its end off. */
   .toolbar { flex: 0 0 34px; height: 34px; overflow-x: auto; scrollbar-width: none; }
   .toolbar::-webkit-scrollbar { display: none; }

@@ -1,4 +1,5 @@
 import { createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
+import { setOverlay } from '../app/ui';
 import { api, errorText, type TelegramStatus } from '../lib/api';
 import { OWNER_PATTERN, ownerId, session, switchOwner } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
@@ -304,6 +305,15 @@ function AdvancedSection(props: { onClose(): void }) {
               </span>
             )}
           </For>
+        </div>
+      </div>
+      <div class="set-card">
+        <h3>Partner exchanges</h3>
+        <div class="set-row">
+          <span class="grow dim">Open an account on Nado, Bybit or Binance through tradoor's referral links.</span>
+          <button class="btn" onClick={() => setOverlay({ kind: 'referrals' })}>
+            View
+          </button>
         </div>
       </div>
       <div class="set-card danger">

@@ -319,10 +319,16 @@ function TabsView(props: { node: TabsNode }) {
     focusPanel(panel.id);
   };
 
+  // One panel in the group: its tab bar carries nothing worth a row of its
+  // own — TradingView shows none — so it collapses to a hairline, reachable
+  // on hover or while its own menu is open.
+  const solo = () => props.node.panels.length <= 1;
+
   return (
-    <div class="tabs" classList={{ focused: focused() }} onPointerDown={() => focusPanel(props.node.active)}>
+    <div class="tabs" classList={{ focused: focused(), solo: solo() }} onPointerDown={() => focusPanel(props.node.active)}>
       <div
         class="tabstrip"
+        classList={{ forced: adding() }}
         onDragOver={(e) => {
           if (!dragging()) return;
           e.preventDefault();
@@ -337,17 +343,18 @@ function TabsView(props: { node: TabsNode }) {
           <For each={props.node.panels}>{(id) => <Tab id={id} tabs={props.node} />}</For>
         </div>
         <div class="tabtools">
-          <button class="iconbtn" data-tip="Add a panel to this group" onPointerDown={(e) => e.stopPropagation()} onClick={() => setAdding((v) => !v)}>
-            <Icon name="plus" size={12} />
-          </button>
-          <button class="iconbtn" data-tip="Split right" onClick={() => addHere(active()?.type ?? 'chart', 'right')}>
-            <Icon name="splitRight" size={12} />
-          </button>
-          <button class="iconbtn" data-tip="Split down" onClick={() => addHere(active()?.type ?? 'chart', 'bottom')}>
-            <Icon name="splitDown" size={12} />
+          <button class="iconbtn" data-tip="Add a panel, or split this group" onPointerDown={(e) => e.stopPropagation()} onClick={() => setAdding((v) => !v)}>
+            <Icon name="more" size={13} />
           </button>
           <Show when={adding()}>
             <div class="menu" style={{ right: '0', top: '21px' }} onPointerDown={(e) => e.stopPropagation()}>
+              <button onClick={() => addHere(active()?.type ?? 'chart', 'right')}>
+                Split right<span class="dim">this group</span>
+              </button>
+              <button onClick={() => addHere(active()?.type ?? 'chart', 'bottom')}>
+                Split down<span class="dim">this group</span>
+              </button>
+              <hr />
               <For each={PANEL_TYPES}>
                 {(type) => (
                   <button onClick={() => addHere(type, 'center')}>

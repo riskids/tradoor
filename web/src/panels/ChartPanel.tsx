@@ -210,10 +210,13 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     });
   /** The TPO quick access menu, open at this x in the toolbar. */
   const [tpoMenu, setTpoMenu] = createSignal<number | null>(null);
+  /** The toolbar's overflow menu — the picture, today just one item. */
+  const [moreMenu, setMoreMenu] = createSignal(false);
   useDismiss(tpoMenu, () => setTpoMenu(null));
   useDismiss(menu, () => setMenu(null));
   useDismiss(alertMenu, () => setAlertMenu(null));
   useDismiss(tfMenu, () => setTfMenu(null));
+  useDismiss(moreMenu, () => setMoreMenu(false));
 
   let box!: HTMLDivElement;
   let tpoButton!: HTMLButtonElement;
@@ -884,15 +887,6 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         </button>
         </Show>
         <span class="sep" />
-        <button
-          class="tb"
-          data-tip="Copy a 4K picture of this chart · alt K — hold shift to save the file"
-          aria-label="Copy a picture of this chart"
-          onClick={(e) => capture(e.shiftKey)}
-        >
-          <Icon name="camera" size={13} />
-        </button>
-        <span class="sep" />
         <button class="tb" data-tip="Add an indicator" onClick={() => setOverlay({ kind: 'indicators', panelId: id })}>
           <Icon name="indicators" size={13} />
           <span>Indicators</span>
@@ -902,26 +896,23 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         </button>
         <Show when={!props.training}>
         <span class="sep" />
-        <select
-          data-tip="Candles, the footprint's own volume by price, or TPO profiles — the candles are the brackets, the split is how long a profile runs"
-          onChange={(e) => patchPanel(id, { tpo: e.currentTarget.value === 'footprint' ? '' : e.currentTarget.value, footprint: e.currentTarget.value === 'footprint' })}
-        >
-          <option value="" selected={!split() && !footprintOn()}>
+        <div class="segmented" data-tip="Candles, the footprint's own volume by price, or TPO profiles — the candles are the brackets, the split is how long a profile runs">
+          <button class="seg" classList={{ on: !split() && !footprintOn() }} onClick={() => patchPanel(id, { tpo: '', footprint: false })}>
             Candles
-          </option>
+          </button>
           <Show when={footprintable()}>
-            <option value="footprint" selected={footprintOn()}>
+            <button class="seg" classList={{ on: footprintOn() }} onClick={() => patchPanel(id, { tpo: '', footprint: true })}>
               Footprint
-            </option>
+            </button>
           </Show>
           <For each={TPO_SPLITS.filter((s) => tfLonger(s.value, timeframe()))}>
             {(s) => (
-              <option value={s.value} selected={split() === s.value}>
+              <button class="seg" classList={{ on: split() === s.value }} onClick={() => patchPanel(id, { tpo: s.value, footprint: false })}>
                 TPO · {s.label}
-              </option>
+              </button>
             )}
           </For>
-        </select>
+        </div>
         </Show>
         <Show when={footprintOn()}>
           <span class="sep" />
@@ -984,6 +975,21 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         </Show>
         <span class="spacer" />
         <LiveBadge market={market()} live={status().live} relayed={status().relayed} price={price()} />
+        <button class="tb" aria-label="More" data-tip="More" onPointerDown={(e) => e.stopPropagation()} onClick={() => setMoreMenu((v) => !v)}>
+          <Icon name="more" size={13} />
+        </button>
+        <Show when={moreMenu()}>
+          <div class="menu" style={{ right: '4px', top: '25px' }} onPointerDown={(e) => e.stopPropagation()}>
+            <button
+              onClick={(e) => {
+                setMoreMenu(false);
+                capture(e.shiftKey);
+              }}
+            >
+              Copy a picture<span class="dim">4K · shift saves the file</span>
+            </button>
+          </div>
+        </Show>
       </div>
 
       <Show when={tpoMenu()} keyed>
@@ -1536,24 +1542,24 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         </For>
         <span class="spacer" />
         <Show when={status().error}>{(err) => <span class="warn" data-tip={err()}>▲ {err()} · </span>}</Show>
-        <span class="dim num" data-tip={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : status().source === 'ratio' ? 'One market priced in the other: each bar of the first divided by the same bar of the second' : 'Candles from the exchange; this market is not archived here'}>
+        <span class="rb-note" data-tip={status().source === 'archive' ? 'Stored history, with the exchange filling the newest bars' : status().source === 'ratio' ? 'One market priced in the other: each bar of the first divided by the same bar of the second' : 'Candles from the exchange; this market is not archived here'}>
           {status().loading ? 'loading… · ' : ''}
           {status().bars.toLocaleString('en-US')} bars{status().source ? ` · ${status().source}` : ''} · {zoneLabel()}
         </span>
         <span class="sep" />
         <button
-          class="tb"
+          class="rb-scale"
           classList={{ on: autoScale() }}
           data-tip="Auto scale — the price axis follows the bars on screen. Dragging the chart up or down, or dragging the price axis, turns it off; click to turn it back on."
           onClick={() => send({ t: 'autoScale', id: sid })}
         >
-          AUTO
+          auto
         </button>
-        <button class="tb" classList={{ on: !props.panel.log }} data-tip="Linear price axis" onClick={() => patchPanel(id, { log: false })}>
-          LIN
+        <button class="rb-scale" classList={{ on: !props.panel.log }} data-tip="Linear price axis" onClick={() => patchPanel(id, { log: false })}>
+          lin
         </button>
-        <button class="tb" classList={{ on: props.panel.log }} data-tip="Logarithmic price axis — equal percentage moves take equal space" onClick={() => patchPanel(id, { log: true })}>
-          LOG
+        <button class="rb-scale" classList={{ on: props.panel.log }} data-tip="Logarithmic price axis — equal percentage moves take equal space" onClick={() => patchPanel(id, { log: true })}>
+          log
         </button>
         <button class="tb" data-tip="Reset view — the last bars, every axis autoscaling" onClick={() => send({ t: 'resetView', id: sid })}>
           <Icon name="reset" size={11} />

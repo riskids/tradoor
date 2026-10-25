@@ -2,7 +2,7 @@
  * The shell: a command bar, the workspace, a status line, and the dialogs.
  * Keyboard shortcuts go to the focused panel.
  */
-import { createEffect, createSignal, For, lazy, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createSignal, lazy, onCleanup, onMount, Show } from 'solid-js';
 import type { Command } from '../components/CommandPalette';
 import { NoteInput } from '../components/NoteInput';
 import { lastPrice, onEngineFailure, send } from '../engine/client';
@@ -18,7 +18,6 @@ import { Toasts } from '../components/Toasts';
 import { toast } from '../lib/toasts';
 import { takeNotice } from '../lib/owner';
 import { insertMarket, isSection, visible } from '../lib/watchlist';
-import { referralCard, startReferral } from '../lib/referral';
 import { Layout, panelTitle } from '../workspace/Layout';
 import { ChartPanel } from '../panels/ChartPanel';
 import { addPanel, LINK_COLORS, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, tabsOf, TPO_SPLITS, type ChartPanelState, type DropZone, type Panel, type PanelType, type WatchlistPanelState } from '../workspace/model';
@@ -51,7 +50,6 @@ const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then(
 const Settings = lazy(() => import('../components/Settings').then((m) => ({ default: m.Settings })));
 const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
 const ReferralDialog = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralDialog })));
-const ReferralCard = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralCard })));
 const Journal = lazy(() => import('../journal/Journal').then((m) => ({ default: m.Journal })));
 const Training = lazy(() => import('../training/Training').then((m) => ({ default: m.Training })));
 
@@ -281,11 +279,8 @@ function Health() {
       down: 'The tradoor server is not reachable. Charts still load from the exchanges; drawings and layout sync are paused.',
     })[state()];
   return (
-    <span class="item" data-tip={title()}>
-      <span class="health" classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }}>
-        <Icon name="server" size={12} />
-      </span>
-      <span>{state() === 'down' ? 'OFFLINE' : state() === 'db' ? 'NO DB' : 'SERVER'}</span>
+    <span class="item icon" data-tip={title()} aria-label={state() === 'down' ? 'Server offline' : state() === 'db' ? 'Database unreachable' : 'Server and database reachable'}>
+      <span class="health-dot" classList={{ bull: state() === 'ok', warn: state() === 'db', bear: state() === 'down', dim: state() === 'checking' }} />
     </span>
   );
 }
@@ -313,24 +308,9 @@ const SAVE_TEXT = {
 function StatusBar() {
   return (
     <footer class="statusbar">
-      <span class="caps">{focusedPanel() ? panelTitle(focusedPanel()!) : 'no panel focused'}</span>
-      <For
-        each={[
-          ['a–z', 'symbol'],
-          ['← →', 'timeframe'],
-          ['/', 'commands'],
-          ['?', 'help'],
-        ]}
-      >
-        {([key, label]) => (
-          <span class="hint-key">
-            <kbd>{key}</kbd>
-            {label}
-          </span>
-        )}
-      </For>
+      <span class="dim">{focusedPanel() ? panelTitle(focusedPanel()!) : ''}</span>
       <span class="spacer" />
-      <span classList={{ warn: saveState() === 'local' || saveState() === 'conflict' }}>{SAVE_TEXT[saveState()]}</span>
+      <span class="dim" classList={{ warn: saveState() === 'local' || saveState() === 'conflict' }}>{SAVE_TEXT[saveState()]}</span>
     </footer>
   );
 }
@@ -429,7 +409,6 @@ export function App() {
     const notice = takeNotice();
     if (notice) toast({ tone: 'info', title: 'Signed out', body: notice, action: () => setOverlay({ kind: 'settings' }) }, 30_000);
     if (!IS_CRAWLER) {
-      startReferral();
       setTimeout(() => void import('../lib/signal-alerts').then((m) => m.watchSignals()), 4_000);
     }
     addEventListener('keydown', onKeyDown);
@@ -454,26 +433,21 @@ export function App() {
   return (
     <div class="shell">
       <header class="topbar">
-        <div class="brand">
-          <svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.1">
+        <div class="brand" data-tip="tradoor" aria-label="tradoor">
+          <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.1">
             <rect x="1.8" y="3" width="7.6" height="10" rx="1" stroke-opacity="0.8" />
             <path d="M9.4 3 L13.6 1.2 L13.6 14.8 L9.4 13 Z" fill="currentColor" fill-opacity="0.32" stroke-linejoin="round" />
             <rect x="3.3" y="7.6" width="1.7" height="3.4" fill="currentColor" stroke="none" />
             <rect x="6.2" y="5.6" width="1.7" height="5.2" fill="currentColor" stroke="none" />
           </svg>
-          <span>TRADOOR</span>
         </div>
-        <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
-          <Icon name="command" size={12} /> <span>Commands</span> <kbd>/</kbd>
+        <button class="item icon" aria-label="Commands" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
+          <Icon name="command" size={14} />
         </button>
         <span class="item dim">
           <span>{doc.name}</span>
         </span>
         <span class="spacer" />
-        <button class="item ref-btn" data-tip="Partner exchanges: Nado, Bybit and Binance" onClick={() => setOverlay({ kind: 'referrals' })}>
-          <Icon name="gift" size={13} /> <span>Rewards</span>
-        </button>
-        <Health />
         <button class="item icon" classList={{ on: journalOpen() }} aria-label="Journal" data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
           <Icon name="pencil" size={14} />
         </button>
@@ -486,6 +460,7 @@ export function App() {
             <span class="al-badge">{unread()}</span>
           </Show>
         </button>
+        <Health />
         <Clock />
         <button class="item icon" aria-label="Settings" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
           <Icon name="settings" size={16} />
@@ -506,10 +481,6 @@ export function App() {
       </main>
       <StatusBar />
       <Overlays />
-      {/* Offered once, and never over a dialog, the phone's menu or the journal. */}
-      <Show when={referralCard() && !overlay() && !mobileMenu() && !journalOpen() && !trainingOpen()}>
-        <ReferralCard />
-      </Show>
       <Toasts />
     </div>
   );
