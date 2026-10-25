@@ -13,7 +13,7 @@ import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColo
 import { TIMEFRAMES } from '../lib/timeframes';
 
 // ponytail: key bumped once so browsers holding the old three-row layout open the TradingView-like default.
-const LOCAL_KEY = 'workspace-tv2';
+const LOCAL_KEY = 'workspace-tv3';
 /** Whose the local copy is, written beside it. */
 const LOCAL_OWNER_KEY = 'workspace-owner';
 const SERVER_ID = 'default';

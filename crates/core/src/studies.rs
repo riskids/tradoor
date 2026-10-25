@@ -403,8 +403,8 @@ fn volume_delta(candles: &[Candle]) -> Vec<StudyLine> {
         }));
     }
     vec![
-        StudyLine { kind: LineType::Histogram, color: Some("#26a69a"), neg_color: Some("#ef5350"), ..StudyLine::line("delta", "Delta", delta) },
-        StudyLine { color: Some("#2962ff"), width: 1.5, ..StudyLine::line("cvd", "CVD", cvd) },
+        StudyLine { kind: LineType::Histogram, color: Some("#26a69a"), neg_color: Some("#ef5350"), badge: false, ..StudyLine::line("delta", "Delta", delta) },
+        StudyLine { color: Some("#d1d4dc"), width: 1.0, ..StudyLine::line("cvd", "CVD", cvd) },
     ]
 }
 
@@ -666,15 +666,16 @@ fn daily_vwap(candles: &[Candle], mults: [f64; 3]) -> Vec<StudyLine> {
         }
     }
     let [(u1, l1), (u2, l2), (u3, l3)] = bands;
-    let colored = |key, label: &str, values, color, width| StudyLine { color: Some(color), width, ..StudyLine::line(key, label.to_string(), values) };
+    // TradingView's look: a blue VWAP, grey bands that fade outward, and only the VWAP tagged on the axis.
+    let band = |key, label: &str, values, color| StudyLine { color: Some(color), badge: false, ..StudyLine::line(key, label.to_string(), values) };
     vec![
-        colored("vwap", "VWAP", vwap, "#2962ff", 1.5),
-        colored("u1", "+1σ", u1, "#4caf50", 1.0),
-        colored("l1", "-1σ", l1, "#4caf50", 1.0),
-        colored("u2", "+2σ", u2, "#ff9800", 1.0),
-        colored("l2", "-2σ", l2, "#ff9800", 1.0),
-        colored("u3", "+3σ", u3, "#f44336", 1.0),
-        colored("l3", "-3σ", l3, "#f44336", 1.0),
+        StudyLine { color: Some("#2962ff"), width: 1.5, ..StudyLine::line("vwap", "VWAP".to_string(), vwap) },
+        band("u1", "+1σ", u1, "#9598a1"),
+        band("l1", "-1σ", l1, "#9598a1"),
+        band("u2", "+2σ", u2, "#787b86"),
+        band("l2", "-2σ", l2, "#787b86"),
+        band("u3", "+3σ", u3, "#50535e"),
+        band("l3", "-3σ", l3, "#50535e"),
     ]
 }
 

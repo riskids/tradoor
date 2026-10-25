@@ -1342,23 +1342,6 @@ impl Chart {
     /// The tradoor mark, bottom left of the price pane, drawn on the icon's own
     /// sixteen-unit grid. Part of the frame itself, so every capture of a chart
     /// carries it — the name is not written out; the door is what is known.
-    fn paint_watermark(&self, f: &mut Frame, plot: Rect) {
-        const MARK: f32 = 34.0;
-        if plot.w < 160.0 || plot.h < 110.0 {
-            return;
-        }
-        let u = MARK / 16.0;
-        let (x, y) = (plot.x + 12.0, plot.bottom() - 12.0 - MARK);
-        let (at, line) = (|dx: f32, dy: f32| (x + dx * u, y + dy * u), (1.5 * u).max(1.0));
-        let accent = self.theme.ribbon_fast;
-        f.stroke_rect(x + 1.8 * u, y + 3.0 * u, 7.6 * u, 10.0 * u, line, accent.with_alpha(150));
-        let door = [(9.4, 3.0), (13.6, 1.2), (13.6, 14.8), (9.4, 13.0), (9.4, 3.0)];
-        f.polyline(&door.iter().map(|(dx, dy)| at(*dx, *dy)).collect::<Vec<_>>(), line, accent.with_alpha(175));
-        f.rect(x + 3.3 * u, y + 7.6 * u, 1.7 * u, 3.4 * u, accent.with_alpha(205));
-        // The middle candle is the falling one, as the icon draws it.
-        f.rect(x + 6.2 * u, y + 5.6 * u, 1.7 * u, 5.2 * u, self.theme.bear.with_alpha(205));
-    }
-
     fn request_history_if_near_start(&mut self) {
         let Some(first) = self.candles.first().map(|c| c.open_time) else { return };
         if self.history_asked != Some(first) && self.time.visible().0 < HISTORY_MARGIN_BARS {
@@ -1429,7 +1412,6 @@ impl Chart {
                 }
             }
         }
-        self.paint_watermark(f, price.plot);
         for i in (i0..=i1).filter(|_| !tpo && !foot) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
@@ -3604,27 +3586,6 @@ mod tests {
 
         c.set_loading(false);
         assert_eq!(c.render(1_800_000_000_000).positions.len(), bright.positions.len(), "and lifts when the candles land");
-    }
-
-    #[test]
-    fn the_watermark_sits_bottom_left_of_the_price_pane() {
-        let mut c = chart();
-        c.set_studies("rsi:14");
-        let frame = c.render(1_800_000_000_000).clone();
-        let price = c.panes[0].plot;
-        assert!(!frame.texts.iter().any(|t| t.text == "tradoor"), "the mark stands alone; the name is not written out");
-
-        // The mark is drawn in the accent, and nowhere else is down there.
-        let accent = c.theme.ribbon_fast;
-        let corner: Vec<(f32, f32)> = frame
-            .positions
-            .chunks(2)
-            .zip(frame.colors.chunks(4))
-            .filter(|(_, c)| *c == [accent.r, accent.g, accent.b, 205])
-            .map(|(p, _)| (p[0], p[1]))
-            .collect();
-        assert!(!corner.is_empty(), "the mark is painted");
-        assert!(corner.iter().all(|(x, y)| *x < price.x + 60.0 && *y > price.bottom() - 60.0 && *y < price.bottom()), "bottom left of the price pane");
     }
 
     #[test]

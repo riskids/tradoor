@@ -203,7 +203,7 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: '', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: 'ribbon,ema200', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
