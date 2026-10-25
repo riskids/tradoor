@@ -179,7 +179,7 @@ export interface WorkspaceDoc {
 
 export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom';
 
-export const DEFAULT_STUDIES = 'dvwap:1:2:3,delta';
+export const DEFAULT_STUDIES = 'dvwap:1:2:3,delta,volcandle:0:0:15:25:35:1:1:1:300:20:50:0:10:0:0:0:10';
 export const DEFAULT_TIMEFRAME = '1m';
 /** The coins, then the market around them: the index perpetuals, the VIX, and the crypto market's own measures. */
 const DEFAULT_WATCHLIST = [

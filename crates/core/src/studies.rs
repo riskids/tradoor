@@ -23,6 +23,7 @@ pub enum StudyKind {
     Flow,
     Dvwap,
     Delta,
+    VolCandle,
 }
 
 impl StudyKind {
@@ -42,6 +43,7 @@ impl StudyKind {
             Self::Flow => "flow",
             Self::Dvwap => "dvwap",
             Self::Delta => "delta",
+            Self::VolCandle => "volcandle",
         }
     }
 }
@@ -91,7 +93,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 14] = [
+pub static STUDIES: [StudyDefinition; 15] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -127,6 +129,34 @@ pub static STUDIES: [StudyDefinition; 14] = [
         group: Group::Delta,
         params: &[],
         about: "Taker buy minus taker sell per bar, from the exchange's taker volume, and its running total. Binance perps only.",
+    },
+    StudyDefinition {
+        kind: StudyKind::VolCandle,
+        name: "Volume Candle",
+        short: "VolCandle",
+        group: Group::Price,
+        // Multipliers (`m1 m2 m3`) are tenths: 15 = 1.5×, the catalog being ints only.
+        // `src`: 0 Volume, 1 Relative, 2 Buy/Sell, 3 Delta. `calc`: 0 RELATIVE, 1 SMA, 2 Z-SCORE.
+        params: &[
+            p("src", 0, 0, 3),
+            p("calc", 0, 0, 2),
+            p("m1", 15, 1, 200),
+            p("m2", 25, 1, 200),
+            p("m3", 35, 1, 200),
+            p("l1", 1, 0, 1),
+            p("l2", 1, 0, 1),
+            p("l3", 1, 0, 1),
+            p("smaLen", 300, 2, 2000),
+            p("relLen", 20, 2, 2000),
+            p("zLen", 50, 2, 2000),
+            p("imb1", 0, 0, 1),
+            p("vimb1", 10, 0, 500),
+            p("pimb1", 0, 0, 500),
+            p("imb2", 0, 0, 1),
+            p("vimb2", 0, 0, 500),
+            p("pimb2", 10, 0, 500),
+        ],
+        about: "Colours each candle by how loud its volume is against recent bars: three levels, relative to SMA, by SMA threshold, or by z-score. Multipliers are tenths (15 = 1.5×). Buy/Sell and Delta sources need taker volume — Binance perps.",
     },
 ];
 
@@ -169,6 +199,11 @@ impl StudySpec {
             let view = if self.params.get(2) == Some(&1) { "Line" } else { "Candles" };
             let count = if venues == OI_ALL_VENUES { String::new() } else { format!(" · {} venues", venues.count_ones()) };
             return format!("{short} {measure} {view}{count}");
+        }
+        if self.kind == StudyKind::VolCandle {
+            // Seventeen numbers say nothing in a legend; the three multipliers do.
+            let tenths = |i: usize| self.params.get(i).map_or(0.0, |&v| f64::from(v) / 10.0);
+            return format!("{short} {} {} {}", tenths(2), tenths(3), tenths(4));
         }
         if self.params.is_empty() {
             short.to_string()
@@ -312,6 +347,12 @@ pub struct ComputedStudy {
     pub stats: Vec<(&'static str, String)>,
     /// Candles drawn in the study's pane, one per bar — the forming one included.
     pub candles: Vec<Option<[f64; 4]>>,
+    /// One colour per bar on the price chart itself, a `barcolor()`-style
+    /// override — `None` leaves that bar its usual bull/bear colour. Each
+    /// `Some` is the DEFAULT colour of one of this study's own `lines[]` (by
+    /// hex, matched back to that line's key), so a `study_styles` override on
+    /// that line recolours every bar it was painted on, not just the legend row.
+    pub bar_colors: Vec<Option<&'static str>>,
 }
 
 pub fn compute_study(spec: &StudySpec, candles: &[Candle]) -> ComputedStudy {
@@ -322,7 +363,7 @@ pub fn compute_study(spec: &StudySpec, candles: &[Candle]) -> ComputedStudy {
 /// until it is shown, its bars unread.
 pub fn idle_study(spec: &StudySpec) -> ComputedStudy {
     let def = spec.def();
-    ComputedStudy { id: spec.id(), kind: def.kind, label: spec.label(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new(), candles: Vec::new() }
+    ComputedStudy { id: spec.id(), kind: def.kind, label: spec.label(), group: def.group, lines: Vec::new(), segments: Vec::new(), markers: Vec::new(), stats: Vec::new(), candles: Vec::new(), bar_colors: Vec::new() }
 }
 
 pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyInputs<'_>) -> ComputedStudy {
@@ -378,6 +419,10 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
                 study.candles = bars;
             }
         }
+        StudyKind::VolCandle => {
+            let params: [usize; 17] = std::array::from_fn(param);
+            (study.lines, study.markers, study.bar_colors) = volume_candle(candles, params);
+        }
     }
     study
 }
@@ -409,6 +454,130 @@ fn volume_delta(candles: &[Candle]) -> Vec<StudyLine> {
         StudyLine { kind: LineType::Histogram, color: Some("#26a69a"), neg_color: Some("#ef5350"), badge: false, ..StudyLine::line("delta", "Delta", delta) },
         StudyLine { color: Some("#d1d4dc"), width: 1.0, ..StudyLine::line("cvd", "CVD", cvd) },
     ]
+}
+
+/// `source / ta.sma(source, length)`.
+fn relative_series(src: &Series, len: usize) -> Series {
+    let basis = indicators::sma(src, len);
+    (0..src.len())
+        .map(|i| match (src.get(i).copied().flatten(), basis.get(i).copied().flatten()) {
+            (Some(v), Some(m)) if m != 0.0 => Some(v / m),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `(source - ta.sma(source, length)) / ta.stdev(source, length)`.
+fn zscore_series(src: &Series, len: usize) -> Series {
+    let basis = indicators::sma(src, len);
+    let dev = indicators::stdev(src, len);
+    (0..src.len())
+        .map(|i| match (src.get(i).copied().flatten(), basis.get(i).copied().flatten(), dev.get(i).copied().flatten()) {
+            (Some(v), Some(m), Some(s)) if s > 0.0 => Some((v - m) / s),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Colours each candle by how loud its volume is against recent bars — ported
+/// from the "Volume Candle" Pine indicator (`barcolor()` by volume threshold,
+/// plus two volume/price imbalance markers). `params` is positional, matching
+/// the `STUDIES` entry: `[src, calc, m1, m2, m3, l1, l2, l3, smaLen, relLen,
+/// zLen, imb1, vimb1, pimb1, imb2, vimb2, pimb2]`; multipliers (`m*`, `vimb*`,
+/// `pimb*`) are tenths, the catalog's parameters being ints only.
+// ponytail: alertcondition not ported; add via the server's alert engine when wanted.
+fn volume_candle(candles: &[Candle], params: [usize; 17]) -> (Vec<StudyLine>, Vec<StudyMarker>, Vec<Option<&'static str>>) {
+    let n = candles.len();
+    let [src, calc, m1, m2, m3, l1, l2, l3, sma_len, rel_len, z_len, imb1_on, vimb1, pimb1, imb2_on, vimb2, pimb2] = params;
+    let (mult1, mult2, mult3) = (m1 as f64 / 10.0, m2 as f64 / 10.0, m3 as f64 / 10.0);
+    let (vimb1, pimb1, vimb2, pimb2) = (vimb1 as f64 / 10.0, pimb1 as f64 / 10.0, vimb2 as f64 / 10.0, pimb2 as f64 / 10.0);
+
+    let vol: Series = candles.iter().map(|c| Some(c.volume)).collect();
+    // Buy/sell and delta read the bar's own taker volume, not an LTF request:
+    // `None` where the exchange does not report it — those sources go dark bar
+    // by bar rather than lying with the Volume source's figure.
+    let delta: Series = candles.iter().map(|c| c.taker_buy_volume.map(|t| 2.0 * t - c.volume)).collect();
+    let buy_sell: Series = candles.iter().map(|c| c.taker_buy_volume.map(|t| t.max(c.volume - t))).collect();
+    let vol_src: Series = match src {
+        1 => relative_series(&vol, rel_len),
+        2 => buy_sell,
+        3 => delta.iter().map(|d| d.map(f64::abs)).collect(),
+        _ => vol,
+    };
+
+    let thresh_sma = |mult: f64| -> Series { indicators::sma(&vol_src, sma_len).into_iter().map(|v| v.map(|v| v * (mult + 1.0))).collect() };
+    let (thresh1, thresh2, thresh3): (Series, Series, Series) = match calc {
+        1 => (thresh_sma(mult1), thresh_sma(mult2), thresh_sma(mult3)),
+        _ => (vec![Some(mult1); n], vec![Some(mult2); n], vec![Some(mult3); n]),
+    };
+    let vol_compare: Series = match calc {
+        0 => relative_series(&vol_src, rel_len),
+        1 => vol_src.clone(),
+        _ => zscore_series(&vol_src, z_len),
+    };
+
+    const UP: [&str; 3] = ["#66bb6a", "#43a047", "#2e7d32"];
+    const DOWN: [&str; 3] = ["#f7525f", "#e53935", "#c62828"];
+    let show = [l1 != 0, l2 != 0, l3 != 0];
+    // Only these two sources carry a sign to check against a second, negative pass.
+    let delta_source = src == 2 || src == 3;
+    let thresh_at = |lvl: usize, i: usize| match lvl { 0 => &thresh1, 1 => &thresh2, _ => &thresh3 }[i];
+
+    let mut bar_colors: Vec<Option<&'static str>> = vec![None; n];
+    for i in 0..n {
+        let Some(compare) = vol_compare[i] else { continue };
+        let up = candles[i].close > candles[i].open;
+        let mut color = None;
+        // Highest level wins, as the Pine `if .. else if ..` chain does.
+        for lvl in (0..3).rev() {
+            if show[lvl] && thresh_at(lvl, i).is_some_and(|t| compare >= t) {
+                color = Some(if up { UP[lvl] } else { DOWN[lvl] });
+                break;
+            }
+        }
+        if delta_source && delta[i].is_some_and(|d| d < 0.0) {
+            for lvl in (0..3).rev() {
+                if show[lvl] && thresh_at(lvl, i).is_some_and(|t| compare.abs() >= t) {
+                    color = Some(DOWN[lvl]);
+                    break;
+                }
+            }
+        }
+        bar_colors[i] = color;
+    }
+
+    let mut markers = Vec::new();
+    if imb1_on != 0 || imb2_on != 0 {
+        let price_range: Series = candles.iter().map(|c| Some(c.high - c.low)).collect();
+        let vol_z = zscore_series(&vol_src, z_len);
+        let price_z = zscore_series(&price_range, z_len);
+        for i in 0..n {
+            let (Some(vz), Some(pz)) = (vol_z[i], price_z[i]) else { continue };
+            // Pine marks type 1 orange and type 2 blue; `Tone` has no orange, and
+            // the chart's own `bear` is already TradingView's blue, so type 2
+            // borrows it rather than adding a tone no other study needs.
+            if imb1_on != 0 && vz > vimb1 && pz < pimb1 {
+                markers.push(StudyMarker { time: candles[i].open_time, above: true, text: "●".to_string(), tone: Tone::Neutral });
+            }
+            if imb2_on != 0 && vz < vimb2 && pz > pimb2 {
+                markers.push(StudyMarker { time: candles[i].open_time, above: false, text: "●".to_string(), tone: Tone::Bear });
+            }
+        }
+    }
+
+    // Style-only rows: not stroked anywhere, just a key and a default colour so
+    // the Style tab can list and recolour each level — `bar_colors` carries that
+    // same default string, matched back to its line here so an override applies.
+    let style_line = |key: &'static str, label: &'static str, hex: &'static str| StudyLine { style: LineStyle::None, color: Some(hex), badge: false, ..StudyLine::line(key, label, Vec::new()) };
+    let lines = vec![
+        style_line("lvl1_up", "Level 1 ▲", UP[0]),
+        style_line("lvl1_down", "Level 1 ▼", DOWN[0]),
+        style_line("lvl2_up", "Level 2 ▲", UP[1]),
+        style_line("lvl2_down", "Level 2 ▼", DOWN[1]),
+        style_line("lvl3_up", "Level 3 ▲", UP[2]),
+        style_line("lvl3_down", "Level 3 ▼", DOWN[2]),
+    ];
+    (lines, markers, bar_colors)
 }
 
 /// Fold open interest steps into the chart's bars, the forming one last: each
@@ -1033,6 +1202,42 @@ mod tests {
         let last_marker = study.markers.last().unwrap();
         let idx = candles.iter().position(|c| c.open_time == last_marker.time).unwrap();
         assert!(idx <= candles.len() - 1 - 3);
+    }
+
+    #[test]
+    fn volume_candle_colours_by_relative_volume_and_direction() {
+        // 25 hourly bars, flat volume 100, the last one a spike. `ta.sma`
+        // includes the spiking bar itself in its own 20-bar window (default
+        // `relLen`), so the ratio it compares against is
+        // `N·k / ((N-1) + k)` for a spike `k` times the flat volume, not `k`
+        // itself — it only approaches `k` as the window grows.
+        let bar = |open_time, volume: f64, up: bool| Candle { open_time, open: if up { 100.0 } else { 101.0 }, high: 102.0, low: 99.0, close: if up { 101.0 } else { 100.0 }, volume, quote_volume: None, taker_buy_volume: None };
+        let t0 = parse_iso("2026-08-03").unwrap();
+
+        // A spike ~10x the flat volume: ratio 20·10/(19+10) ≈ 6.9, past the
+        // default level-3 multiplier of 3.5x — however the candle closed.
+        let mut candles: Vec<Candle> = (0..24).map(|i| bar(t0 + i * HOUR, 100.0, true)).collect();
+        candles.push(bar(t0 + 24 * HOUR, 1_000.0, true));
+        let study = compute_study(&parse_studies("volcandle", 12)[0], &candles);
+        assert_eq!(study.bar_colors.last().copied().flatten(), Some("#2e7d32"), "up candle, level 3");
+
+        let mut down = candles.clone();
+        *down.last_mut().unwrap() = bar(t0 + 24 * HOUR, 1_000.0, false);
+        let study = compute_study(&parse_studies("volcandle", 12)[0], &down);
+        assert_eq!(study.bar_colors.last().copied().flatten(), Some("#c62828"), "down candle, level 3");
+
+        // A spike 1.6x the flat volume: ratio 20·1.6/(19+1.6) ≈ 1.55, past
+        // the level-1 multiplier (1.5x) but short of level 2 (2.5x).
+        let mut lvl1 = candles.clone();
+        *lvl1.last_mut().unwrap() = bar(t0 + 24 * HOUR, 160.0, true);
+        let study = compute_study(&parse_studies("volcandle", 12)[0], &lvl1);
+        assert_eq!(study.bar_colors.last().copied().flatten(), Some("#66bb6a"), "up candle, level 1");
+
+        // Bars that never crossed level 1 carry no colour, and the colours
+        // listed for the Style tab are exactly the six levels, un-stroked.
+        assert!(study.bar_colors[..20].iter().all(Option::is_none));
+        assert_eq!(study.lines.iter().map(|l| l.key).collect::<Vec<_>>(), ["lvl1_up", "lvl1_down", "lvl2_up", "lvl2_down", "lvl3_up", "lvl3_down"]);
+        assert!(study.lines.iter().all(|l| l.style == LineStyle::None && !l.badge));
     }
 
     #[test]

@@ -1089,6 +1089,27 @@ impl Chart {
         self.studies.iter().filter(|s| !self.hidden.contains(&s.id)).enumerate()
     }
 
+    /// A `barcolor()`-style override for bar `i`: the LAST visible study (in
+    /// study order, so one added later wins, as TradingView's own `barcolor`
+    /// layers do) whose `bar_colors[i]` is set, matched back to the line of
+    /// its own it names — by default colour, `bar_colors` being one of a
+    /// study's own line colours — so a `study_styles` override on that line
+    /// recolours the bar too. Skipped where that line is itself hidden.
+    /// `None` leaves the bar its usual bull/bear colour.
+    fn bar_color_override(&self, i: usize) -> Option<Color> {
+        let mut found = None;
+        for (index, study) in self.visible_studies() {
+            let Some(hex) = study.bar_colors.get(i).copied().flatten() else { continue };
+            let Some(li) = study.lines.iter().position(|l| l.color == Some(hex)) else { continue };
+            let line = &study.lines[li];
+            if self.line_hidden(&study.id, line.key) {
+                continue;
+            }
+            found = Some(self.line_color(&study.id, line, index, li));
+        }
+        found
+    }
+
     fn total_bars(&self) -> usize {
         self.candles.len() + usize::from(self.live.is_some())
     }
@@ -1473,9 +1494,13 @@ impl Chart {
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);
             let up = b.close >= b.open;
-            let base = if up { t.bull } else { t.bear };
-            let wick_color = if up { t.wick_bull } else { t.wick_bear };
-            let border = if up { t.border_bull } else { t.border_bear };
+            // A study's `barcolor()`-style override, when one names this bar, beats
+            // the theme's bull/bear for the body, wick AND border alike — as
+            // TradingView's own `barcolor()` overrides everything about a bar.
+            let over = self.bar_color_override(i);
+            let base = over.unwrap_or(if up { t.bull } else { t.bear });
+            let wick_color = over.unwrap_or(if up { t.wick_bull } else { t.wick_bear });
+            let border = over.unwrap_or(if up { t.border_bull } else { t.border_bear });
             let alpha = if b.live { 0x80 } else { t.candle_alpha };
             let fill = base.with_alpha(alpha);
             let wick_fill = wick_color.with_alpha(alpha);
@@ -1936,7 +1961,9 @@ impl Chart {
         let values = self
             .visible_studies()
             .flat_map(|(_, s)| {
-                s.lines.iter().filter(|l| !self.line_hidden(&s.id, l.key)).map(move |l| {
+                // A style-only row (Volume Candle's level colours) carries no
+                // values at all — it is there for the Style tab, not the legend.
+                s.lines.iter().filter(|l| !self.line_hidden(&s.id, l.key) && !l.values.is_empty()).map(move |l| {
                     // A series that runs into the forming bar is read there.
                     let i = if l.values.len() > self.candles.len() { index } else { at };
                     (format!("{}:{}", s.id, l.key), l.values.get(i).copied().flatten().map_or("—".to_string(), |v| self.format_value(s.group, v)))
@@ -2845,6 +2872,29 @@ mod tests {
         c.set_study_styles("dvwap:1:2:3/u1.fill=#00ff0040,,0");
         let frame = c.render(1_800_000_000_000);
         assert!(painted(frame, Color::hex(0x00ff00).with_alpha(0x40)) > 0, "the fill override is painted");
+    }
+
+    #[test]
+    fn a_studys_bar_color_override_paints_the_candle_body() {
+        let mut c = Chart::new(ChartTimeframe::H1);
+        c.resize(1000.0, 600.0, 1.0);
+        let t0 = candles(1)[0].open_time;
+        // 24 flat-volume up bars, then one spiking ~10x and closing up: Volume
+        // Candle's level 3 (default relative threshold 3.5x) paints it.
+        let mut bars: Vec<Candle> = (0..24).map(|i| Candle { open_time: t0 + i as i64 * HOUR, open: 100.0, high: 101.0, low: 99.0, close: 100.5, volume: 100.0, quote_volume: None, taker_buy_volume: None }).collect();
+        bars.push(Candle { open_time: t0 + 24 * HOUR, open: 100.0, high: 101.0, low: 99.0, close: 100.5, volume: 1_000.0, quote_volume: None, taker_buy_volume: None });
+        c.set_candles(bars);
+        let without_study = painted(c.render(1_800_000_000_000), Theme::default().bull.with_alpha(Theme::default().candle_alpha));
+        c.set_studies("volcandle");
+        let frame = c.render(1_800_000_000_000);
+        assert!(painted(frame, Color::hex(0x2e7d32).with_alpha(Theme::default().candle_alpha)) > 0, "the overridden body colour is painted");
+        assert!(painted(frame, Theme::default().bull.with_alpha(Theme::default().candle_alpha)) < without_study, "that bar no longer paints the theme's own bull");
+
+        // A `study_styles` override on the level recolours the bar too, same as a line.
+        let id = &c.studies[0].id;
+        c.set_study_styles(&format!("{id}/lvl3_up=#123456,,0"));
+        let frame = c.render(1_800_000_000_000);
+        assert!(painted(frame, Color::hex(0x123456).with_alpha(Theme::default().candle_alpha)) > 0, "the style override recolours the bar");
     }
 
     fn chart() -> Chart {
