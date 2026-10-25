@@ -21,6 +21,7 @@ pub enum StudyKind {
     SwingMap,
     OpenInterest,
     Flow,
+    Dvwap,
 }
 
 impl StudyKind {
@@ -38,6 +39,7 @@ impl StudyKind {
             Self::SwingMap => "swingmap",
             Self::OpenInterest => "oi",
             Self::Flow => "flow",
+            Self::Dvwap => "dvwap",
         }
     }
 }
@@ -84,7 +86,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 12] = [
+pub static STUDIES: [StudyDefinition; 13] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -93,6 +95,7 @@ pub static STUDIES: [StudyDefinition; 12] = [
     StudyDefinition { kind: StudyKind::Macd, name: "MACD", short: "MACD", group: Group::Macd, params: &[p("fast", 12, 1, 1000), p("slow", 26, 2, 1000), p("signal", 9, 1, 1000)], about: "The gap between two EMAs, and an EMA of that gap. The histogram is the difference between them." },
     StudyDefinition { kind: StudyKind::KeyLevels, name: "Historical Key Levels", short: "Key Levels", group: Group::Price, params: &[], about: "Weekly, monthly and yearly opens plus Monday’s high and low — the prices the week is measured against." },
     StudyDefinition { kind: StudyKind::Avwap, name: "Anchored VWAP (S/W/M/Y)", short: "Multi-VWAP", group: Group::Price, params: &[], about: "Volume-weighted average price since the session, week, month and year opened. The session line is drawn on intraday charts only." },
+    StudyDefinition { kind: StudyKind::Dvwap, name: "Daily VWAP", short: "VWAP", group: Group::Price, params: &[p("s1", 1, 1, 5), p("s2", 2, 1, 5), p("s3", 3, 1, 5)], about: "Session VWAP from 00:00 UTC with bands at one, two and three standard deviations." },
     StudyDefinition { kind: StudyKind::SwingMap, name: "Range Swing Structure Map", short: "Swings", group: Group::Price, params: &[p("left", 5, 1, 100), p("right", 5, 1, 100)], about: "Zigzag of confirmed pivots tagged HH/HL/LH/LL, with each leg’s move and duration, and the averages across the window." },
     StudyDefinition {
         kind: StudyKind::Flow,
@@ -337,6 +340,7 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
         StudyKind::Atr => study.lines.push(StudyLine::line("atr", label, indicators::atr(candles, param(0)))),
         StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles, inputs.days),
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
+        StudyKind::Dvwap => study.lines = daily_vwap(candles, [param(0) as f64, param(1) as f64, param(2) as f64]),
         StudyKind::SwingMap => (study.lines, study.markers, study.stats) = swing_map(candles, param(0), param(1)),
         StudyKind::OpenInterest => {
             let usd = param(1) == 1;
@@ -581,6 +585,51 @@ fn anchored_vwap(candles: &[Candle]) -> Vec<StudyLine> {
         colored("weekly", "Weekly", weekly, "#ffa726", 2.0),
         colored("monthly", "Monthly", monthly, "#e040fb", 2.0),
         colored("yearly", "Yearly", yearly, "#e8e8e8", 2.0),
+    ]
+}
+
+/// Session VWAP from 00:00 UTC, with bands at `mults` standard deviations —
+/// what a reader reaches for instead of TradingView's built-in VWAP. Empty on
+/// daily+ timeframes, same as `anchored_vwap`'s session line.
+fn daily_vwap(candles: &[Candle], mults: [f64; 3]) -> Vec<StudyLine> {
+    let n = candles.len();
+    let intraday = n >= 2 && candles[1].open_time - candles[0].open_time < DAY;
+    let mut vwap = vec![None; n];
+    let mut bands: [(Vec<Option<f64>>, Vec<Option<f64>>); 3] = std::array::from_fn(|_| (vec![None; n], vec![None; n]));
+    if intraday {
+        let (mut day, mut sum_pv, mut sum_v, mut sum_pv2) = (None, 0.0f64, 0.0f64, 0.0f64);
+        for (i, c) in candles.iter().enumerate() {
+            let today = c.open_time.div_euclid(DAY);
+            if day != Some(today) {
+                day = Some(today);
+                (sum_pv, sum_v, sum_pv2) = (0.0, 0.0, 0.0);
+            }
+            let typical = (c.high + c.low + c.close) / 3.0;
+            sum_pv += typical * c.volume;
+            sum_v += c.volume;
+            sum_pv2 += typical * typical * c.volume;
+            if sum_v > 0.0 {
+                let mean = sum_pv / sum_v;
+                let variance = (sum_pv2 / sum_v - mean * mean).max(0.0);
+                let sigma = variance.sqrt();
+                vwap[i] = Some(mean);
+                for (k, &mult) in mults.iter().enumerate() {
+                    bands[k].0[i] = Some(mean + mult * sigma);
+                    bands[k].1[i] = Some(mean - mult * sigma);
+                }
+            }
+        }
+    }
+    let [(u1, l1), (u2, l2), (u3, l3)] = bands;
+    let colored = |key, label: &str, values, color, width| StudyLine { color: Some(color), width, ..StudyLine::line(key, label.to_string(), values) };
+    vec![
+        colored("vwap", "VWAP", vwap, "#2962ff", 1.5),
+        colored("u1", "+1σ", u1, "#4caf50", 1.0),
+        colored("l1", "-1σ", l1, "#4caf50", 1.0),
+        colored("u2", "+2σ", u2, "#ff9800", 1.0),
+        colored("l2", "-2σ", l2, "#ff9800", 1.0),
+        colored("u3", "+3σ", u3, "#f44336", 1.0),
+        colored("l3", "-3σ", l3, "#f44336", 1.0),
     ]
 }
 
@@ -850,6 +899,26 @@ mod tests {
         let study = compute_study(&parse_studies("avwap", 12)[0], &two_weeks);
         assert_eq!(line(&study, "weekly")[7], Some(200.0));
         assert!(line(&study, "monthly")[7].unwrap() < 200.0);
+    }
+
+    #[test]
+    fn daily_vwap_weights_bands_and_resets() {
+        let t0 = parse_iso("2026-08-03").unwrap();
+        let bar = |open_time, price: f64, volume| Candle { open_time, open: price, high: price, low: price, close: price, volume, quote_volume: None };
+        let candles = vec![
+            bar(t0, 100.0, 1.0),
+            bar(t0 + HOUR, 200.0, 1.0),
+            bar(t0 + 2 * HOUR, 150.0, 2.0),
+            bar(t0 + DAY, 300.0, 5.0),
+        ];
+        let study = compute_study(&parse_studies("dvwap", 12)[0], &candles);
+        let (vwap, u1, l1) = (line(&study, "vwap"), line(&study, "u1"), line(&study, "l1"));
+        // sum_pv=600, sum_v=4 -> vwap=150; variance=95000/4-150^2=1250 -> sigma≈35.355.
+        assert_eq!(vwap[2], Some(150.0));
+        assert!(u1[2].unwrap() > vwap[2].unwrap() && vwap[2].unwrap() > l1[2].unwrap());
+        // Next day resets the accumulator: vwap is just the bar's own typical price.
+        assert_eq!(vwap[3], Some(300.0));
+        assert_eq!(l1[3], Some(300.0), "a single-bar period has zero variance");
     }
 
     #[test]
