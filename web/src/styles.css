@@ -3,16 +3,16 @@
 
 :root {
   --primary: #2962ff;
-  --bg: #131722;
+  --bg: #0f0f0f;
   /* TradingView's own chrome: the toolbars and panel backgrounds are the page's
      own colour, not a lighter bar — only a 1px --border line sets them apart.
      --surface-menu is the one true panel colour, for menus, dialogs and popovers. */
-  --surface: #131722;
-  --surface-2: #131722;
-  --surface-3: #2a2e39;
-  --surface-menu: #1e222d;
-  --border: #2a2e39;
-  --grid: #1e222d;
+  --surface: #0f0f0f;
+  --surface-2: #0f0f0f;
+  --surface-3: #2a2a2a;
+  --surface-menu: #1e1e1e;
+  --border: #2a2a2a;
+  --grid: #1e1e1e;
   --text: #d1d4dc;
   --muted: #787b86;
   --dim: #50535e;
@@ -41,7 +41,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 button:disabled { cursor: not-allowed; opacity: 0.35; }
 input, select { font: inherit; color: inherit; }
 select { background: var(--surface-2); border: 1px solid var(--border); padding: 0 2px; height: 18px; font-size: 11px; }
-:focus-visible { outline: 1px solid var(--primary); outline-offset: -1px; }
+:focus-visible { outline: 1px solid var(--muted); outline-offset: -1px; }
 ::selection { background: color-mix(in oklab, var(--primary) 35%, transparent); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
@@ -74,7 +74,7 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 .shell { display: grid; grid-template-rows: 38px minmax(0, 1fr) 20px; height: 100%; }
 .topbar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--bg); min-width: 0; }
 .brand { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--text); font-weight: 600; font-size: 12px; }
-.brand svg { color: var(--primary); }
+.brand svg { color: #fff; }
 .topbar .item { display: flex; align-items: center; gap: 6px; padding: 0 9px; border-left: 1px solid var(--border); font-size: 11px; color: var(--muted); white-space: nowrap; }
 .topbar button.item:hover { color: var(--text); background: var(--surface-3); }
 .topbar button.item.on { color: var(--text); background: var(--surface-3); }
@@ -105,7 +105,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .split.column > .gutter::before { left: 0; right: 0; top: 1.5px; height: 1px; }
 .gutter:hover, .gutter.active { background: color-mix(in oklab, var(--primary) 40%, transparent); }
 .tabs { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--surface); }
-.tabs.focused { outline: 1px solid color-mix(in oklab, var(--primary) 40%, transparent); outline-offset: -1px; }
+.tabs.focused { outline: 0; }
 .tabstrip { display: flex; align-items: stretch; flex: 0 0 22px; height: 22px; background: var(--surface-2); border-bottom: 1px solid var(--border); min-width: 0; }
 /* One panel in the group: nothing in its bar is worth a row at rest — it
    collapses to a 4px strip, and opens on hover, focus-within, or its own
@@ -115,7 +115,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .tablist { display: flex; align-items: stretch; min-width: 0; overflow: hidden; }
 .tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px; border-right: 1px solid var(--border); font-size: 11px; color: var(--dim); white-space: nowrap; min-width: 0; max-width: 220px; cursor: default; user-select: none; }
 .tab:hover { color: var(--muted); }
-.tab.active { color: var(--text); background: var(--surface); box-shadow: inset 0 -1px 0 var(--primary); }
+.tab.active { color: var(--text); background: var(--surface); box-shadow: inset 0 -1px 0 var(--text); }
 /* Trimmed to its capitals (above), a label would clip the tops of l, h and t:
    the padding carries its clipping edge back out past them. */
 .tab .label { overflow: hidden; text-overflow: ellipsis; padding-block: 3px; margin-block: -3px; }
@@ -180,7 +180,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .field { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--dim); }
 input.box { width: 56px; border: 1px solid var(--border); background: var(--surface-2); padding: 1px 4px; font-size: 11px; color: var(--text); }
 input.box.wide { width: 100%; }
-input.box:focus { border-color: var(--primary); outline: 0; }
+input.box:focus { border-color: var(--muted); outline: 0; }
 .btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); padding: 1px 7px; font-size: 11px; white-space: nowrap; text-decoration: none; }
 .btn:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
 .btn.on { background: var(--surface-3); border-color: var(--border); color: var(--text); }
@@ -202,7 +202,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .set-nav { display: flex; flex-direction: column; gap: 2px; padding: 10px 6px; border-right: 1px solid var(--border); background: var(--surface-2); }
 .set-nav button { display: flex; align-items: center; gap: 9px; padding: 7px 10px; font-size: 12px; color: var(--muted); text-align: left; }
 .set-nav button:hover { color: var(--text); background: var(--surface-3); }
-.set-nav button.on { color: var(--primary); background: color-mix(in oklab, var(--primary) 9%, transparent); box-shadow: inset 2px 0 0 var(--primary); }
+.set-nav button.on { color: var(--text); background: var(--surface-3); }
 .set-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; padding: 16px 18px 18px; font-size: 11px; }
 .set-body h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .set-body .lead { margin: -4px 0 4px; line-height: 1.55; color: var(--dim); }
@@ -236,7 +236,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
   .set { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .set-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; padding: 0; border-right: 0; border-bottom: 1px solid var(--border); }
   .set-nav button { flex-direction: column; justify-content: center; gap: 4px; padding: 9px 2px 8px; font-size: 10px; text-align: center; }
-  .set-nav button.on { box-shadow: inset 0 -2px 0 var(--primary); }
+  .set-nav button.on { box-shadow: inset 0 -2px 0 var(--text); }
   .set-body { gap: 12px; padding: 14px 12px 24px; }
   .set-card { padding: 12px; }
   .set-row { flex-wrap: wrap; gap: 6px 10px; }
@@ -364,7 +364,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .wl-section .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-section .chev { display: flex; transition: transform 0.12s; }
 .wl-section .chev.shut { transform: rotate(-90deg); }
-.wl-rename { flex: 1; min-width: 0; padding: 1px 4px; font: inherit; letter-spacing: normal; text-transform: none; color: var(--text); background: var(--surface-3); border: 1px solid var(--primary); outline: none; }
+.wl-rename { flex: 1; min-width: 0; padding: 1px 4px; font: inherit; letter-spacing: normal; text-transform: none; color: var(--text); background: var(--surface-3); border: 1px solid var(--muted); outline: none; }
 .wl-drop { position: absolute; left: 7px; right: 0; height: 2px; background: var(--primary); pointer-events: none; z-index: 2; }
 .wl-drop::before { content: ''; position: absolute; left: -7px; top: -3px; width: 4px; height: 4px; border: 2px solid var(--primary); border-radius: 50%; background: var(--surface); }
 .wl-ghost { position: fixed; z-index: 60; padding: 2px 8px; font-size: 11px; font-weight: 600; color: var(--text); background: var(--surface-3); border: 1px solid var(--border); box-shadow: 0 4px 14px #0008; pointer-events: none; white-space: nowrap; }
@@ -497,7 +497,7 @@ table.venues tr.off td { color: var(--dim); }
 .dsettings > header .x:hover { color: var(--text); }
 .dtabs { display: flex; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--border); }
 .dtabs button { padding: 6px 0; color: var(--muted); border-bottom: 2px solid transparent; font-size: 12px; }
-.dtabs button.on { color: var(--text); border-bottom-color: var(--primary); }
+.dtabs button.on { color: var(--text); border-bottom-color: var(--text); }
 .dtabs button:hover { color: var(--text); }
 .dbody { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
 .drow { display: flex; align-items: center; gap: 8px; min-height: 26px; }
@@ -508,10 +508,10 @@ table.venues tr.off td { color: var(--dim); }
 .dnote { margin: 0; color: var(--dim); font-size: 11px; }
 .dinput { height: 26px; min-width: 0; width: 120px; padding: 0 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; }
 .dinput.narrow { width: 74px; }
-.dinput:focus { border-color: var(--primary); outline: 0; }
+.dinput:focus { border-color: var(--muted); outline: 0; }
 .dinput:disabled { color: var(--dim); }
 .dtext { width: 100%; min-height: 60px; padding: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; resize: vertical; box-sizing: border-box; }
-.dtext:focus { border-color: var(--primary); outline: 0; }
+.dtext:focus { border-color: var(--muted); outline: 0; }
 .dlevels { display: flex; flex-direction: column; gap: 4px; }
 .dlevel { display: flex; align-items: center; gap: 6px; }
 .dlevel .cb { display: inline-flex; width: 16px; }
