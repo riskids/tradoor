@@ -535,11 +535,12 @@ impl ChartEngine {
                 let lines: Array = s
                     .lines
                     .into_iter()
-                    .map(|(id, label, color)| {
+                    .map(|(id, label, color, fill)| {
                         let l = obj();
                         set(&l, "id", id);
                         set(&l, "label", label);
                         set(&l, "color", color.css());
+                        set(&l, "fill", fill);
                         JsValue::from(l)
                     })
                     .collect();

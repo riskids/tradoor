@@ -29,6 +29,8 @@ export interface StudyLine {
   id: string;
   label: string;
   color: string;
+  /** Paired with another line of the same study as a filled band — see `studyStyles`'s `.fill` key. */
+  fill?: boolean;
 }
 
 export interface StudyMeta {

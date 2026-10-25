@@ -8,9 +8,11 @@ import { createResource, createSignal, For, onMount, Show } from 'solid-js';
 import { studyCatalog } from '../engine/client';
 import type { StudyDefinition, StudyMeta } from '../engine/protocol';
 import { errorText } from '../lib/api';
-import { ColorField } from './ColorField';
+import { ColorPicker } from './ColorPicker';
 
 const WIDTHS = [1, 2, 3, 4];
+/** A hidden band fill: fully transparent, so "off" needs no separate flag. */
+const FILL_OFF = '#00000000';
 
 /** `studyStyles` keyed by `{studyId}/{lineKey}`, valued `{color},{width},{hidden}`. */
 function styleOf(styles: Record<string, string>, key: string): { color: string; width: number; hidden: boolean } {
@@ -20,6 +22,12 @@ function styleOf(styles: Record<string, string>, key: string): { color: string; 
 
 function withStyle(styles: Record<string, string>, key: string, next: { color: string; width: number; hidden: boolean }): Record<string, string> {
   return { ...styles, [key]: `${next.color},${next.width},${next.hidden ? 1 : 0}` };
+}
+
+/** A band fill's own key takes only a colour — `"{studyId}/{lineKey}.fill"`, `{color},,`. */
+function fillOf(styles: Record<string, string>, key: string): { color: string; on: boolean } {
+  const color = (styles[`${key}.fill`] ?? '').split(',')[0] ?? '';
+  return { color, on: color !== FILL_OFF };
 }
 
 export function StudySettings(props: {
@@ -45,6 +53,17 @@ export function StudySettings(props: {
   const setStyle = (lineId: string, patch: Partial<{ color: string; width: number; hidden: boolean }>) => {
     const key = `${props.study.id}/${lineId.split(':').pop()}`;
     const next = withStyle(styles(), key, { ...styleOf(styles(), key), ...patch });
+    setStyles(next);
+    props.onPreview(next);
+  };
+
+  /** `on`: keep the colour given (or drop the key, for the default); off: remember nothing was asked for. */
+  const setFill = (lineId: string, patch: { on?: boolean; color?: string }) => {
+    const key = `${props.study.id}/${lineId.split(':').pop()}.fill`;
+    const next = { ...styles() };
+    if (patch.color !== undefined) next[key] = `${patch.color},,`;
+    else if (patch.on === false) next[key] = `${FILL_OFF},,`;
+    else delete next[key];
     setStyles(next);
     props.onPreview(next);
   };
@@ -119,17 +138,29 @@ export function StudySettings(props: {
               const lineKey = line.id.split(':').pop()!;
               const key = `${props.study.id}/${lineKey}`;
               const s = () => styleOf(styles(), key);
+              const f = () => fillOf(styles(), key);
               return (
-                <div class="drow">
-                  <input type="checkbox" aria-label={`Show ${line.label}`} checked={!s().hidden} onChange={(e) => setStyle(line.id, { hidden: !e.currentTarget.checked })} />
-                  <span class="dlabel">{line.label}</span>
-                  <div class="dctl">
-                    <ColorField value={s().color || line.color} title={`${line.label} colour`} onChange={(color) => setStyle(line.id, { color })} />
-                    <select class="dinput narrow" aria-label={`${line.label} width`} value={String(s().width)} onChange={(e) => setStyle(line.id, { width: Number(e.currentTarget.value) })}>
-                      <For each={WIDTHS}>{(w) => <option value={w}>{w}px</option>}</For>
-                    </select>
+                <>
+                  <div class="drow">
+                    <input type="checkbox" aria-label={`Show ${line.label}`} checked={!s().hidden} onChange={(e) => setStyle(line.id, { hidden: !e.currentTarget.checked })} />
+                    <span class="dlabel">{line.label}</span>
+                    <div class="dctl">
+                      <ColorPicker value={s().color || line.color} fallback={line.color} title={`${line.label} colour`} onChange={(color) => setStyle(line.id, { color })} />
+                      <select class="dinput narrow" aria-label={`${line.label} width`} value={String(s().width)} onChange={(e) => setStyle(line.id, { width: Number(e.currentTarget.value) })}>
+                        <For each={WIDTHS}>{(w) => <option value={w}>{w}px</option>}</For>
+                      </select>
+                    </div>
                   </div>
-                </div>
+                  <Show when={line.fill}>
+                    <div class="drow">
+                      <input type="checkbox" aria-label={`Band fill ${line.label}`} checked={f().on} onChange={(e) => setFill(line.id, { on: e.currentTarget.checked })} />
+                      <span class="dlabel">Band fill {line.label}</span>
+                      <div class="dctl">
+                        <ColorPicker value={f().color || `${line.color}1a`} fallback={`${line.color}1a`} title={`Band fill ${line.label}`} onChange={(color) => setFill(line.id, { color })} />
+                      </div>
+                    </div>
+                  </Show>
+                </>
               );
             }}
           </For>

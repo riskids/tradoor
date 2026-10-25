@@ -533,6 +533,8 @@ table.venues tr.off td { color: var(--dim); }
 .palette .custom, .palette .opacity { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
 .palette .custom input { width: 26px; height: 22px; padding: 0; border: 1px solid var(--border); background: none; }
 .palette .opacity input { flex: 1; accent-color: var(--primary); }
+.palette.small { width: 208px; }
+.palette.small .grid { grid-template-columns: repeat(8, 1fr); gap: 4px; }
 .dtoolbar { position: absolute; top: 6px; left: 50%; z-index: 7; display: flex; align-items: center; gap: 4px; transform: translateX(-50%); padding: 3px 4px 3px 8px; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 6px 20px #0009; font-size: 11px; }
 .dtoolbar .name { margin-right: 4px; color: var(--muted); white-space: nowrap; }
 .dtoolbar > button { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; color: var(--muted); }

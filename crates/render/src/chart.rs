@@ -181,8 +181,8 @@ pub struct StudyMeta {
     pub label: String,
     pub group: &'static str,
     pub hidden: bool,
-    /// `(studyId:lineKey, label, colour)`.
-    pub lines: Vec<(String, String, Color)>,
+    /// `(studyId:lineKey, label, colour, has a band fill)`.
+    pub lines: Vec<(String, String, Color, bool)>,
     pub stats: Vec<(String, String)>,
 }
 
@@ -1392,6 +1392,14 @@ impl Chart {
         self.style_override(study_id, line_key).is_some_and(|(_, _, h)| *h)
     }
 
+    /// A band's fill colour: the `"{lineKey}.fill"` override if set, else the
+    /// line's own colour at low alpha.
+    fn fill_color(&self, study_id: &str, line: &tradoor_core::studies::StudyLine, study_index: usize, line_index: usize) -> Color {
+        self.style_override(study_id, &format!("{}.fill", line.key))
+            .and_then(|(c, _, _)| *c)
+            .unwrap_or_else(|| self.line_color(study_id, line, study_index, line_index).with_alpha(0x18))
+    }
+
     fn paint(&self, f: &mut Frame, now: i64) {
         let t = &self.theme;
         let n = self.total_bars();
@@ -1509,6 +1517,16 @@ impl Chart {
             let Some(pane) = self.panes.iter().find(|p| p.group == study.group) else { continue };
             f.clip(Some(pane.plot));
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
+            // Bands under their lines, so the strokes sit on top of the fill.
+            for (li, line) in study.lines.iter().enumerate() {
+                let Some(partner_key) = line.fill_to else { continue };
+                if self.line_hidden(&study.id, line.key) {
+                    continue;
+                }
+                let Some(partner) = study.lines.iter().find(|l| l.key == partner_key) else { continue };
+                let color = self.fill_color(&study.id, line, index, li);
+                self.paint_band(f, &pane.scale, &line.values, &partner.values, i0, i1, color);
+            }
             for (li, line) in study.lines.iter().enumerate() {
                 if self.line_hidden(&study.id, line.key) {
                     continue;
@@ -1749,7 +1767,7 @@ impl Chart {
         if let Some((pi, cy)) = crosshair_price {
             let pane = self.panes[pi];
             f.crisp_rect(plot_w + 1.0, cy - badge_h / 2.0, self.axis_width - 1.0, badge_h, t.label_background);
-            f.text(plot_w + 6.0, cy, self.format_value(pane.group, pane.scale.price(f64::from(cy))), t.countdown_text, Align::Left, Baseline::Middle, font, None, None);
+            f.text(plot_w + 6.0, cy, self.format_value(pane.group, pane.scale.price(f64::from(cy))), t.label_text, Align::Left, Baseline::Middle, font, None, None);
         }
 
         // ---- time labels
@@ -1779,7 +1797,7 @@ impl Chart {
         if let Some((x, text, w)) = cross_label {
             let left = (x - w / 2.0).clamp(0.0, (plot_w - w).max(0.0));
             f.crisp_rect(left, avail + 1.0, w, TIME_AXIS_HEIGHT - 2.0, t.label_background);
-            f.text(left + w / 2.0, avail + TIME_AXIS_HEIGHT / 2.0, text, t.countdown_text, Align::Center, Baseline::Middle, font, None, None);
+            f.text(left + w / 2.0, avail + TIME_AXIS_HEIGHT / 2.0, text, t.label_text, Align::Center, Baseline::Middle, font, None, None);
         }
     }
 
@@ -1806,6 +1824,32 @@ impl Chart {
             }
         }
         f.polyline(&pts, width, color);
+    }
+
+    /// The band between two of a study's lines, sampled at the same bars —
+    /// a VWAP's sigma pair. Broken wherever either side has no value.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_band(&self, f: &mut Frame, scale: &PriceScale, upper: &[Option<f64>], lower: &[Option<f64>], i0: usize, i1: usize, color: Color) {
+        let end = i1.min(upper.len().saturating_sub(1)).min(lower.len().saturating_sub(1));
+        if upper.is_empty() || lower.is_empty() || i0 > end {
+            return;
+        }
+        let (mut up, mut low): (Vec<(f32, f32)>, Vec<(f32, f32)>) = (Vec::new(), Vec::new());
+        for i in i0..=end {
+            match (upper[i], lower[i]) {
+                (Some(u), Some(l)) => {
+                    let x = self.time.x(i as f64) as f32;
+                    up.push((x, scale.y(u) as f32));
+                    low.push((x, scale.y(l) as f32));
+                }
+                _ => {
+                    f.band(&up, &low, color);
+                    up.clear();
+                    low.clear();
+                }
+            }
+        }
+        f.band(&up, &low, color);
     }
 
     /// A study's own candles — open interest — in its pane, coloured by whether it rose.
@@ -1951,7 +1995,7 @@ impl Chart {
                         .iter()
                         .enumerate()
                         .filter(|(_, l)| !self.line_hidden(&s.id, l.key))
-                        .map(|(li, l)| (format!("{}:{}", s.id, l.key), l.label.clone(), self.line_color(&s.id, l, index, li)))
+                        .map(|(li, l)| (format!("{}:{}", s.id, l.key), l.label.clone(), self.line_color(&s.id, l, index, li), l.fill_to.is_some()))
                         .collect(),
                     stats: s.stats.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
                 }
@@ -2768,9 +2812,40 @@ mod tests {
         assert!(painted(frame, Color::hex(0xff0000)) > 0, "vwap painted red");
         let meta = c.studies_meta();
         let dvwap = meta.iter().find(|s| s.id == "dvwap:1:2:3").unwrap();
-        assert!(dvwap.lines.iter().any(|(id, _, _)| id == "dvwap:1:2:3:vwap"), "vwap stays");
-        assert!(!dvwap.lines.iter().any(|(id, _, _)| id == "dvwap:1:2:3:u1"), "u1 is hidden, carried nowhere");
+        assert!(dvwap.lines.iter().any(|(id, ..)| id == "dvwap:1:2:3:vwap"), "vwap stays");
+        assert!(!dvwap.lines.iter().any(|(id, ..)| id == "dvwap:1:2:3:u1"), "u1 is hidden, carried nowhere");
         assert!(!c.legend().values.iter().any(|(id, _)| id == "dvwap:1:2:3:u1"), "nor in the legend");
+
+        // An `#rrggbbaa` override carries its alpha through to what is painted.
+        c.set_study_styles("dvwap:1:2:3/vwap=#ff000080,2,0");
+        let frame = c.render(1_800_000_000_000);
+        assert!(painted(frame, Color::hex(0xff0000).with_alpha(0x80)) > 0, "the override's own alpha is painted, not opaque");
+    }
+
+    #[test]
+    fn a_band_fills_between_its_line_and_the_one_it_names() {
+        let mut c = chart();
+        c.set_studies("dvwap:1:2:3");
+        let filled = c.render(1_800_000_000_000).vertex_count();
+
+        c.set_study_styles("dvwap:1:2:3/u1=,,1");
+        let without_u1_band = c.render(1_800_000_000_000).vertex_count();
+        assert!(without_u1_band < filled, "hiding u1 drops its band along with its line");
+
+        c.set_study_styles("");
+        let meta = c.studies_meta();
+        let dvwap = meta.iter().find(|s| s.id == "dvwap:1:2:3").unwrap();
+        let (u1_fill, vwap_fill) = (
+            dvwap.lines.iter().find(|(id, ..)| id == "dvwap:1:2:3:u1").unwrap().3,
+            dvwap.lines.iter().find(|(id, ..)| id == "dvwap:1:2:3:vwap").unwrap().3,
+        );
+        assert!(u1_fill, "u1 is paired with l1 as a band");
+        assert!(!vwap_fill, "the vwap line itself has no band");
+
+        // The `.fill` override's colour is what is painted for the band, not the default low-alpha line colour.
+        c.set_study_styles("dvwap:1:2:3/u1.fill=#00ff0040,,0");
+        let frame = c.render(1_800_000_000_000);
+        assert!(painted(frame, Color::hex(0x00ff00).with_alpha(0x40)) > 0, "the fill override is painted");
     }
 
     fn chart() -> Chart {

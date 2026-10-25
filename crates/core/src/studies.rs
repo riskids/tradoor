@@ -248,11 +248,14 @@ pub struct StudyLine {
     pub width: f32,
     /// Whether its last value gets a badge on the axis.
     pub badge: bool,
+    /// The key of another line in the same study: the area between them is
+    /// filled, a band — a VWAP's sigma lines paired this way.
+    pub fill_to: Option<&'static str>,
 }
 
 impl StudyLine {
     fn line(key: &'static str, label: impl Into<String>, values: Series) -> Self {
-        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, neg_color: None, width: 1.0, badge: true }
+        Self { key, label: label.into(), kind: LineType::Line, values, style: LineStyle::Solid, color: None, neg_color: None, width: 1.0, badge: true, fill_to: None }
     }
 }
 
@@ -668,13 +671,14 @@ fn daily_vwap(candles: &[Candle], mults: [f64; 3]) -> Vec<StudyLine> {
     let [(u1, l1), (u2, l2), (u3, l3)] = bands;
     // TradingView's look: a blue VWAP, grey bands that fade outward, and only the VWAP tagged on the axis.
     let band = |key, label: &str, values, color| StudyLine { color: Some(color), badge: false, ..StudyLine::line(key, label.to_string(), values) };
+    let upper_band = |key, label: &str, values, color, fill_to| StudyLine { fill_to: Some(fill_to), ..band(key, label, values, color) };
     vec![
         StudyLine { color: Some("#2962ff"), width: 1.5, ..StudyLine::line("vwap", "VWAP".to_string(), vwap) },
-        band("u1", "+1σ", u1, "#9598a1"),
+        upper_band("u1", "+1σ", u1, "#9598a1", "l1"),
         band("l1", "-1σ", l1, "#9598a1"),
-        band("u2", "+2σ", u2, "#787b86"),
+        upper_band("u2", "+2σ", u2, "#787b86", "l2"),
         band("l2", "-2σ", l2, "#787b86"),
-        band("u3", "+3σ", u3, "#50535e"),
+        upper_band("u3", "+3σ", u3, "#50535e", "l3"),
         band("l3", "-3σ", l3, "#50535e"),
     ]
 }

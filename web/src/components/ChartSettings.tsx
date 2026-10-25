@@ -6,7 +6,7 @@
 import { createSignal, For, Show } from 'solid-js';
 import { CHART_THEME, FONT_PX } from '../lib/theme';
 import { doc, setThemeValue } from '../workspace/store';
-import { Swatch } from './Settings';
+import { ColorPicker } from './ColorPicker';
 
 const TABS: { id: 'candles' | 'canvas' | 'scales' | 'studies' | 'drawings'; label: string }[] = [
   { id: 'candles', label: 'Symbol' },
@@ -18,13 +18,29 @@ const TABS: { id: 'candles' | 'canvas' | 'scales' | 'studies' | 'drawings'; labe
 
 const byName = (name: string) => CHART_THEME.find((t) => t.name === name)!;
 
-/** One row: a label, then one or two swatches beside it. */
+/** A theme colour, through `ColorPicker`: swatch, name, then ↺ once it differs from the default. */
+function ThemeSwatch(props: { name: string; label: string; fallback: string }) {
+  const value = () => doc.theme[props.name] ?? props.fallback;
+  return (
+    <span class="swatch">
+      <ColorPicker value={value()} fallback={props.fallback} title={props.label} onChange={(v) => setThemeValue(props.name, v)} />
+      <span class="name">{props.label}</span>
+      <Show when={doc.theme[props.name]}>
+        <button class="dim" data-tip="Back to the default" onClick={() => setThemeValue(props.name, null)}>
+          ↺
+        </button>
+      </Show>
+    </span>
+  );
+}
+
+/** One row: a label, then one or two colour pickers beside it. */
 function Pair(props: { label: string; names: string[] }) {
   return (
     <div class="set-row">
       <span class="label">{props.label}</span>
       <div class="grow swatches tight">
-        <For each={props.names}>{(name) => <Swatch name={name} label={byName(name).label} fallback={byName(name).value} />}</For>
+        <For each={props.names}>{(name) => <ThemeSwatch name={name} label={byName(name).label} fallback={byName(name).value} />}</For>
       </div>
     </div>
   );

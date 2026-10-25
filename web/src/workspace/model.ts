@@ -83,7 +83,10 @@ export interface ChartPanelState extends PanelBase {
   /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
   tpoSettings: Record<string, string>;
   /** Per-study line overrides, keyed `"{studyId}/{lineKey}"`, value `"{color},{width},{hidden}"`;
-   *  an empty colour or width keeps the line's own. See `serializeStudyStyles`. */
+   *  an empty colour or width keeps the line's own. A line paired as a band
+   *  (`StudyMeta.lines[].fill`) also takes a `"{studyId}/{lineKey}.fill"` key,
+   *  its value just a colour (`#rrggbbaa` for opacity) — width and hidden are
+   *  ignored there. See `serializeStudyStyles`. */
   studyStyles: Record<string, string>;
   /** The layers under the symbol are folded away. */
   legendShut: boolean;

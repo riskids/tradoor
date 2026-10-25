@@ -1,5 +1,6 @@
-//! Every colour the chart draws with. The defaults are rsalianto's trading-chart
-//! palette; a workspace can override any of them by name.
+//! Every colour the chart draws with. The defaults are TradingView's own dark
+//! theme — a black canvas, white up candles, blue down; a workspace can
+//! override any of them by name.
 
 use crate::color::Color;
 
@@ -8,8 +9,6 @@ pub struct Theme {
     pub background: Color,
     pub text: Color,
     pub border: Color,
-    /// Muted sage and clay, so the ribbon behind them is the brightest thing on the
-    /// pane and "which side of the ribbon are we on" reads first.
     pub bull: Color,
     pub bear: Color,
     pub wick_bull: Color,
@@ -28,6 +27,10 @@ pub struct Theme {
     pub ribbon_fill_alpha: u8,
     pub crosshair: Color,
     pub label_background: Color,
+    /// Text on a `label_background` tag — the crosshair's price and time —
+    /// a fixed colour rather than computed, so a light `label_background`
+    /// reads as one flat tag instead of flipping its own text dark.
+    pub label_text: Color,
     pub countdown_background: Color,
     pub countdown_text: Color,
     pub study_palette: [Color; 6],
@@ -51,26 +54,28 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
+            // TradingView's default: a black canvas, white up candles, blue down.
             background: Color::hex(0x0f0f0f),
-            text: Color::hex(0x7c847d),
-            border: Color::hex(0x232823),
-            bull: Color::hex(0xa4c588),
-            bear: Color::hex(0xd97161),
-            wick_bull: Color::hex(0xa4c588),
-            wick_bear: Color::hex(0xd97161),
-            border_bull: Color::hex(0xa4c588),
-            border_bear: Color::hex(0xd97161),
-            grid: Color::hex(0x232823),
-            volume_bull: Color::hex(0xa4c588),
-            volume_bear: Color::hex(0xd97161),
+            text: Color::hex(0xb2b5be),
+            border: Color::hex(0x2a2e39),
+            bull: Color::hex(0xffffff),
+            bear: Color::hex(0x2196f3),
+            wick_bull: Color::hex(0xffffff),
+            wick_bear: Color::hex(0x2196f3),
+            border_bull: Color::hex(0xffffff),
+            border_bear: Color::hex(0x2196f3),
+            grid: Color::hex(0x1c1c1c),
+            volume_bull: Color::hex(0xffffff),
+            volume_bear: Color::hex(0x2196f3),
             candle_alpha: 0xcc,
-            volume_alpha: 0x40,
+            volume_alpha: 0x60,
             ema200: Color::hex(0xffb03a),
             ribbon_fast: Color::hex(0xaafd35),
             ribbon_slow: Color::hex(0xff293a),
             ribbon_fill_alpha: 51,
-            crosshair: Color::hex(0x7c847d),
-            label_background: Color::hex(0x2a2f2a),
+            crosshair: Color::hex(0x9598a1),
+            label_background: Color::hex(0xffffff),
+            label_text: Color::hex(0x131722),
             countdown_background: Color::hex(0x2a2f2a),
             countdown_text: Color::hex(0xd7ded7),
             study_palette: [Color::hex(0x7fb2ff), Color::hex(0xc58fff), Color::hex(0xffd166), Color::hex(0x4ecdc4), Color::hex(0xff8fab), Color::hex(0x9ae66e)],
@@ -131,6 +136,7 @@ impl Theme {
             "ribbonSlow" => &mut self.ribbon_slow,
             "crosshair" => &mut self.crosshair,
             "labelBackground" => &mut self.label_background,
+            "labelText" => &mut self.label_text,
             "drawing" => &mut self.drawing,
             "drawingSelected" => &mut self.drawing_selected,
             "alert" => &mut self.alert,
