@@ -267,6 +267,10 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .tb.on { background: var(--primary); color: #fff; }
 /* Candles / Footprint / TPO, as TV's segmented text toggle: one bar, the
    current choice lit, the rest plain until hovered. */
+/* The segment row gives way first, so the price and the ⋯ menu at the right end never fall off. */
+.toolbar > * { flex: none; }
+.toolbar > .segmented { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.toolbar > .spacer { flex: 1 1 0; min-width: 4px; }
 .segmented { display: inline-flex; align-items: center; gap: 1px; }
 .seg { padding: 2px 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .seg:hover:not(.on) { color: var(--text); background: var(--surface-3); }
