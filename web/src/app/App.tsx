@@ -466,12 +466,6 @@ export function App() {
         <button class="item" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={12} /> <span>Commands</span> <kbd>/</kbd>
         </button>
-        <button class="item" classList={{ on: journalOpen() }} data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
-          <Icon name="pencil" size={12} /> <span>Journal</span>
-        </button>
-        <button class="item" classList={{ on: trainingOpen() }} data-tip="Paper trading at live prices" onClick={() => (setJournalOpen(false), setTrainingOpen(!trainingOpen()))}>
-          <Icon name="indicators" size={12} /> <span>Training</span>
-        </button>
         <span class="item dim">
           <span>{doc.name}</span>
         </span>
@@ -480,17 +474,23 @@ export function App() {
           <Icon name="gift" size={13} /> <span>Rewards</span>
         </button>
         <Health />
-        <button class="item icon alerts-btn" data-tip="Price alerts" onClick={showAlertsPanel}>
+        <button class="item icon" classList={{ on: journalOpen() }} aria-label="Journal" data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
+          <Icon name="pencil" size={14} />
+        </button>
+        <button class="item icon" classList={{ on: trainingOpen() }} aria-label="Training" data-tip="Paper trading at live prices" onClick={() => (setJournalOpen(false), setTrainingOpen(!trainingOpen()))}>
+          <Icon name="indicators" size={14} />
+        </button>
+        <button class="item icon alerts-btn" aria-label="Alerts" data-tip="Price alerts" onClick={showAlertsPanel}>
           <Icon name="alarm" size={13} />
           <Show when={unread() > 0}>
             <span class="al-badge">{unread()}</span>
           </Show>
         </button>
         <Clock />
-        <button class="item icon" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
+        <button class="item icon" aria-label="Settings" data-tip="Settings and colours" onClick={() => setOverlay({ kind: 'settings' })}>
           <Icon name="settings" size={16} />
         </button>
-        <button class="item icon" data-tip="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
+        <button class="item icon" aria-label="Help" data-tip="Keyboard shortcuts (?)" onClick={() => setOverlay({ kind: 'help' })}>
           <span>?</span>
         </button>
       </header>

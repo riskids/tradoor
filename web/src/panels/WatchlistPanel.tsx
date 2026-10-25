@@ -14,7 +14,7 @@ import { call } from '../engine/client';
 import { dayOf, watchDay, type Day } from '../lib/day-feed';
 import { catalog, type Catalog } from '../lib/api';
 import { useDismiss } from '../lib/dismiss';
-import { formatPct, formatPrice, formatVolume, priceDecimals } from '../lib/format';
+import { formatPct, formatPrice, priceDecimals } from '../lib/format';
 import { Icon } from '../lib/icons';
 import { ExchangeLogo, exchangeOfVenue, kindLabel } from '../lib/exchanges';
 import { parseMarket, symbolOf, venueLabel } from '../lib/markets';
@@ -129,7 +129,9 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
     if (chart) setPanelMarket(chart.id, market);
   };
 
+  const changeAbs = (r: Row | undefined): number | null => (r?.day ? r.last - r.day.open : null);
   const changePct = (r: Row | undefined): number | null => (r?.day ? ((r.last - r.day.open) / r.day.open) * 100 : null);
+  const formatChg = (v: number | null, digits: number): string => (v === null ? '—' : `${v > 0 ? '+' : ''}${formatPrice(v, digits)}`);
   const digits = (market: string, last: number) => products()?.byMarket.get(market)?.priceDecimals ?? priceDecimals(last);
 
   // ------------------------------------------------------------ editing the list
@@ -301,11 +303,11 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
       <div class="wl-head">
         <span>Symbol</span>
         <span class="r">Last</span>
+        <span class="r chgabs" data-tip="Change since the day's open, 00:00 UTC — as TradingView counts it">
+          Chg
+        </span>
         <span class="r chg" data-tip="Change since the day's open, 00:00 UTC — as TradingView counts it">
           Chg%
-        </span>
-        <span class="r vol" data-tip="Volume since 00:00 UTC, in the base coin">
-          Vol
         </span>
       </div>
       <div class="scroll wl-list" ref={list} onContextMenu={(e) => openMenu(e, null)}>
@@ -367,11 +369,13 @@ export function WatchlistPanel(props: { panel: WatchlistPanelState }) {
                   <span class="name">{symbolOf(item)}</span>
                   <span class="kind">{kindLabel(item)}</span>
                 </span>
-                <span class="num r muted">{rows[item] ? formatPrice(rows[item]!.last, digits(item, rows[item]!.last)) : '—'}</span>
+                <span class="num r">{rows[item] ? formatPrice(rows[item]!.last, digits(item, rows[item]!.last)) : '—'}</span>
+                <span class="num r chgabs" classList={{ bull: (changeAbs(rows[item]) ?? 0) > 0, bear: (changeAbs(rows[item]) ?? 0) < 0, dim: changeAbs(rows[item]) === null }}>
+                  {formatChg(changeAbs(rows[item]), digits(item, rows[item]?.last ?? 0))}
+                </span>
                 <span class="num r chg" classList={{ bull: (changePct(rows[item]) ?? 0) > 0, bear: (changePct(rows[item]) ?? 0) < 0, dim: changePct(rows[item]) === null }}>
                   {formatPct(changePct(rows[item]))}
                 </span>
-                <span class="num r vol muted">{formatVolume(rows[item]?.day?.volume)}</span>
                 <button
                   class="x"
                   data-tip="Remove from the watchlist"

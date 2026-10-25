@@ -1,26 +1,26 @@
-/* tradoor — terminal chrome. Square, hairline borders, monospace, one accent.
+/* tradoor — TradingView-dark chrome. Flat surfaces, hairline borders, one accent.
    Bold is spent on data, never on labels. */
 
 :root {
-  --primary: #aafd35;
-  --bg: #070907;
-  --surface: #0d100e;
-  --surface-2: #141815;
-  --surface-3: #1c211d;
-  --border: #232823;
-  --grid: #171b18;
-  --text: #dfe6e0;
-  --muted: #7c847d;
-  --dim: #515851;
-  --bull: #aafd35;
-  --bear: #ff4d5f;
-  --warn: #ffc247;
-  --info: #5ab6ff;
-  --link-green: #aafd35;
-  --link-blue: #5ab6ff;
-  --link-red: #ff5f6d;
-  --link-yellow: #ffc247;
-  --font: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --primary: #2962ff;
+  --bg: #131722;
+  --surface: #1e222d;
+  --surface-2: #1e222d;
+  --surface-3: #2a2e39;
+  --border: #2a2e39;
+  --grid: #1e222d;
+  --text: #d1d4dc;
+  --muted: #787b86;
+  --dim: #5d606b;
+  --bull: #26a69a;
+  --bear: #ef5350;
+  --warn: #ff9800;
+  --info: #2962ff;
+  --link-green: #26a69a;
+  --link-blue: #2962ff;
+  --link-red: #ef5350;
+  --link-yellow: #ff9800;
+  --font: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif;
   color-scheme: dark;
 }
 
@@ -67,12 +67,13 @@ kbd { border: 1px solid var(--border); background: var(--surface-2); padding: 0 
 @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 
 /* ------------------------------------------------------------ shell */
-.shell { display: grid; grid-template-rows: 28px minmax(0, 1fr) 22px; height: 100%; }
+.shell { display: grid; grid-template-rows: 38px minmax(0, 1fr) 22px; height: 100%; }
 .topbar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--surface); min-width: 0; }
-.brand { display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--primary); color: var(--bg); font-weight: 700; font-size: 9.5px; letter-spacing: 0.14em; }
+.brand { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--text); font-weight: 600; font-size: 12px; }
+.brand svg { color: var(--primary); }
 .topbar .item { display: flex; align-items: center; gap: 6px; padding: 0 9px; border-left: 1px solid var(--border); font-size: 11px; color: var(--muted); white-space: nowrap; }
 .topbar button.item:hover { color: var(--primary); background: var(--surface-2); }
-.topbar button.item.on { color: var(--bg); background: var(--primary); }
+.topbar button.item.on { color: #fff; background: var(--primary); }
 /* A button that is only an icon, or the help's question mark: square to the bar, its mark in the middle. */
 .topbar .item.icon { justify-content: center; min-width: 34px; padding: 0 8px; }
 .statusbar { display: flex; align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--border); background: var(--surface); font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; }
@@ -121,7 +122,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .drophint { position: absolute; pointer-events: none; background: color-mix(in oklab, var(--primary) 16%, transparent); border: 1px solid var(--primary); }
 
 /* ------------------------------------------------------------ menus and dialogs */
-.menu { position: absolute; z-index: 45; min-width: 190px; padding: 2px 0; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 28px #000a; }
+.menu { position: absolute; z-index: 45; min-width: 190px; padding: 2px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 28px #000a; overflow: hidden; }
 .menu button { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 4px 8px; text-align: left; color: var(--text); font-size: 11px; white-space: nowrap; }
 .menu button:hover, .menu button.cur { background: var(--surface-3); color: var(--primary); }
 .menu .group { display: flex; flex-wrap: wrap; gap: 1px; padding: 3px 6px; border-top: 1px solid var(--border); }
@@ -138,7 +139,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 @media (pointer: coarse) { .menu .group button { padding: 7px 8px; } .menu .group .tf-pick button.num { padding-right: 3px; } .menu .group button.fav { padding: 7px 9px 7px 3px; } }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
 .backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; background: color-mix(in oklab, var(--bg) 82%, transparent); }
-.dialog { display: flex; flex-direction: column; width: 100%; max-width: 780px; max-height: 80vh; border: 1px solid var(--border); background: var(--surface); box-shadow: 0 16px 48px #000c; }
+.dialog { display: flex; flex-direction: column; width: 100%; max-width: 780px; max-height: 80vh; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 16px 48px #000c; overflow: hidden; }
 .dialog.narrow { max-width: 420px; }
 .dialog.medium { max-width: 620px; }
 .dialog > header { display: flex; align-items: center; flex: none; min-height: 28px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -152,7 +153,7 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .chips { display: flex; gap: 1px; padding-right: 6px; }
 .chips button { padding: 1px 6px; font-size: 10px; color: var(--dim); }
 .chips button:hover { color: var(--primary); }
-.chips button.on { background: var(--primary); color: var(--bg); }
+.chips button.on { background: var(--primary); color: #fff; }
 .chips .sep-v { width: 1px; margin: 3px 4px; background: var(--border); }
 .chips button.xchip { display: flex; align-items: center; padding: 1px 4px; opacity: 0.45; }
 .chips button.xchip:hover, .chips button.xchip.on { opacity: 1; background: var(--surface-3); }
@@ -172,7 +173,7 @@ input.box.wide { width: 100%; }
 input.box:focus { border-color: var(--primary); outline: 0; }
 .btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); padding: 1px 7px; font-size: 11px; white-space: nowrap; text-decoration: none; }
 .btn:hover:not(:disabled) { border-color: color-mix(in oklab, var(--primary) 50%, transparent); color: var(--primary); }
-.btn.on { background: var(--primary); border-color: var(--primary); color: var(--bg); }
+.btn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn.danger:hover:not(:disabled) { border-color: var(--bear); color: var(--bear); }
 .form { padding: 8px; overflow-y: auto; }
 .tabs-row { display: flex; flex-wrap: wrap; gap: 1px; padding: 3px 6px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -250,7 +251,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .toolbar { display: flex; align-items: center; gap: 1px; flex: 0 0 26px; height: 26px; padding: 0 4px; border-bottom: 1px solid var(--border); background: var(--surface-2); overflow: hidden; white-space: nowrap; }
 .tb { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; font-size: 11px; color: var(--muted); }
 .tb:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
-.tb.on { background: var(--primary); color: var(--bg); }
+.tb.on { background: var(--primary); color: #fff; }
 /* The chart's watchlist button: a star, filled once the market is in it. */
 .tb.wl-toggle { border: 1px solid var(--border); margin-left: 2px; }
 .tb.wl-toggle.in, .tb.wl-toggle.in:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 40%, transparent); }
@@ -277,7 +278,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .rail button { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; color: var(--muted); }
 .rail button svg { width: 18px; height: 18px; }
 .rail button:hover:not(:disabled) { color: var(--primary); background: var(--surface-3); }
-.rail button.on { background: var(--primary); color: var(--bg); }
+.rail button.on { background: var(--primary); color: #fff; }
 .rail button.del:hover:not(:disabled) { color: var(--bear); }
 .rail hr { width: 18px; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
 .rail .count { font-size: 11px; color: var(--dim); }
@@ -314,7 +315,7 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 
 /* The symbol takes what the numbers leave; narrow panels drop the tag, then the change. */
 .wl { container-type: inline-size; }
-.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 54px 50px; gap: 6px; align-items: center; padding: 2px 8px; font-size: 11px; }
+.wl-head, .wl-row { display: grid; grid-template-columns: minmax(0, 1fr) 68px 62px 56px; gap: 6px; align-items: center; padding: 0 8px; min-height: 24px; font-size: 11px; }
 .wl-head { flex: none; color: var(--dim); border-bottom: 1px solid var(--border); }
 .wl-list { position: relative; }
 .wl-row { position: relative; cursor: pointer; user-select: none; }
@@ -341,9 +342,9 @@ input.box:focus { border-color: var(--primary); outline: 0; }
 .wl-flags { display: flex; gap: 6px; padding: 6px 8px; }
 .menu .wl-flags button.swatch { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: var(--flag); outline-offset: 2px; }
 .menu .wl-flags button.swatch:hover, .menu .wl-flags button.swatch.on { outline: 2px solid var(--flag); background: var(--flag); }
-@container (max-width: 290px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 72px 54px; } .wl .vol { display: none; } }
+@container (max-width: 290px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 68px 56px; } .wl .chgabs { display: none; } }
 @container (max-width: 250px) { .wl-row .kind { display: none; } }
-@container (max-width: 180px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 72px; } .wl .chg { display: none; } }
+@container (max-width: 180px) { .wl-head, .wl-row { grid-template-columns: minmax(0, 1fr) 68px; } .wl .chg { display: none; } }
 .wl-row .x:hover { color: var(--bear); }
 .scroll { flex: 1; min-height: 0; overflow: auto; }
 
@@ -460,7 +461,7 @@ table.venues tr.off td { color: var(--dim); }
 }
 
 /* ---- drawing settings: TradingView's dialog, in this app's skin */
-.dsettings { position: absolute; top: 34px; right: 76px; z-index: 40; display: flex; flex-direction: column; width: 340px; max-width: calc(100% - 16px); max-height: calc(100% - 48px); border: 1px solid var(--border); background: var(--surface); box-shadow: 0 16px 48px #000c; outline: 0; font-size: 12px; }
+.dsettings { position: absolute; top: 34px; right: 76px; z-index: 40; display: flex; flex-direction: column; width: 340px; max-width: calc(100% - 16px); max-height: calc(100% - 48px); border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 16px 48px #000c; outline: 0; font-size: 12px; overflow: hidden; }
 .dsettings > header { display: flex; align-items: center; padding: 8px 10px 4px 14px; cursor: move; user-select: none; }
 .dsettings > header .title { font-size: 14px; color: var(--text); }
 .dsettings > header .x { padding: 2px 6px; color: var(--dim); font-size: 13px; }
@@ -583,7 +584,7 @@ table.venues tr.off td { color: var(--dim); }
 
 /* The drawing magnet: lit when on, and marked when strong. */
 .rail button.magnet.on { background: color-mix(in oklab, var(--primary) 22%, transparent); color: var(--primary); }
-.rail button.magnet.strong { background: var(--primary); color: var(--bg); }
+.rail button.magnet.strong { background: var(--primary); color: #fff; }
 
 /* The app's tooltips (lib/tooltip.ts), in place of the browser's. */
 .tip {
@@ -714,7 +715,7 @@ table.venues tr.off td { color: var(--dim); }
 .ref-row .new, .ref-card .new { padding: 1px 5px; border: 1px solid color-mix(in oklab, var(--primary) 50%, transparent); color: var(--primary); font-size: 9px; font-style: normal; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
 .ref-row .who span { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ref-row .go { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid color-mix(in oklab, var(--primary) 45%, transparent); color: var(--primary); font-size: 11px; white-space: nowrap; transition: background 0.12s, color 0.12s; }
-.ref-row:hover .go { background: var(--primary); color: var(--bg); }
+.ref-row:hover .go { background: var(--primary); color: #fff; }
 .ref-card { position: fixed; left: 12px; bottom: 34px; z-index: 79; width: min(330px, calc(100vw - 24px)); border: 1px solid var(--border); border-top: 2px solid var(--primary); background: var(--surface); box-shadow: 0 14px 44px #000d; font-size: 12px; animation: toast-in 0.25s ease-out; }
 .ref-card > header { display: flex; align-items: center; padding: 8px 4px 0 12px; }
 .ref-card .eyebrow { display: flex; align-items: center; gap: 6px; flex: 1; color: var(--primary); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
@@ -836,7 +837,7 @@ table.venues tr.off td { color: var(--dim); }
 .fl-chip.before::before { left: -2px; }
 .fl-chip.after::after { right: -2px; }
 .fl-chip .x { display: none; align-self: stretch; align-items: center; padding: 0 4px; color: var(--dim); }
-.fl-chip.on .x { background: var(--primary); color: var(--bg); }
+.fl-chip.on .x { background: var(--primary); color: #fff; }
 .fl-chip:hover .x { display: flex; }
 .fl-chip .x:hover { color: var(--bear); }
 @media (hover: none) { .fl-chip.on .x { display: flex; } }
@@ -856,7 +857,7 @@ table.venues tr.off td { color: var(--dim); }
 .fl-menu .row .sym .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-menu .row button.box, .fl-menu .row input.box { width: 100%; justify-content: flex-end; padding: 2px 5px; text-align: right; }
 .fl-menu .row .tb { width: 100%; justify-content: center; }
-.fl-menu .row .tb.on, .fl-menu .row .tb.on:hover { background: var(--primary); color: var(--bg); }
+.fl-menu .row .tb.on, .fl-menu .row .tb.on:hover { background: var(--primary); color: #fff; }
 .flow-label { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); font-size: 11px; white-space: nowrap; pointer-events: none; box-shadow: 0 3px 12px #0008; }
 .flow-label.bull { border-color: color-mix(in oklab, var(--bull) 60%, transparent); }
 .flow-label.bear { border-color: color-mix(in oklab, var(--bear) 60%, transparent); }
