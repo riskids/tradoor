@@ -1,7 +1,6 @@
-/** Studies the engine computes, with their parameters editable before adding.
- *  A study's identity is its parameters, so a different length is a different study. */
+/** Studies the engine computes, added with their defaults; inputs are set from
+ *  the legend's gear afterwards. A study's identity is its parameters. */
 import { createMemo, createResource, createSignal, For, onMount, Show } from 'solid-js';
-import { createStore } from 'solid-js/store';
 import { studyCatalog } from '../engine/client';
 import type { StudyDefinition } from '../engine/protocol';
 import { errorText } from '../lib/api';
@@ -9,7 +8,6 @@ import { Icon } from '../lib/icons';
 
 export function IndicatorPicker(props: { active: string[]; onAdd(id: string): void; onClose(): void }) {
   const [query, setQuery] = createSignal('');
-  const [params, setParams] = createStore<Record<string, number[]>>({});
   const [defs] = createResource(() => studyCatalog());
   let input!: HTMLInputElement;
   onMount(() => input.focus());
@@ -21,7 +19,7 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
     return all.filter((d) => d.name.toLowerCase().includes(q) || d.short.toLowerCase().includes(q) || d.kind.includes(q));
   });
 
-  const values = (d: StudyDefinition): number[] => d.params.map((p, i) => Math.round(Math.min(p.max, Math.max(p.min, params[d.kind]?.[i] ?? p.default))));
+  const values = (d: StudyDefinition): number[] => d.params.map((p) => p.default);
   const idOf = (d: StudyDefinition): string => [d.kind, ...values(d)].join(':');
 
   return (
@@ -54,26 +52,7 @@ export function IndicatorPicker(props: { active: string[]; onAdd(id: string): vo
                     <span class="dim">{d.short}</span>
                     <span class="dim">{d.group === 'price' ? 'on price' : 'own pane'}</span>
                     <span class="spacer" />
-                    {/* Open interest is set in its own dialog, from the legend, once added. */}
-                    <For each={d.kind === 'oi' ? [] : d.params}>
-                      {(p, i) => (
-                        <label class="field" data-tip={p.name}>
-                          {p.name}
-                          <input
-                            class="box num"
-                            type="number"
-                            min={p.min}
-                            max={p.max}
-                            value={values(d)[i()]}
-                            onInput={(e) => {
-                              const next = [...values(d)];
-                              next[i()] = Number(e.currentTarget.value);
-                              setParams(d.kind, next);
-                            }}
-                          />
-                        </label>
-                      )}
-                    </For>
+                    {/* Inputs are set from the legend's gear once added, as on TradingView. */}
                     <button class="btn" disabled={added()} data-tip={added() ? 'Already on the chart' : `Add ${idOf(d)}`} onClick={() => props.onAdd(idOf(d))}>
                       <Icon name="plus" size={11} />
                       <span>{added() ? 'Added' : 'Add'}</span>
