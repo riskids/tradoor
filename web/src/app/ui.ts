@@ -7,6 +7,7 @@ export type Overlay =
   | { kind: 'symbol'; panelId: string | null; initial: string; /** Where in a watchlist to add it. */ at?: number }
   | { kind: 'indicators'; panelId: string }
   | { kind: 'tpoSettings'; panelId: string }
+  | { kind: 'chartSettings' }
   | { kind: 'palette' }
   | { kind: 'settings' }
   | { kind: 'help' }

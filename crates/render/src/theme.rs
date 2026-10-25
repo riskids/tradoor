@@ -12,6 +12,14 @@ pub struct Theme {
     /// pane and "which side of the ribbon are we on" reads first.
     pub bull: Color,
     pub bear: Color,
+    pub wick_bull: Color,
+    pub wick_bear: Color,
+    pub border_bull: Color,
+    pub border_bear: Color,
+    /// Price-pane horizontal grid at each axis tick.
+    pub grid: Color,
+    pub volume_bull: Color,
+    pub volume_bear: Color,
     pub candle_alpha: u8,
     pub volume_alpha: u8,
     pub ema200: Color,
@@ -48,6 +56,13 @@ impl Default for Theme {
             border: Color::hex(0x232823),
             bull: Color::hex(0xa4c588),
             bear: Color::hex(0xd97161),
+            wick_bull: Color::hex(0xa4c588),
+            wick_bear: Color::hex(0xd97161),
+            border_bull: Color::hex(0xa4c588),
+            border_bear: Color::hex(0xd97161),
+            grid: Color::hex(0x232823),
+            volume_bull: Color::hex(0xa4c588),
+            volume_bear: Color::hex(0xd97161),
             candle_alpha: 0xcc,
             volume_alpha: 0x40,
             ema200: Color::hex(0xffb03a),
@@ -91,6 +106,12 @@ impl Theme {
         if key == "fontPx" {
             return value.parse::<f32>().ok().filter(|v| (8.0..=20.0).contains(v)).map(|v| self.font_px = v).is_some();
         }
+        if key == "candleAlpha" {
+            return value.parse::<u8>().ok().map(|v| self.candle_alpha = v).is_some();
+        }
+        if key == "volumeAlpha" {
+            return value.parse::<u8>().ok().map(|v| self.volume_alpha = v).is_some();
+        }
         let Some(color) = Color::parse(value) else { return false };
         let slot = match key {
             "background" => &mut self.background,
@@ -98,6 +119,13 @@ impl Theme {
             "border" => &mut self.border,
             "bull" => &mut self.bull,
             "bear" => &mut self.bear,
+            "wickBull" => &mut self.wick_bull,
+            "wickBear" => &mut self.wick_bear,
+            "borderBull" => &mut self.border_bull,
+            "borderBear" => &mut self.border_bear,
+            "grid" => &mut self.grid,
+            "volumeBull" => &mut self.volume_bull,
+            "volumeBear" => &mut self.volume_bear,
             "ema200" => &mut self.ema200,
             "ribbonFast" => &mut self.ribbon_fast,
             "ribbonSlow" => &mut self.ribbon_slow,
@@ -112,5 +140,19 @@ impl Theme {
         };
         *slot = color;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_wick_bull_updates_the_field() {
+        let mut t = Theme::default();
+        assert!(t.set("wickBull", "#123456"));
+        assert_eq!(t.wick_bull, Color::hex(0x123456));
+        assert!(!t.set("wickBull", "not-a-color"));
+        assert!(!t.set("nonsense", "#000000"));
     }
 }

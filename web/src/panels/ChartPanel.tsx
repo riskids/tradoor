@@ -29,12 +29,13 @@ import { isRatio, symbolOf, venueLabel } from '../lib/markets';
 import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert, titleOf } from '../lib/alerts';
 import { toast } from '../lib/toasts';
 import { TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
-import { TPO_SPLITS, type ChartPanelState } from '../workspace/model';
+import { remapStudyStyles, serializeStudyStyles, TPO_SPLITS, type ChartPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
 
 // Drawing settings load when a drawing is first selected: nobody needs them to see a chart.
 const DrawingSettings = lazy(() => import('../components/DrawingSettings').then((m) => ({ default: m.DrawingSettings })));
 const OpenInterestSettings = lazy(() => import('../components/OpenInterestSettings').then((m) => ({ default: m.OpenInterestSettings })));
+const StudySettings = lazy(() => import('../components/StudySettings').then((m) => ({ default: m.StudySettings })));
 const AlertStyleSettings = lazy(() => import('../components/AlertStyleSettings').then((m) => ({ default: m.AlertStyleSettings })));
 const DrawingToolbar = lazy(() => import('../components/DrawingToolbar').then((m) => ({ default: m.DrawingToolbar })));
 
@@ -193,6 +194,9 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   const [drawError, setDrawError] = createSignal<string | null>(null);
   /** The study whose settings dialog is open. */
   const [studyEditing, setStudyEditing] = createSignal<string | null>(null);
+  /** The study whose inputs/style dialog is open (every study bar OI, which keeps its own). */
+  const [styleEditing, setStyleEditing] = createSignal<string | null>(null);
+  const [styleSnapshot, setStyleSnapshot] = createSignal<Record<string, string> | null>(null);
   /** The drawing whose settings dialog is open. */
   const [editing, setEditing] = createSignal<number | null>(null);
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
@@ -516,6 +520,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   createEffect(() => send({ t: 'log', id: sid, value: props.panel.log }));
   createEffect(() => send({ t: 'tpo', id: sid, value: split() ?? '' }));
   createEffect(() => send({ t: 'tpoSettings', id: sid, value: serializeTpo(props.panel.tpoSettings) }));
+  createEffect(() => send({ t: 'studyStyles', id: sid, value: serializeStudyStyles(props.panel.studyStyles) }));
   const tpoSet = (key: string, value: string) => patchPanel(id, { tpoSettings: withTpoValue(props.panel.tpoSettings, key, value) });
   const tpoOn = (key: string) => tpoValue(props.panel.tpoSettings, key) === '1';
   createEffect(() => send({ t: 'paneWeights', id: sid, value: props.panel.paneWeights }));
@@ -988,6 +993,15 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             >
               Copy a picture<span class="dim">4K · shift saves the file</span>
             </button>
+            <hr />
+            <button
+              onClick={() => {
+                setMoreMenu(false);
+                setOverlay({ kind: 'chartSettings' });
+              }}
+            >
+              Settings…
+            </button>
           </div>
         </Show>
       </div>
@@ -1379,7 +1393,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
                   off={s.hidden}
                   onToggle={() => toggleLayer(s.id)}
                   onRemove={() => removeStudy(s.id)}
-                  onSettings={s.id.split(':')[0] === 'oi' ? () => setStudyEditing(s.id) : undefined}
+                  onSettings={s.id.split(':')[0] === 'oi' ? () => setStudyEditing(s.id) : () => setStyleEditing(s.id)}
                   values={s.hidden ? [] : s.lines.map((line) => ({ color: line.color, text: () => legend()?.values[line.id] ?? '—' }))}
                   stats={s.hidden ? [] : s.stats}
                 />
@@ -1483,6 +1497,39 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
       <Show when={studyEditing()} keyed>
         {(studyId) => <OpenInterestSettings id={studyId} onApply={(next) => replaceStudy(studyId, next)} onClose={() => setStudyEditing(null)} />}
       </Show>
+      <Show when={styleEditing()} keyed>
+        {(studyId) => (
+          <Show when={untrack(() => studies().find((s) => s.id === studyId))}>
+            {(study) => {
+              onMount(() => setStyleSnapshot({ ...props.panel.studyStyles }));
+              const close = () => {
+                setStyleEditing(null);
+                setStyleSnapshot(null);
+              };
+              return (
+                <StudySettings
+                  study={study()}
+                  styles={props.panel.studyStyles}
+                  onPreview={(next) => patchPanel(id, { studyStyles: next })}
+                  onApply={(newId, next) => {
+                    if (newId !== studyId) {
+                      replaceStudy(studyId, newId);
+                      patchPanel(id, { studyStyles: remapStudyStyles(next, studyId, newId) });
+                    } else {
+                      patchPanel(id, { studyStyles: next });
+                    }
+                    close();
+                  }}
+                  onCancel={() => {
+                    patchPanel(id, { studyStyles: styleSnapshot()! });
+                    close();
+                  }}
+                />
+              );
+            }}
+          </Show>
+        )}
+      </Show>
       {/* Keyed on the id, not the alert: the list is reloaded now and then, and
           a fresh copy of the same alert must not start the dialog over. */}
       <Show when={alertStyling()} keyed>
@@ -1580,7 +1627,9 @@ function LayerRow(props: {
 }) {
   return (
     <div class="layer" classList={{ off: props.off }}>
-      <span class="name">{props.label}</span>
+      <span class="name" onDblClick={() => props.onSettings?.()}>
+        {props.label}
+      </span>
       <For each={props.values ?? []}>
         {(v) => (
           <span class="val" style={{ color: v.color }}>

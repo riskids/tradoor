@@ -48,6 +48,7 @@ const Help = lazy(() => import('../components/Help').then((m) => ({ default: m.H
 const CommandPalette = lazy(() => import('../components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then((m) => ({ default: m.IndicatorPicker })));
 const Settings = lazy(() => import('../components/Settings').then((m) => ({ default: m.Settings })));
+const ChartSettings = lazy(() => import('../components/ChartSettings').then((m) => ({ default: m.ChartSettings })));
 const TpoSettings = lazy(() => import('../components/TpoSettings').then((m) => ({ default: m.TpoSettings })));
 const ReferralDialog = lazy(() => import('../components/Referrals').then((m) => ({ default: m.ReferralDialog })));
 const Journal = lazy(() => import('../journal/Journal').then((m) => ({ default: m.Journal })));
@@ -90,6 +91,7 @@ function commands(): Command[] {
       { group: 'Chart', label: 'Show all loaded history', run: () => chartControllers.get(chart.id)?.showRange(null) },
       { group: 'Chart style', label: 'Candles', run: () => patchPanel(chart.id, { tpo: '' }) },
       { group: 'Chart style', label: 'TPO settings…', run: () => setOverlay({ kind: 'tpoSettings', panelId: chart.id }) },
+      { group: 'Chart', label: 'Chart settings…', run: () => setOverlay({ kind: 'chartSettings' }) },
       ...TPO_SPLITS.map((split) => ({ group: 'Chart style', label: `TPO — split by ${split.label.toLowerCase()}`, run: () => patchPanel(chart.id, { tpo: split.value }) })),
     );
   }
@@ -360,6 +362,8 @@ function Overlays() {
             return <CommandPalette commands={commands()} onClose={closeOverlay} />;
           case 'settings':
             return <Settings onClose={closeOverlay} />;
+          case 'chartSettings':
+            return <ChartSettings onClose={closeOverlay} />;
           case 'help':
             return <Help onClose={closeOverlay} />;
           case 'referrals':

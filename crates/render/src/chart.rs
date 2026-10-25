@@ -307,6 +307,8 @@ pub struct Chart {
     open_interest: Vec<(i64, [f64; 4])>,
     studies: Vec<ComputedStudy>,
     hidden: BTreeSet<String>,
+    /// Per-line overrides keyed `"{studyId}/{lineKey}"`: colour, width, and whether it is hidden.
+    study_styles: BTreeMap<String, (Option<Color>, Option<f32>, bool)>,
     log_scale: bool,
     time: TimeScale,
     view_ready: bool,
@@ -383,6 +385,7 @@ impl Chart {
             open_interest: Vec::new(),
             studies: Vec::new(),
             hidden: BTreeSet::new(),
+            study_styles: BTreeMap::new(),
             log_scale: false,
             time: TimeScale::new(),
             view_ready: false,
@@ -682,6 +685,25 @@ impl Chart {
         let settings = tpo::Settings::parse(raw);
         if settings != self.tpo_settings {
             self.tpo_settings = settings;
+            self.touch();
+        }
+    }
+
+    /// Per-study line overrides, one per line: `key=color,width,hidden` lines,
+    /// `key` being `"{studyId}/{lineKey}"`. An empty colour or width keeps the
+    /// line's own; `hidden` is `1` or `0`. An unparseable line is skipped.
+    pub fn set_study_styles(&mut self, raw: &str) {
+        let mut styles = BTreeMap::new();
+        for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let mut parts = value.splitn(3, ',');
+            let color = parts.next().and_then(Color::parse);
+            let width = parts.next().and_then(|s| (!s.is_empty()).then(|| s.parse::<f32>().ok()).flatten());
+            let hidden = parts.next().is_some_and(|s| s.trim() == "1");
+            styles.insert(key.to_string(), (color, width, hidden));
+        }
+        if styles != self.study_styles {
+            self.study_styles = styles;
             self.touch();
         }
     }
@@ -1350,8 +1372,24 @@ impl Chart {
         }
     }
 
-    fn line_color(&self, line: &tradoor_core::studies::StudyLine, study_index: usize, line_index: usize) -> Color {
-        line.color.and_then(Color::parse).unwrap_or(self.theme.study_palette[(study_index + line_index) % self.theme.study_palette.len()])
+    /// The style override for one study's line, keyed as `set_study_styles` takes it.
+    fn style_override(&self, study_id: &str, line_key: &str) -> Option<&(Option<Color>, Option<f32>, bool)> {
+        self.study_styles.get(&format!("{study_id}/{line_key}"))
+    }
+
+    fn line_color(&self, study_id: &str, line: &tradoor_core::studies::StudyLine, study_index: usize, line_index: usize) -> Color {
+        self.style_override(study_id, line.key)
+            .and_then(|(c, _, _)| *c)
+            .or_else(|| line.color.and_then(Color::parse))
+            .unwrap_or(self.theme.study_palette[(study_index + line_index) % self.theme.study_palette.len()])
+    }
+
+    fn line_width(&self, study_id: &str, line: &tradoor_core::studies::StudyLine) -> f32 {
+        self.style_override(study_id, line.key).and_then(|(_, w, _)| *w).unwrap_or(line.width)
+    }
+
+    fn line_hidden(&self, study_id: &str, line_key: &str) -> bool {
+        self.style_override(study_id, line_key).is_some_and(|(_, _, h)| *h)
     }
 
     fn paint(&self, f: &mut Frame, now: i64) {
@@ -1362,6 +1400,16 @@ impl Chart {
         let price = self.panes[0];
         let plot_w = price.plot.w;
         let avail = self.time_axis_top();
+
+        // ---- grid: a faint hairline at each price-axis tick, under everything else
+        let grid = t.grid.with_alpha(0x40);
+        for pane in &self.panes {
+            f.clip(Some(pane.plot));
+            for v in ticks::price_ticks(&pane.scale, 44.0) {
+                let y = pane.scale.y(v) as f32;
+                f.hline(0.0, plot_w, y, 1.0, grid);
+            }
+        }
 
         // ---- guides under everything in the lower panes
         for pane in self.panes.iter().filter(|p| p.group == Group::Pct) {
@@ -1406,7 +1454,7 @@ impl Chart {
                 for i in i0..=i1 {
                     let Some(b) = self.bar(i) else { continue };
                     let y = top + h * (1.0 - (b.volume / max_vol) as f32);
-                    let base = if b.close >= b.open { t.bull } else { t.bear };
+                    let base = if b.close >= b.open { t.volume_bull } else { t.volume_bear };
                     let x = f.snap(self.time.x(i as f64) as f32);
                     f.crisp_rect(x - body / 2.0, y, body, price.plot.bottom() - y, base.with_alpha(if b.live { 0x25 } else { t.volume_alpha }));
                 }
@@ -1416,22 +1464,29 @@ impl Chart {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
             let x = f.snap(self.time.x(i as f64) as f32);
-            let base = if b.close >= b.open { t.bull } else { t.bear };
-            let fill = base.with_alpha(if b.live { 0x80 } else { t.candle_alpha });
+            let up = b.close >= b.open;
+            let base = if up { t.bull } else { t.bear };
+            let wick_color = if up { t.wick_bull } else { t.wick_bear };
+            let border = if up { t.border_bull } else { t.border_bear };
+            let alpha = if b.live { 0x80 } else { t.candle_alpha };
+            let fill = base.with_alpha(alpha);
+            let wick_fill = wick_color.with_alpha(alpha);
             let (yh, yl, yo, yc) = (s.y(b.high) as f32, s.y(b.low) as f32, s.y(b.open) as f32, s.y(b.close) as f32);
             let (top, bottom) = (yo.min(yc), yo.max(yc));
             if body_dev < 2.0 {
-                f.vline(x, yh, yl, wick, fill);
+                f.vline(x, yh, yl, wick, wick_fill);
                 continue;
             }
             if top - yh > 0.0 {
-                f.vline(x, yh, top, wick, fill);
+                f.vline(x, yh, top, wick, wick_fill);
             }
             if yl - bottom > 0.0 {
-                f.vline(x, bottom, yl, wick, fill);
+                f.vline(x, bottom, yl, wick, wick_fill);
             }
             f.crisp_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), fill);
-            if b.live {
+            if border != base {
+                f.stroke_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), 1.0 / dpr, border);
+            } else if b.live {
                 f.stroke_rect(x - body / 2.0, top, body, (bottom - top).max(1.0 / dpr), 1.0 / dpr, base);
             }
         }
@@ -1455,10 +1510,23 @@ impl Chart {
             f.clip(Some(pane.plot));
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
             for (li, line) in study.lines.iter().enumerate() {
+                if self.line_hidden(&study.id, line.key) {
+                    continue;
+                }
                 match (line.kind, line.style) {
-                    (LineType::Histogram, _) => self.paint_histogram(f, &pane.scale, &line.values, i0, i1, body, line.color.and_then(Color::parse), line.neg_color.and_then(Color::parse)),
+                    // The override colours the positive bars only; negative ones keep `neg_color`.
+                    (LineType::Histogram, _) => self.paint_histogram(
+                        f,
+                        &pane.scale,
+                        &line.values,
+                        i0,
+                        i1,
+                        body,
+                        self.style_override(&study.id, line.key).and_then(|(c, _, _)| *c).or_else(|| line.color.and_then(Color::parse)),
+                        line.neg_color.and_then(Color::parse),
+                    ),
                     (LineType::Line, LineStyle::None) => {}
-                    (LineType::Line, style) => self.paint_series(f, &pane.scale, &line.values, i0, i1, self.line_color(line, index, li), line.width, style),
+                    (LineType::Line, style) => self.paint_series(f, &pane.scale, &line.values, i0, i1, self.line_color(&study.id, line, index, li), self.line_width(&study.id, line), style),
                 }
             }
             for seg in &study.segments {
@@ -1618,11 +1686,14 @@ impl Chart {
             let Some(pane_index) = self.panes.iter().position(|pn| pn.group == study.group) else { continue };
             let pane = self.panes[pane_index];
             for (li, line) in study.lines.iter().enumerate().filter(|(_, l)| l.kind == LineType::Line && l.badge) {
+                if self.line_hidden(&study.id, line.key) {
+                    continue;
+                }
                 if let Some(v) = last_value(&line.values) {
                     // Candles take the colour of the last one, as the price badge does.
                     let color = match study.candles.iter().rev().flatten().next() {
                         Some(b) => if b[3] >= b[0] { t.bull } else { t.bear },
-                        None => self.line_color(line, index, li),
+                        None => self.line_color(&study.id, line, index, li),
                     };
                     badges.push(Badge { pane: pane_index, y: pane.scale.y(v) as f32, text: self.format_value(study.group, v), bg: color, fg: color.contrast_text() });
                 }
@@ -1822,7 +1893,7 @@ impl Chart {
         let values = self
             .visible_studies()
             .flat_map(|(_, s)| {
-                s.lines.iter().map(move |l| {
+                s.lines.iter().filter(|l| !self.line_hidden(&s.id, l.key)).map(move |l| {
                     // A series that runs into the forming bar is read there.
                     let i = if l.values.len() > self.candles.len() { index } else { at };
                     (format!("{}:{}", s.id, l.key), l.values.get(i).copied().flatten().map_or("—".to_string(), |v| self.format_value(s.group, v)))
@@ -1873,7 +1944,15 @@ impl Chart {
                     label: s.label.clone(),
                     group: s.group.as_str(),
                     hidden,
-                    lines: s.lines.iter().enumerate().map(|(li, l)| (format!("{}:{}", s.id, l.key), l.label.clone(), self.line_color(l, index, li))).collect(),
+                    // A line hidden by a style override is left out rather than flagged:
+                    // the page already knows which from `studyStyles` and reads the rest off this list.
+                    lines: s
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| !self.line_hidden(&s.id, l.key))
+                        .map(|(li, l)| (format!("{}:{}", s.id, l.key), l.label.clone(), self.line_color(&s.id, l, index, li)))
+                        .collect(),
                     stats: s.stats.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
                 }
             })
@@ -2678,6 +2757,20 @@ mod tests {
         assert_eq!(ticked.lines.last().map(|l| l.values.clone()), c.studies[0].lines.last().map(|l| l.values.clone()));
         // The steps from the forming bar's open on, 500 to 519, in dollars at its last price.
         assert_eq!(c.studies[0].candles.last().copied().flatten(), Some([1500.0 * 132.5, 1529.0 * 132.5, 990.0 * 132.5, 1524.0 * 132.5]));
+    }
+
+    #[test]
+    fn study_styles_override_colour_and_hide_a_line() {
+        let mut c = chart();
+        c.set_studies("dvwap:1:2:3");
+        c.set_study_styles("dvwap:1:2:3/vwap=#ff0000,2,0\ndvwap:1:2:3/u1=,,1");
+        let frame = c.render(1_800_000_000_000);
+        assert!(painted(frame, Color::hex(0xff0000)) > 0, "vwap painted red");
+        let meta = c.studies_meta();
+        let dvwap = meta.iter().find(|s| s.id == "dvwap:1:2:3").unwrap();
+        assert!(dvwap.lines.iter().any(|(id, _, _)| id == "dvwap:1:2:3:vwap"), "vwap stays");
+        assert!(!dvwap.lines.iter().any(|(id, _, _)| id == "dvwap:1:2:3:u1"), "u1 is hidden, carried nowhere");
+        assert!(!c.legend().values.iter().any(|(id, _)| id == "dvwap:1:2:3:u1"), "nor in the legend");
     }
 
     fn chart() -> Chart {

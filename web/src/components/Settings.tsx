@@ -5,12 +5,12 @@ import { OWNER_PATTERN, ownerId, session, switchOwner } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { Icon, type IconName } from '../lib/icons';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
-import { CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
+import { UI_THEME } from '../lib/theme';
 import { formatDateTime } from '../lib/timezone';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
 import { AccountCard, clock } from './Account';
 
-function Swatch(props: { name: string; label: string; fallback: string }) {
+export function Swatch(props: { name: string; label: string; fallback: string }) {
   const value = () => doc.theme[props.name] ?? props.fallback;
   return (
     <label class="swatch">
@@ -244,25 +244,15 @@ function ColoursSection() {
   return (
     <>
       <h2>Colours</h2>
-      <p class="lead">Kept with the workspace, so they follow your account too. ↺ puts one back to the default.</p>
+      <p class="lead">Kept with the workspace, so they follow your account too.</p>
       <div class="set-card">
         <h3>Chart</h3>
-        <div class="swatches">
-          <For each={CHART_THEME}>{(t) => <Swatch name={t.name} label={t.label} fallback={t.value} />}</For>
+        <div class="set-row">
+          <span class="grow dim">Candles, canvas, scales, studies and drawings — in the one dialog TradingView opens them from.</span>
+          <button class="btn" onClick={() => setOverlay({ kind: 'chartSettings' })}>
+            Open chart settings…
+          </button>
         </div>
-        <Row label="Axis font size (px)">
-          <input
-            class="box num"
-            type="number"
-            min={8}
-            max={20}
-            value={doc.theme[FONT_PX.name] ?? FONT_PX.value}
-            onChange={(e) => {
-              const px = Number(e.currentTarget.value);
-              setThemeValue(FONT_PX.name, px >= 8 && px <= 20 ? String(px) : null);
-            }}
-          />
-        </Row>
       </div>
       <div class="set-card">
         <h3>Page</h3>

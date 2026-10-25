@@ -177,6 +177,11 @@ impl ChartEngine {
         self.chart.set_tpo_settings(raw);
     }
 
+    /// Per-study line overrides: `"{studyId}/{lineKey}"=color,width,hidden` lines.
+    pub fn set_study_styles(&mut self, raw: &str) {
+        self.chart.set_study_styles(raw);
+    }
+
     /// The reader's time zone, as minutes east of UTC.
     pub fn set_utc_offset(&mut self, minutes: i32) {
         self.chart.set_utc_offset(minutes);

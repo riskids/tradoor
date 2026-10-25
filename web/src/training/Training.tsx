@@ -77,6 +77,7 @@ function startPanel(): ChartPanelState {
     footprintStats: true,
     footprintProfile: true,
     tpoSettings: {},
+    studyStyles: {},
     legendShut: saved.legendShut === true,
   };
 }

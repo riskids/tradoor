@@ -174,6 +174,8 @@ export type ToWorker =
   | { t: 'tpo'; id: string; value: string }
   /** TPO options, `key=value;key=value`. */
   | { t: 'tpoSettings'; id: string; value: string }
+  /** Per-study line overrides: `"{studyId}/{lineKey}"=color,width,hidden` lines. */
+  | { t: 'studyStyles'; id: string; value: string }
   | { t: 'paneWeights'; id: string; value: string }
   /** `style`: what the new drawing will look like, so its draft matches. */
   | { t: 'tool'; id: string; value: string; style: Record<string, string | number | boolean> }

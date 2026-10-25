@@ -82,6 +82,9 @@ export interface ChartPanelState extends PanelBase {
   footprintProfile: boolean;
   /** TPO options changed from Exocharts' defaults; see lib/tpo-settings. */
   tpoSettings: Record<string, string>;
+  /** Per-study line overrides, keyed `"{studyId}/{lineKey}"`, value `"{color},{width},{hidden}"`;
+   *  an empty colour or width keeps the line's own. See `serializeStudyStyles`. */
+  studyStyles: Record<string, string>;
   /** The layers under the symbol are folded away. */
   legendShut: boolean;
 }
@@ -199,16 +202,32 @@ const DEFAULT_WATCHLIST = [
 
 export const uid = (prefix: string): string => `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 
+/** `studyStyles` as the engine's `studyStyles` message takes it: `key=value` lines. */
+export function serializeStudyStyles(r: Record<string, string>): string {
+  return Object.entries(r)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+}
+
+/** `styles` with every `"{oldId}/..."` key renamed to `"{newId}/..."`, for a study
+ *  swapped for another kind — `replaceStudy` keeps its line overrides doing this. */
+export function remapStudyStyles(styles: Record<string, string>, oldId: string, newId: string): Record<string, string> {
+  const prefix = `${oldId}/`;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(styles)) out[key.startsWith(prefix) ? `${newId}/${key.slice(prefix.length)}` : key] = value;
+  return out;
+}
+
 export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' | 'market' | 'timeframe'>>): Panel {
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: 'ribbon,ema200', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: 'ribbon,ema200', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
-      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, legendShut: false };
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -295,6 +314,11 @@ function readPanel(id: string, raw: unknown): Panel | null {
     if (isObj(raw.tpoSettings)) {
       for (const [k, v] of Object.entries(raw.tpoSettings).slice(0, 80)) {
         if (k.length <= 40 && typeof v === 'string' && v.length <= 40) p.tpoSettings[k] = v;
+      }
+    }
+    if (isObj(raw.studyStyles)) {
+      for (const [k, v] of Object.entries(raw.studyStyles).slice(0, 200)) {
+        if (k.length <= 80 && typeof v === 'string' && v.length <= 40) p.studyStyles[k] = v;
       }
     }
   } else if (p.type === 'watchlist') {
