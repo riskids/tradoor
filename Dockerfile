@@ -17,10 +17,14 @@ ARG CARGO_CHEF=0.1.78
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl cmake g++ make pkg-config \
  && rm -rf /var/lib/apt/lists/*
+# Both tools ship static x86_64 and aarch64 builds; pick by the build machine's arch.
 RUN rustup target add wasm32-unknown-unknown \
- && curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WASM_BINDGEN}/wasm-bindgen-${WASM_BINDGEN}-x86_64-unknown-linux-musl.tar.gz" \
-    | tar -xz -C /usr/local/bin --strip-components=1 "wasm-bindgen-${WASM_BINDGEN}-x86_64-unknown-linux-musl/wasm-bindgen" \
- && curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN}/binaryen-${BINARYEN}-x86_64-linux.tar.gz" \
+ && arch="$(uname -m)" \
+ && case "$arch" in x86_64|aarch64) ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
+ && wb="wasm-bindgen-${WASM_BINDGEN}-${arch}-unknown-linux-musl" \
+ && curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WASM_BINDGEN}/${wb}.tar.gz" \
+    | tar -xz -C /usr/local/bin --strip-components=1 "${wb}/wasm-bindgen" \
+ && curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN}/binaryen-${BINARYEN}-${arch}-linux.tar.gz" \
     | tar -xz -C /usr/local/bin --strip-components=2 "binaryen-${BINARYEN}/bin/wasm-opt"
 RUN cargo install cargo-chef --version "${CARGO_CHEF}" --locked
 COPY --from=deno /deno /usr/local/bin/deno

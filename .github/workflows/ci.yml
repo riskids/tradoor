@@ -74,7 +74,8 @@ jobs:
     name: Deploy
     needs: test
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    # Native ARM runner: the server is aarch64, so build there, no emulation.
+    runs-on: ubuntu-24.04-arm
     environment: production
     permissions:
       contents: read
@@ -99,11 +100,12 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/arm64
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
           # The repository variable SITE_URL (https://your-domain), for SEO tags and the
           # sitemap, and GA_ID (G-XXXXXXXXXX), for Google Analytics; unset is none.
           build-args: |
@@ -146,6 +148,8 @@ jobs:
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
           # Pin the exact image, so a rollback is one line in .env.
+          # (Delete the old line if any, then append: works whether or not the key exists.)
+          touch .env
           sed -i '/^TRADOOR_IMAGE=/d' .env
           echo "TRADOOR_IMAGE=$IMAGE:$SHA" >> .env
           # The site's address, for links in Telegram messages: the repository variable SITE_URL.
