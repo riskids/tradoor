@@ -44,6 +44,9 @@ import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarge
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
+const LayoutsMenu = lazy(() => import('../workspace/LayoutsMenu').then((m) => ({ default: m.LayoutsMenu })));
+const OpenLayoutDialog = lazy(() => import('../workspace/LayoutDialogs').then((m) => ({ default: m.OpenLayoutDialog })));
+const LayoutNameDialog = lazy(() => import('../workspace/LayoutDialogs').then((m) => ({ default: m.LayoutNameDialog })));
 const Help = lazy(() => import('../components/Help').then((m) => ({ default: m.Help })));
 const CommandPalette = lazy(() => import('../components/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const IndicatorPicker = lazy(() => import('../components/IndicatorPicker').then((m) => ({ default: m.IndicatorPicker })));
@@ -107,6 +110,11 @@ function commands(): Command[] {
     list.push({ group: 'Panel', label: `Close ${panelTitle(focus)}`, run: () => update((d) => removePanel(d, focus.id)) });
   }
   list.push(
+    { group: 'Layout', label: 'Save layout', hint: 'Ctrl S', run: saveNow },
+    { group: 'Layout', label: 'Rename layout…', run: () => setOverlay({ kind: 'layoutName', mode: 'rename' }) },
+    { group: 'Layout', label: 'Make a copy…', run: () => setOverlay({ kind: 'layoutName', mode: 'copy' }) },
+    { group: 'Layout', label: 'Create new layout…', run: () => setOverlay({ kind: 'layoutName', mode: 'create' }) },
+    { group: 'Layout', label: 'Open layout…', run: () => setOverlay({ kind: 'layouts' }) },
     { group: 'App', label: 'Settings and colours…', run: () => setOverlay({ kind: 'settings' }) },
     { group: 'App', label: 'Keyboard shortcuts', hint: '?', run: () => setOverlay({ kind: 'help' }) },
     { group: 'App', label: 'Partner exchanges — Nado, Bybit and Binance', run: () => setOverlay({ kind: 'referrals' }) },
@@ -366,6 +374,10 @@ function Overlays() {
             return <ChartSettings onClose={closeOverlay} />;
           case 'help':
             return <Help onClose={closeOverlay} />;
+          case 'layouts':
+            return <OpenLayoutDialog onClose={closeOverlay} />;
+          case 'layoutName':
+            return <LayoutNameDialog mode={o.mode} onClose={closeOverlay} />;
           case 'referrals':
             return <ReferralDialog onClose={closeOverlay} />;
           case 'note':
@@ -448,9 +460,7 @@ export function App() {
         <button class="item icon" aria-label="Commands" data-tip="Commands (/ or Ctrl K)" onClick={() => setOverlay({ kind: 'palette' })}>
           <Icon name="command" size={14} />
         </button>
-        <span class="item dim">
-          <span>{doc.name}</span>
-        </span>
+        <LayoutsMenu />
         <span class="spacer" />
         <button class="item icon" classList={{ on: journalOpen() }} aria-label="Journal" data-tip="Trading journal: every long and short position you draw" onClick={() => (setTrainingOpen(false), setJournalOpen(!journalOpen()))}>
           <Icon name="pencil" size={14} />

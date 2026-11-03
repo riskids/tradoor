@@ -6,17 +6,23 @@
  */
 import { batch, createSignal } from 'solid-js';
 import { createStore, reconcile, unwrap } from 'solid-js/store';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, errorText, type LayoutMeta } from '../lib/api';
+import { activeLayoutId, DEFAULT_LAYOUT, layoutIdFor, layoutSummary, localKeyFor, SESSION_KEY } from '../lib/layout';
 import { identity } from '../lib/owner';
 import { readJson, readPref, writePref } from '../lib/prefs';
+import { toast } from '../lib/toasts';
 import { defaultWorkspace, tabsOf, validate, type ChartPanelState, type LinkColor, type Panel, type WorkspaceDoc } from './model';
 import { TIMEFRAMES } from '../lib/timeframes';
 
+export type { LayoutMeta };
+export { activeLayoutId };
+
 // ponytail: key bumped once so browsers holding the old three-row layout open the TradingView-like default.
-const LOCAL_KEY = 'workspace-tv5';
+// One local copy per named layout (lib/layout.ts); the default one keeps the original key.
+const SERVER_ID = activeLayoutId();
+const LOCAL_KEY = localKeyFor(SERVER_ID);
 /** Whose the local copy is, written beside it. */
 const LOCAL_OWNER_KEY = 'workspace-owner';
-const SERVER_ID = 'default';
 
 /**
  * Whether the copy in this browser is this browser's own to open with. Taking
@@ -79,11 +85,14 @@ export const timeframeOf = (p: Panel): string => (p.link ? doc.links[p.link].tim
 // ---------------------------------------------------------------- changes
 
 let serverVersion = 0;
+/** Set once this page is on its way to another layout, or this one is deleted: nothing may be written for it any more. */
+let leaving = false;
 let localTimer: ReturnType<typeof setTimeout> | undefined;
 let serverTimer: ReturnType<typeof setTimeout> | undefined;
 
 function saveLocal(): void {
   clearTimeout(localTimer);
+  if (leaving) return;
   writePref(LOCAL_KEY, JSON.stringify(unwrap(doc)));
   writePref(LOCAL_OWNER_KEY, identity());
 }
@@ -94,7 +103,24 @@ function touched(): void {
   localTimer = setTimeout(saveLocal, 300);
   clearTimeout(serverTimer);
   if (saveState() !== 'local') setSaveState('pending');
-  serverTimer = setTimeout(() => void saveServer(), 1500);
+  // With autosave off the change stays in this browser, marked unsaved, until Ctrl+S.
+  if (autosave()) serverTimer = setTimeout(() => void saveServer(), 1500);
+}
+
+/** Whether changes reach the server by themselves; remembered by this browser. */
+const [autosave, setAutosaveSignal] = createSignal(readPref('autosave') !== 'false');
+export { autosave };
+export function setAutosave(on: boolean): void {
+  setAutosaveSignal(on);
+  writePref('autosave', String(on));
+  if (on && saveState() === 'pending') void saveServer();
+}
+
+/** The chart in use as a layout is listed by: `BTCUSDT.P, 240`. */
+function summary(): string {
+  const p = focusedPanel();
+  const chart = p?.type === 'chart' ? p : targetChart();
+  return chart ? layoutSummary(marketOf(chart), timeframeOf(chart)) : '';
 }
 
 /** Write the workspace this instant. It saves itself a second or so after every
@@ -203,6 +229,7 @@ function adopt(server: WorkspaceDoc): void {
 }
 
 async function saveServer(): Promise<void> {
+  if (leaving) return;
   if (saving) {
     saveAgain = true;
     return;
@@ -211,7 +238,7 @@ async function saveServer(): Promise<void> {
   setSaveState('saving');
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const res = await api.saveWorkspace(SERVER_ID, { name: doc.name, doc: unwrap(doc), version: serverVersion });
+      const res = await api.saveWorkspace(SERVER_ID, { name: doc.name, doc: unwrap(doc), version: serverVersion, summary: summary() });
       serverVersion = res.version;
       if (!res.conflict) {
         setSaveState('saved');
@@ -242,16 +269,124 @@ export async function syncWithServer(): Promise<void> {
     serverVersion = res.version;
     const server = validate(res.doc);
     if (server && server.savedAt > doc.savedAt) adopt(server);
-    else if (!server || server.savedAt < doc.savedAt) void saveServer();
-    else setSaveState('saved');
+    // Unsaved edits kept in this browser stay unsaved while autosave is off.
+    else if (!server || (server.savedAt < doc.savedAt && autosave())) await saveServer();
+    else setSaveState(server.savedAt < doc.savedAt ? 'pending' : 'saved');
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
       serverVersion = 0;
-      void saveServer();
+      await saveServer();
     } else {
       setSaveState('local');
     }
   }
+  // Tell the server this layout was opened (it orders the list), then read the list.
+  void api.patchWorkspace(SERVER_ID, { opened: true }).catch(() => {}).then(refreshLayouts);
+}
+
+// ---------------------------------------------------------------- layouts
+
+const [layouts, setLayouts] = createSignal<LayoutMeta[]>([]);
+export { layouts };
+
+export async function refreshLayouts(): Promise<void> {
+  try {
+    setLayouts(await api.layouts());
+  } catch {
+    // Offline: the list stays as it was.
+  }
+}
+
+/** Run a layout action: its failure is said in a notice, and the list is read again either way. */
+async function act(what: string, run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (e) {
+    toast({ tone: 'warn', title: `Could not ${what}`, body: errorText(e) }, 8_000);
+  }
+  await refreshLayouts();
+}
+
+/** Leave this page for another layout. */
+function go(id: string): void {
+  saveLocal();
+  leaving = true;
+  clearTimeout(serverTimer);
+  try {
+    sessionStorage.setItem(SESSION_KEY, id);
+  } catch {
+    // The address carries it.
+  }
+  // ponytail: a reload is the simplest way to reset every chart slot and its drawings. Upgrade path: swap the doc in place.
+  location.search = `?layout=${encodeURIComponent(id)}`;
+}
+
+/** Open a layout in this tab, or in a new window. */
+export function openLayout(id: string, newWindow = false): Promise<void> {
+  return act('open the layout', async () => {
+    await api.patchWorkspace(id, { opened: true }).catch(() => {});
+    if (newWindow) {
+      (globalThis as unknown as { open(url: string, target: string): void }).open(`${location.pathname}?layout=${encodeURIComponent(id)}`, '_blank');
+      return;
+    }
+    if (id === SERVER_ID) return;
+    // What was just changed goes up before this page lets go of it.
+    if (autosave() && saveState() === 'pending') await saveServer();
+    go(id);
+  });
+}
+
+async function putNew(id: string, from: WorkspaceDoc): Promise<void> {
+  const res = await api.saveWorkspace(id, { name: from.name, doc: { ...from, savedAt: Date.now() }, version: 0 });
+  if (res.conflict) throw new Error('a layout with that id already exists');
+}
+
+const clean = (name: string): string => name.trim().slice(0, 120) || 'Untitled';
+
+export function createLayout(name: string): Promise<void> {
+  const id = layoutIdFor(name);
+  return act('create the layout', async () => {
+    await putNew(id, { ...defaultWorkspace(), name: clean(name) });
+    await openLayout(id);
+  });
+}
+
+/** A copy of this layout as it is now, under a new name. */
+export function copyLayout(name: string): Promise<void> {
+  const id = layoutIdFor(name);
+  return act('copy the layout', async () => {
+    await putNew(id, { ...structuredClone(unwrap(doc)), name: clean(name) });
+    await openLayout(id);
+  });
+}
+
+export function renameLayout(name: string): Promise<void> {
+  return act('rename the layout', async () => {
+    update((d) => void (d.name = clean(name)));
+    await api.patchWorkspace(SERVER_ID, { name: clean(name) });
+  });
+}
+
+export function deleteLayout(id: string): Promise<void> {
+  return act('delete the layout', async () => {
+    await api.deleteWorkspace(id);
+    try {
+      localStorage.removeItem(`tradoor:${localKeyFor(id)}`);
+    } catch {
+      // Blocked: nothing was kept.
+    }
+    if (id !== SERVER_ID) return;
+    // This page must not write the deleted layout back on its way out.
+    leaving = true;
+    clearTimeout(serverTimer);
+    const next = (await api.layouts().catch(() => [] as LayoutMeta[])).find((l) => l.id !== id)?.id ?? DEFAULT_LAYOUT;
+    if (next === id) location.reload(); // the last one: a reload makes a fresh default
+    else go(next);
+  });
+}
+
+export function setStarred(id: string, on: boolean): Promise<void> {
+  return act('star the layout', () => api.patchWorkspace(id, { starred: on }));
 }
 
 addEventListener('pagehide', saveLocal);

@@ -27,7 +27,7 @@ pub async fn run(pool: &deadpool_postgres::Pool, file: &Path, owner: &str) -> an
         })();
         match result {
             Ok((market, timeframe, input)) => {
-                insert(&client, owner, &market, &timeframe, "candles", &input).await?;
+                insert(&client, owner, &market, &timeframe, "candles", "default", &input).await?;
                 imported += 1;
             }
             Err(e) => {

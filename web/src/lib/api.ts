@@ -3,6 +3,7 @@
 import type { DrawingPoint } from '../engine/protocol';
 import type { Style } from './drawing-style';
 import { listing, type Listing } from './catalog-wire';
+import { activeLayoutId } from './layout';
 import { authHeaders, SIGNED_OUT, startOver } from './owner';
 
 export class ApiError extends Error {
@@ -112,7 +113,9 @@ export interface Drawing {
 /** A market's candle chart and its TPO chart keep separate drawings, and the training chart its own. */
 export type ChartKind = 'candles' | 'tpo' | 'training';
 
-const scope = (market: string, timeframe: string, chart: ChartKind): string => `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}&chart=${chart}`;
+/** Drawings belong to a market, a chart kind and the layout open in this tab. */
+const scope = (market: string, timeframe: string, chart: ChartKind): string =>
+  `market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}&chart=${chart}&layout=${encodeURIComponent(activeLayoutId())}`;
 
 /** One of the four totals: 1h, 4h, 12h or 24h, over every exchange. */
 export interface LiquidationWindow {
@@ -534,6 +537,16 @@ export interface TelegramStatus {
   chats: TelegramChat[];
 }
 
+/** A saved layout as the list shows it; times in ms, null before the first. */
+export interface LayoutMeta {
+  id: string;
+  name: string;
+  summary: string;
+  starred: boolean;
+  updatedAt: number | null;
+  openedAt: number | null;
+}
+
 export const api = {
   async health(): Promise<{ ok: boolean; db: boolean }> {
     const { body } = await request<{ ok: boolean; db: boolean }>('/api/health');
@@ -575,6 +588,9 @@ export const api = {
   flowMinutes: (market: string) => json<{ market: string; thresholdUsd: number; minutes: FlowMinute[] }>(`/api/flow/minutes?market=${encodeURIComponent(market)}`),
   flowWatch: (market: string, watch: { thresholdUsd: number; notify: boolean }) => json<FlowWatch>(`/api/flow/${encodeURIComponent(market)}`, { method: 'PUT', body: watch }),
   workspace: (id: string) => json<{ id: string; name: string; doc: unknown; version: number }>(`/api/workspaces/${id}`),
+  layouts: () => json<LayoutMeta[]>('/api/workspaces'),
+  patchWorkspace: (id: string, patch: { name?: string; starred?: boolean; opened?: true }) => send(`/api/workspaces/${id}`, { method: 'PATCH', body: patch }),
+  deleteWorkspace: (id: string) => send(`/api/workspaces/${id}`, { method: 'DELETE' }),
   /** What this server records volume by price for, and at what level. */
   async footprintMarkets(): Promise<{ markets: { market: string; tick: number }[]; keptDays: number }> {
     const { body } = await request<{ markets: { market: string; tick: number }[]; keptDays: number }>('/api/footprint/markets');
@@ -590,7 +606,7 @@ export const api = {
     return body;
   },
 
-  async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
+  async saveWorkspace(id: string, body: { name: string; doc: unknown; version: number; summary?: string }): Promise<{ version: number; conflict: boolean; doc?: unknown }> {
     const res = await request<{ version: number; doc?: unknown; error?: string }>(`/api/workspaces/${id}`, { method: 'PUT', body });
     if (res.status === 409 && res.body) return { version: res.body.version, conflict: true, doc: res.body.doc };
     if (res.status >= 400 || !res.body) throw new ApiError(res.status, res.body?.error ?? `saving the workspace failed (${res.status})`);
