@@ -3,6 +3,8 @@ import { createSignal } from 'solid-js';
 import type { MagnetMode } from '../engine/protocol';
 import { readPref, writePref } from '../lib/prefs';
 
+export type LayoutNameMode = 'create' | 'copy' | 'rename';
+
 export type Overlay =
   | { kind: 'symbol'; panelId: string | null; initial: string; /** Where in a watchlist to add it. */ at?: number }
   | { kind: 'indicators'; panelId: string }
@@ -12,6 +14,10 @@ export type Overlay =
   | { kind: 'settings' }
   | { kind: 'help' }
   | { kind: 'referrals' }
+  /** Open a layout: the list of saved ones. */
+  | { kind: 'layouts' }
+  /** Ask for a layout's name: a new one, a copy of this one, or this one's own. */
+  | { kind: 'layoutName'; mode: LayoutNameMode }
   | { kind: 'note'; initial?: string; save(label: string): void };
 
 export const [overlay, setOverlay] = createSignal<Overlay | null>(null);
