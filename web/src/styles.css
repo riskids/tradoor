@@ -309,6 +309,18 @@ input.box:focus { border-color: var(--muted); outline: 0; }
 .rail button.del:hover:not(:disabled) { color: var(--bear); }
 .rail hr { width: 20px; margin: 2px 0; border: 0; border-top: 1px solid var(--border); }
 .rail .count { font-size: 11px; color: var(--dim); }
+.rail .rg { position: relative; display: flex; flex: none; }
+.rail .rg-more { position: absolute; top: 0; right: -4px; width: 9px; height: 100%; padding: 0; opacity: 0; }
+.rail .rg-more svg { width: 9px; height: 9px; }
+.rail .rg:hover .rg-more, .rail .rg:focus-within .rg-more, .rail .rg-more[aria-expanded='true'] { opacity: 1; }
+.rail .rg-more:hover:not(:disabled) { background: none; }
+.rail .rail-flyout { position: fixed; z-index: 60; min-width: 220px; padding: 4px 0; }
+.rail .rail-flyout button { width: 100%; height: auto; min-height: 30px; gap: 10px; justify-content: flex-start; padding: 5px 10px; color: var(--text); font-size: 12px; }
+.rail .rail-flyout button svg { width: 16px; height: 16px; color: var(--muted); }
+.rail .rail-flyout button.on { background: var(--surface-3); }
+.rail .rail-flyout button.on svg { color: var(--primary); }
+.rail .rf-name { flex: 1; text-align: left; }
+.rail .rf-key { color: var(--muted); font-size: 11px; }
 .canvasbox { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .legend { position: absolute; top: 4px; left: 6px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 0; max-width: calc(100% - 90px); pointer-events: none; font-size: 11px; line-height: 16px; }
@@ -466,6 +478,10 @@ table.venues tr.off td { color: var(--dim); }
   .rail { flex: 0 0 40px; }
   .rail button { width: 34px; height: 34px; }
   .rail button svg { width: 20px; height: 20px; }
+  .rail .rg-more { right: -3px; opacity: 1; }
+  .rail .rg-more svg { width: 9px; height: 9px; }
+  .rail .rail-flyout button { min-height: 38px; }
+  .rail .rail-flyout button svg { width: 18px; height: 18px; }
   .dialog { max-height: 88vh; max-height: 88dvh; }
   .backdrop { padding: 4vh 8px 8px; }
   /* A phone has no room for a title, a field, seven exchanges and a close in

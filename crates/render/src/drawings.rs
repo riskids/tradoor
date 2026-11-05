@@ -26,11 +26,14 @@ pub enum DrawingKind {
     /// A ring around one point, its label inside: a swing marked, as the
     /// Signal panel marks a pattern's drives.
     Circle,
+    /// TradingView's Fixed Range Volume Profile: the volume of the bars between
+    /// two anchors, by price. Only their times count.
+    Vrvp,
 }
 
 impl DrawingKind {
-    pub const ALL: [DrawingKind; 13] =
-        [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short, Self::Channel, Self::Circle];
+    pub const ALL: [DrawingKind; 14] =
+        [Self::Path, Self::Brush, Self::Trendline, Self::Horizontal, Self::Ray, Self::Rect, Self::Fib, Self::Text, Self::Measure, Self::Long, Self::Short, Self::Channel, Self::Circle, Self::Vrvp];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -47,6 +50,7 @@ impl DrawingKind {
             Self::Short => "short",
             Self::Channel => "channel",
             Self::Circle => "circle",
+            Self::Vrvp => "vrvp",
         }
     }
 
@@ -144,6 +148,8 @@ pub struct DrawingStyle {
     pub right_arrow: bool,
     pub text_color: Option<Color>,
     pub text_size: Option<f32>,
+    /// A volume profile's price rows.
+    pub rows: Option<usize>,
     pub text_bg: Option<Color>,
     pub middle: bool,
     pub price_labels: bool,
@@ -198,6 +204,7 @@ impl DrawingStyle {
             "rightArrow" => self.right_arrow = flag(),
             "textColor" => self.text_color = color(),
             "textSize" => self.text_size = size().map(|s| s.clamp(6.0, 40.0)),
+            "rows" => self.rows = num().map(|v| v.clamp(2.0, 200.0) as usize),
             "textBg" => self.text_bg = color(),
             "middle" => self.middle = flag(),
             "priceLabels" => self.price_labels = flag(),
@@ -311,6 +318,57 @@ pub fn significant(value: f64) -> String {
     }
 }
 
+/// Volume by price: `rows` are `(low, high, volume)` bottom to top; `va` the
+/// inclusive rows of the value area.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub rows: Vec<(f64, f64, f64)>,
+    pub poc: usize,
+    pub va: (usize, usize),
+}
+
+/// Each bar's volume spread over the rows its range crosses, in proportion to
+/// the overlap; the point of control the busiest row, the value area (70%)
+/// grown from it toward the busier neighbour.
+pub fn build_profile(bars: impl Iterator<Item = (f64, f64, f64)>, rows: usize) -> Option<Profile> {
+    let bars: Vec<_> = bars.filter(|b| b.0.is_finite() && b.1.is_finite() && b.2.is_finite()).collect();
+    let lo = bars.iter().map(|b| b.0).fold(f64::INFINITY, f64::min);
+    let hi = bars.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
+    if bars.is_empty() || lo > hi {
+        return None;
+    }
+    let n = if hi > lo { rows.clamp(2, 200) } else { 1 };
+    let step = (hi - lo) / n as f64;
+    let mut vol = vec![0.0; n];
+    let row_of = |p: f64| (((p - lo) / step) as usize).min(n - 1);
+    for &(l, h, v) in &bars {
+        if n == 1 || h <= l {
+            vol[if n == 1 { 0 } else { row_of(l) }] += v;
+            continue;
+        }
+        for (i, slot) in vol.iter_mut().enumerate().take(row_of(h) + 1).skip(row_of(l)) {
+            let (r0, r1) = (lo + step * i as f64, lo + step * (i + 1) as f64);
+            *slot += v * (h.min(r1) - l.max(r0)).max(0.0) / (h - l);
+        }
+    }
+    let poc = vol.iter().enumerate().fold(0, |best, (i, v)| if *v > vol[best] { i } else { best });
+    let total: f64 = vol.iter().sum();
+    let (mut a, mut b, mut sum) = (poc, poc, vol[poc]);
+    while sum < 0.7 * total && (a > 0 || b + 1 < n) {
+        let down = if a > 0 { vol[a - 1] } else { -1.0 };
+        let up = if b + 1 < n { vol[b + 1] } else { -1.0 };
+        if up > down {
+            b += 1;
+            sum += up;
+        } else {
+            a -= 1;
+            sum += down;
+        }
+    }
+    let rows = vol.iter().enumerate().map(|(i, v)| (lo + step * i as f64, if i + 1 == n { hi } else { lo + step * (i + 1) as f64 }, *v)).collect();
+    Some(Profile { rows, poc, va: (a, b) })
+}
+
 pub struct Placed<'a> {
     pub shape: &'a DrawingShape,
     pub points: Vec<(f32, f32)>,
@@ -325,6 +383,8 @@ pub struct Placed<'a> {
     pub precision: usize,
     /// The last close, for a position's open P&L.
     pub last: Option<f64>,
+    /// A volume profile's rows, from the bars its anchors span.
+    pub profile: Option<Profile>,
 }
 
 impl Placed<'_> {
@@ -363,6 +423,10 @@ impl Placed<'_> {
 pub fn handles(d: &Placed<'_>) -> Vec<(f32, f32)> {
     match d.shape.kind {
         DrawingKind::Brush => Vec::new(),
+        DrawingKind::Vrvp if d.points.len() >= 2 => {
+            let y = d.profile.as_ref().map_or(d.points[0].1, |p| (d.y(p.rows[0].0) + d.y(p.rows[p.rows.len() - 1].1)) / 2.0);
+            vec![(d.points[0].0, y), (d.points[1].0, y)]
+        }
         DrawingKind::Long | DrawingKind::Short => match d.position_box() {
             Some((left, right, entry, stop, target)) => vec![(left, entry), (left, stop), (left, target), (right, entry)],
             None => d.points.clone(),
@@ -511,6 +575,43 @@ pub fn paint(frame: &mut Frame, d: &Placed<'_>, plot: Rect, theme: &Theme) {
             }
             if let Some(text) = &d.shape.label {
                 label(frame, l + 4.0, t + 3.0, text.clone(), Align::Left, Baseline::Top);
+            }
+        }
+        (DrawingKind::Vrvp, None, _) => stroke(frame, (a.0, plot.y), (a.0, plot.bottom()), 1.0, color, Dash::Dashed),
+        (DrawingKind::Vrvp, Some(b), _) => {
+            let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+            let Some(p) = d.profile.as_ref().filter(|p| !p.rows.is_empty()) else {
+                stroke(frame, (a.0, plot.y), (a.0, plot.bottom()), 1.0, color, Dash::Dashed);
+                stroke(frame, (b.0, plot.y), (b.0, plot.bottom()), 1.0, color, Dash::Dashed);
+                return;
+            };
+            let top = d.y(p.rows[p.rows.len() - 1].1);
+            let bottom = d.y(p.rows[0].0);
+            let max = p.rows.iter().map(|r| r.2).fold(0.0, f64::max).max(f64::MIN_POSITIVE);
+            // ponytail: bars take at most 30% of the range; a width style when asked.
+            let span = (x1 - x0) * 0.3;
+            if fill.is_some() {
+                let inside = style.fill.unwrap_or(base.with_alpha(90));
+                for (i, &(lo, hi, vol)) in p.rows.iter().enumerate() {
+                    let (y0, y1) = (d.y(hi), d.y(lo));
+                    let w = (vol / max) as f32 * span;
+                    if w > 0.0 {
+                        frame.rect(x0, y0, w, (y1 - y0).max(0.5), if i >= p.va.0 && i <= p.va.1 { inside } else { base.with_alpha(40) });
+                    }
+                }
+            }
+            for (a, b) in [((x0, top), (x1, top)), ((x0, bottom), (x1, bottom)), ((x0, top), (x0, bottom)), ((x1, top), (x1, bottom))] {
+                stroke(frame, a, b, width, color, dash);
+            }
+            let (val, vah, poc) = (p.rows[p.va.0].0, p.rows[p.va.1].1, (p.rows[p.poc].0 + p.rows[p.poc].1) / 2.0);
+            for price in [vah, val] {
+                stroke(frame, (x0, d.y(price)), (x1, d.y(price)), 1.0, color, Dash::Dashed);
+            }
+            stroke(frame, (x0, d.y(poc)), (x1, d.y(poc)), width + 0.5, color.with_alpha(255), Dash::Solid);
+            if style.price_labels {
+                for (name, price) in [("VAH", vah), ("POC", poc), ("VAL", val)] {
+                    label(frame, x1 - 4.0, d.y(price) - 2.0, format!("{name} {}", format_price(price, digits)), Align::Right, Baseline::Bottom);
+                }
             }
         }
         (DrawingKind::Fib, Some(b), _) => {
@@ -810,6 +911,17 @@ pub fn distance(d: &Placed<'_>, cursor: (f32, f32), plot: Rect) -> f32 {
             let (p, q) = extend(d.points[0], d.points[1], plot, ext_left, ext_right);
             distance_to_segment(cursor, p, q)
         }
+        DrawingKind::Vrvp if d.points.len() >= 2 => match &d.profile {
+            Some(p) if !p.rows.is_empty() => {
+                let (a, b) = (d.points[0], d.points[1]);
+                let (left, right) = (a.0.min(b.0), a.0.max(b.0));
+                let (top, bottom) = (d.y(p.rows[p.rows.len() - 1].1), d.y(p.rows[0].0));
+                let dx = (left - cursor.0).max(cursor.0 - right).max(0.0);
+                let dy = (top - cursor.1).max(cursor.1 - bottom).max(0.0);
+                dx.hypot(dy)
+            }
+            _ => f32::INFINITY,
+        },
         DrawingKind::Circle => ((cursor.0 - d.points[0].0).hypot(cursor.1 - d.points[0].1) - CIRCLE_PX).max(0.0),
         _ => distance_to_drawing(kind.as_str(), &d.points, cursor, &FIB_LEVELS),
     }
@@ -827,6 +939,17 @@ mod tests {
         assert_eq!(run_to(100.0, 120.0, 2.0, &s.legs, 1.0), 30.0, "half taken at 110, half run to 120; the add is not on the way");
         assert_eq!(run_to(100.0, 90.0, 2.0, &s.legs, 1.0), -30.0, "two more coins at 95, all four stopped at 90");
         assert_eq!(run_to(100.0, 90.0, 1.0, &[(b'c', 95.0, 50.0)], -1.0), 7.5, "a short gains as it falls");
+    }
+
+    #[test]
+    fn a_profile_finds_its_poc_and_value_area() {
+        // Rows of 10: [0,10) [10,20) [20,30).
+        let p = build_profile([(0.0, 10.0, 10.0), (10.0, 20.0, 100.0), (20.0, 30.0, 40.0)].into_iter(), 3).unwrap();
+        assert_eq!(p.poc, 1);
+        let total: f64 = p.rows.iter().map(|r| r.2).sum();
+        let va: f64 = p.rows[p.va.0..=p.va.1].iter().map(|r| r.2).sum();
+        assert!(va >= 0.7 * total && p.va == (1, 2), "{va} of {total}, {:?}", p.va);
+        assert_eq!(build_profile(std::iter::empty(), 3), None);
     }
 
     #[test]

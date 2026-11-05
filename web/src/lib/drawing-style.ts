@@ -22,6 +22,8 @@ export function factoryStyle(kind: string): Style {
       return { width: 1, fillOn: true, fill: '#2962ff14', extendRight: false };
     case 'rect':
       return { color: '#9c27b0', width: 1, fillOn: true, fill: '#9c27b033' };
+    case 'vrvp':
+      return { color: '#2962ff', width: 1, fillOn: true, priceLabels: true, rows: 24 };
     case 'trendline':
     case 'ray':
     case 'horizontal':

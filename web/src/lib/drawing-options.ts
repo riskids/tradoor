@@ -26,6 +26,7 @@ export const KIND_NAMES: Record<string, string> = {
   long: 'Long position',
   short: 'Short position',
   channel: 'Parallel channel',
+  vrvp: 'Fixed range volume profile',
 };
 
 export const isPosition = (kind: string): boolean => kind === 'long' || kind === 'short';
