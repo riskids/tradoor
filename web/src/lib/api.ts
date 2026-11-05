@@ -555,8 +555,8 @@ export const api = {
   drawings: (market: string, timeframe: string, chart: ChartKind) => json<{ count: number; drawings: Drawing[] }>(`/api/drawings?${scope(market, timeframe, chart)}`),
   createDrawing: (market: string, timeframe: string, chart: ChartKind, input: { kind: string; points: DrawingPoint[]; label?: string; style?: Style }) =>
     json<{ drawing: Drawing }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'POST', body: input }),
-  updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null; style?: Style }) => json<{ drawing: Drawing }>(`/api/drawings/${id}`, { method: 'PATCH', body: patch }),
-  deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}`, { method: 'DELETE' }),
+  updateDrawing: (id: number, patch: { points?: DrawingPoint[]; label?: string | null; style?: Style }) => json<{ drawing: Drawing }>(`/api/drawings/${id}?layout=${encodeURIComponent(activeLayoutId())}`, { method: 'PATCH', body: patch }),
+  deleteDrawing: (id: number) => json<{ id: number }>(`/api/drawings/${id}?layout=${encodeURIComponent(activeLayoutId())}`, { method: 'DELETE' }),
   clearDrawings: (market: string, timeframe: string, chart: ChartKind) => json<{ deleted: number }>(`/api/drawings?${scope(market, timeframe, chart)}`, { method: 'DELETE' }),
   alerts: () => json<{ alerts: Alert[]; log: AlertLog[] }>('/api/alerts'),
   createAlert: (input: { market: string; condition: AlertCondition; price: number; message?: string | null; atPrice?: number; style?: AlertStyle }) => json<{ alert: Alert }>('/api/alerts', { method: 'POST', body: input }),
