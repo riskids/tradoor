@@ -245,6 +245,20 @@ export function DrawingSettings(props: {
             <ExtendRow flag={flag} set={set} />
           </Show>
 
+          <Show when={kind === 'vrvp'}>
+            <Row label="Border">
+              <LineField color={str('color', '#2962ff')} width={num('width', 1)} dash={str('dash', 'solid') as Dash} set={set} />
+            </Row>
+            <Row label="Rows">
+              <input type="number" min="2" max="200" value={num('rows', 24)} onChange={(e) => set('rows', Math.min(200, Math.max(2, Math.round(Number(e.currentTarget.value)) || 24)))} />
+            </Row>
+            <Row label="Bars">
+              <input type="checkbox" checked={flag('fillOn', true)} onChange={(e) => set('fillOn', e.currentTarget.checked)} />
+              <ColorField value={str('fill', '#2962ff5a')} onChange={(v) => set('fill', v)} title="Value area bars" />
+            </Row>
+            <Check label="Price labels" checked={flag('priceLabels', true)} onChange={(v) => set('priceLabels', v)} />
+          </Show>
+
           <Show when={kind === 'measure'}>
             <Row label="Color">
               <ColorField value={str('color', '#2962ff')} onChange={(v) => set('color', v)} />

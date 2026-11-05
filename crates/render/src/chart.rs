@@ -1937,7 +1937,16 @@ impl Chart {
             _ => 0,
         };
         let last = self.candles.last().map(|c| c.close);
-        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, hovered: false, bars, scale: pane.scale, precision: self.precision(), last })
+        let profile = match (shape.kind, shape.points.as_slice()) {
+            (DrawingKind::Vrvp, [a, b, ..]) => {
+                let (t0, t1) = (a.time.min(b.time), a.time.max(b.time));
+                // Bars overlapping the range: those holding either anchor count whole.
+                let bars = self.candles.iter().filter(|c| c.open_time as f64 <= t1 && self.timeframe.end(c.open_time) as f64 > t0);
+                drawings::build_profile(bars.map(|c| (c.low, c.high, c.volume)), shape.style.rows.unwrap_or(24))
+            }
+            _ => None,
+        };
+        Some(Placed { shape, points, selected: !draft && shape.id.is_some() && shape.id == self.selected, draft, hovered: false, bars, scale: pane.scale, precision: self.precision(), last, profile })
     }
 
     // ------------------------------------------------------------------ legend

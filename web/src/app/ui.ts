@@ -57,6 +57,7 @@ export const TOOL_KEYS: Record<string, string> = {
   KeyS: 'short',
   KeyB: 'brush',
   KeyP: 'path',
+  KeyV: 'vrvp',
 };
 /** A phone, where the workspace is one chart and a menu (Layout's MobileShell).
  *  Set by the layout, read by the chart, whose toolbar carries the button. */

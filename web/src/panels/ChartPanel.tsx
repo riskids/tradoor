@@ -53,14 +53,50 @@ const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: 'long', icon: 'long', title: 'Long position — click the entry; drag its handles to set stop, target and width' },
   { kind: 'short', icon: 'short', title: 'Short position — click the entry; drag its handles to set stop, target and width' },
   { kind: 'brush', icon: 'brush', title: 'Brush — drag to draw freehand' },
+  { kind: 'vrvp', icon: 'vrvp', title: 'Fixed range volume profile — click the start and end of the range; shows volume by price with POC and value area' },
 ];
+
+type Tool = (typeof TOOLS)[number];
+const TOOL_BY_KIND = new Map(TOOLS.map((t) => [t.kind, t]));
+
+/** The rail's buttons, top to bottom. A button runs its group's last-used tool;
+ *  a group with several tools also opens a flyout listing them. */
+const GROUPS: { id: string; kinds: string[] }[] = [
+  { id: 'cursor', kinds: [''] },
+  { id: 'lines', kinds: ['trendline', 'ray', 'horizontal', 'channel'] },
+  { id: 'fib', kinds: ['fib'] },
+  { id: 'measure', kinds: ['long', 'short', 'measure', 'vrvp'] },
+  { id: 'shapes', kinds: ['rect', 'brush', 'path'] },
+  { id: 'notes', kinds: ['text'] },
+];
+
+const RECENT_KEY = 'tradoor.rail.recent';
+const [recent, setRecent] = createSignal<Record<string, string>>(
+  (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '{}');
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  })(),
+);
+
+/** The tool a group's button shows: the active one if it is in the group, else the last used, else the first. */
+const shownKind = (g: { id: string; kinds: string[] }, active: string): string => {
+  if (g.kinds.includes(active)) return active;
+  const r = recent()[g.id];
+  return r !== undefined && g.kinds.includes(r) ? r : (g.kinds[0] ?? '');
+};
+
+const keyOf = (kind: string): string | undefined => Object.entries(TOOL_KEYS).find(([, k]) => k === kind)?.[0]?.slice(3);
 
 /** The tool's name with its Alt shortcut: `Trendline (Alt+T) — click the two ends…`. */
 const toolTip = (t: { kind: string; title: string }): string => {
-  const key = Object.entries(TOOL_KEYS).find(([, kind]) => kind === t.kind)?.[0];
+  const key = keyOf(t.kind);
   if (!key) return t.title;
   const [name, ...rest] = t.title.split(' — ');
-  return [`${name} (Alt+${key.slice(3)})`, ...rest].join(' — ');
+  return [`${name} (Alt+${key})`, ...rest].join(' — ');
 };
 
 const MAGNET_TIP: Record<MagnetMode, string> = {
@@ -86,6 +122,7 @@ const TOOL_STEPS: Record<string, string> = {
   channel: 'Channel: click both ends of the first line, then where the parallel line runs · shift keeps it level · right-click or esc cancels',
   long: 'Long: click where the entry goes',
   short: 'Short: click where the entry goes',
+  vrvp: 'Volume profile: click the start of the range, then the end · right-click or esc cancels',
 };
 
 const LAYERS = [
@@ -221,6 +258,26 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   useDismiss(alertMenu, () => setAlertMenu(null));
   useDismiss(tfMenu, () => setTfMenu(null));
   useDismiss(moreMenu, () => setMoreMenu(false));
+  /** The rail group whose tools are listed, and where (fixed, so the rail's scroll box does not clip it). */
+  const [flyout, setFlyout] = createSignal<{ id: string; x: number; y: number } | null>(null);
+  useDismiss(flyout, () => setFlyout(null));
+  const openFlyout = (id: string, anchor: HTMLElement) => {
+    const r = anchor.getBoundingClientRect();
+    const n = GROUPS.find((g) => g.id === id)?.kinds.length ?? 0;
+    setFlyout((v) => (v?.id === id ? null : { id, x: (anchor.closest('.rail') ?? anchor).getBoundingClientRect().right + 2, y: Math.max(4, Math.min(r.top, innerHeight - n * 36 - 16)) }));
+  };
+  createEffect(() => {
+    const t = tool();
+    const g = GROUPS.find((g) => g.kinds.includes(t));
+    if (!t || !g || untrack(recent)[g.id] === t) return;
+    const next = { ...untrack(recent), [g.id]: t };
+    setRecent(next);
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    } catch {}
+  });
+  const toolOff = (t: Tool) => t.kind !== '' && offline() !== null;
+  const toolTipFor = (t: Tool) => (t.kind !== '' && offline() ? `${t.title.split(' — ')[0]} — unavailable: drawings are saved on the tradoor server (${offline()})` : toolTip(t));
 
   let box!: HTMLDivElement;
   let tpoButton!: HTMLButtonElement;
@@ -1105,17 +1162,70 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
 
       <div class="chartwrap">
         <div class="rail">
-          <For each={TOOLS}>
-            {(t) => (
-              <button
-                classList={{ on: tool() === t.kind }}
-                disabled={t.kind !== '' && offline() !== null}
-                data-tip={t.kind !== '' && offline() ? `${t.title.split(' — ')[0]} — unavailable: drawings are saved on the tradoor server (${offline()})` : toolTip(t)}
-                onClick={() => setTool(tool() === t.kind ? '' : t.kind)}
-              >
-                <Icon name={t.icon} />
-              </button>
-            )}
+          <For each={GROUPS}>
+            {(g) => {
+              const shown = () => TOOL_BY_KIND.get(shownKind(g, tool())) as Tool;
+              let anchor!: HTMLDivElement;
+              return (
+                <>
+                  <div class="rg" ref={anchor}>
+                    <button
+                      class="rg-main"
+                      classList={{ on: g.kinds.includes(tool()) }}
+                      disabled={toolOff(shown())}
+                      data-tip={toolTipFor(shown())}
+                      onClick={() => setTool(tool() === shown().kind ? '' : shown().kind)}
+                      onContextMenu={(e) => {
+                        if (g.kinds.length < 2) return;
+                        e.preventDefault();
+                        openFlyout(g.id, anchor);
+                      }}
+                    >
+                      <Icon name={shown().icon} />
+                    </button>
+                    <Show when={g.kinds.length > 1}>
+                      <button
+                        class="rg-more"
+                        aria-label={`${shown().title.split(' — ')[0]} group: more tools`}
+                        aria-haspopup="menu"
+                        aria-expanded={flyout()?.id === g.id}
+                        disabled={offline() !== null}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => openFlyout(g.id, anchor)}
+                      >
+                        <Icon name="chevronRight" size={10} stroke={2.4} />
+                      </button>
+                    </Show>
+                  </div>
+                  <Show when={flyout()?.id === g.id ? flyout() : null}>
+                    {(f) => (
+                      <div class="rail-flyout menu" role="menu" style={{ left: `${f().x}px`, top: `${f().y}px` }} onPointerDown={(e) => e.stopPropagation()}>
+                        <For each={g.kinds}>
+                          {(kind) => {
+                            const t = TOOL_BY_KIND.get(kind) as Tool;
+                            return (
+                              <button
+                                role="menuitem"
+                                classList={{ on: tool() === kind }}
+                                data-tip={toolTip(t).split(' — ').slice(1).join(' — ')}
+                                onClick={() => {
+                                  setTool(kind);
+                                  setFlyout(null);
+                                }}
+                              >
+                                <Icon name={t.icon} size={16} />
+                                <span class="rf-name">{t.title.split(' — ')[0]}</span>
+                                <Show when={keyOf(kind)}>{(k) => <span class="rf-key">Alt+{k()}</span>}</Show>
+                              </button>
+                            );
+                          }}
+                        </For>
+                      </div>
+                    )}
+                  </Show>
+                </>
+              );
+            }}
           </For>
           <hr />
           <button class="magnet" classList={{ on: magnet() !== 'off', strong: magnet() === 'strong' }} data-tip={MAGNET_TIP[magnet()]} onClick={cycleMagnet}>

@@ -25,6 +25,8 @@ const PATHS = {
   section: 'M4 6h16M4 6v12M9 12h11M9 18h11',
   search: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.8-4.8',
   chevron: 'M6 9l6 6 6-6',
+  chevronRight: 'M9 6l6 6-6 6',
+  vrvp: 'M4 4v16M4 6h9M4 10h14M4 14h7M4 18h11',
   splitRight: 'M4 5h16v14H4zM12 5v14',
   splitDown: 'M4 5h16v14H4zM4 12h16',
   settings: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1',
