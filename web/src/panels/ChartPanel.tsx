@@ -1507,7 +1507,6 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
                   onToggle={() => toggleLayer(s.id)}
                   onRemove={() => removeStudy(s.id)}
                   onSettings={s.id.split(':')[0] === 'oi' ? () => setStudyEditing(s.id) : () => setStyleEditing(s.id)}
-                  values={s.hidden ? [] : s.lines.map((line) => ({ color: line.color, text: () => legend()?.values[line.id] ?? '—' }))}
                   stats={s.hidden ? [] : s.stats}
                 />
               )}
@@ -1735,7 +1734,6 @@ function LayerRow(props: {
   onToggle(): void;
   onRemove?: () => void;
   onSettings?: () => void;
-  values?: { color: string; text: () => string }[];
   stats?: { label: string; value: string }[];
 }) {
   return (
@@ -1743,13 +1741,6 @@ function LayerRow(props: {
       <span class="name" onDblClick={() => props.onSettings?.()}>
         {props.label}
       </span>
-      <For each={props.values ?? []}>
-        {(v) => (
-          <span class="val" style={{ color: v.color }}>
-            {v.text()}
-          </span>
-        )}
-      </For>
       <For each={props.stats ?? []}>
         {(s) => (
           <span class="dim">
