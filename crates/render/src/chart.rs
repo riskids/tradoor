@@ -1489,6 +1489,10 @@ impl Chart {
                 }
             }
         }
+        // The daily VWAP and its bands go behind the candles, so price reads over them.
+        for (index, study) in self.visible_studies().filter(|(_, s)| s.kind == StudyKind::Dvwap) {
+            self.paint_study_lines(f, &price.scale, index, study, i0, i1, body);
+        }
         for i in (i0..=i1).filter(|_| !tpo && !foot) {
             let Some(b) = self.bar(i) else { continue };
             let s = &price.scale;
@@ -1542,34 +1546,8 @@ impl Chart {
             let Some(pane) = self.panes.iter().find(|p| p.group == study.group) else { continue };
             f.clip(Some(pane.plot));
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
-            // Bands under their lines, so the strokes sit on top of the fill.
-            for (li, line) in study.lines.iter().enumerate() {
-                // The fill has its own row in the settings (`{key}.fill`), so hiding the
-                // line leaves the band; an unwanted band is made transparent there.
-                let Some(partner_key) = line.fill_to else { continue };
-                let Some(partner) = study.lines.iter().find(|l| l.key == partner_key) else { continue };
-                let color = self.fill_color(&study.id, line, index, li);
-                self.paint_band(f, &pane.scale, &line.values, &partner.values, i0, i1, color);
-            }
-            for (li, line) in study.lines.iter().enumerate() {
-                if self.line_hidden(&study.id, line.key) {
-                    continue;
-                }
-                match (line.kind, line.style) {
-                    // The override colours the positive bars only; negative ones keep `neg_color`.
-                    (LineType::Histogram, _) => self.paint_histogram(
-                        f,
-                        &pane.scale,
-                        &line.values,
-                        i0,
-                        i1,
-                        body,
-                        self.style_override(&study.id, line.key).and_then(|(c, _, _)| *c).or_else(|| line.color.and_then(Color::parse)),
-                        line.neg_color.and_then(Color::parse),
-                    ),
-                    (LineType::Line, LineStyle::None) => {}
-                    (LineType::Line, style) => self.paint_series(f, &pane.scale, &line.values, i0, i1, self.line_color(&study.id, line, index, li), self.line_width(&study.id, line), style),
-                }
+            if study.kind != StudyKind::Dvwap {
+                self.paint_study_lines(f, &pane.scale, index, study, i0, i1, body);
             }
             for seg in &study.segments {
                 let (Some(l0), Some(l1)) = (time_to_logical(&self.times, seg.from as f64), time_to_logical(&self.times, seg.to as f64)) else { continue };
@@ -1822,6 +1800,40 @@ impl Chart {
             let left = (x - w / 2.0).clamp(0.0, (plot_w - w).max(0.0));
             f.crisp_rect(left, avail + 1.0, w, TIME_AXIS_HEIGHT - 2.0, t.label_background);
             f.text(left + w / 2.0, avail + TIME_AXIS_HEIGHT / 2.0, text, t.label_text, Align::Center, Baseline::Middle, font, None, None);
+        }
+    }
+
+    /// A study's bands and lines, in the order they stack.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_study_lines(&self, f: &mut Frame, scale: &PriceScale, index: usize, study: &ComputedStudy, i0: usize, i1: usize, body: f32) {
+        // Bands under their lines, so the strokes sit on top of the fill.
+        for (li, line) in study.lines.iter().enumerate() {
+            // The fill has its own row in the settings (`{key}.fill`), so hiding the
+            // line leaves the band; an unwanted band is made transparent there.
+            let Some(partner_key) = line.fill_to else { continue };
+            let Some(partner) = study.lines.iter().find(|l| l.key == partner_key) else { continue };
+            let color = self.fill_color(&study.id, line, index, li);
+            self.paint_band(f, scale, &line.values, &partner.values, i0, i1, color);
+        }
+        for (li, line) in study.lines.iter().enumerate() {
+            if self.line_hidden(&study.id, line.key) {
+                continue;
+            }
+            match (line.kind, line.style) {
+                // The override colours the positive bars only; negative ones keep `neg_color`.
+                (LineType::Histogram, _) => self.paint_histogram(
+                    f,
+                    scale,
+                    &line.values,
+                    i0,
+                    i1,
+                    body,
+                    self.style_override(&study.id, line.key).and_then(|(c, _, _)| *c).or_else(|| line.color.and_then(Color::parse)),
+                    line.neg_color.and_then(Color::parse),
+                ),
+                (LineType::Line, LineStyle::None) => {}
+                (LineType::Line, style) => self.paint_series(f, scale, &line.values, i0, i1, self.line_color(&study.id, line, index, li), self.line_width(&study.id, line), style),
+            }
         }
     }
 
@@ -2855,6 +2867,20 @@ mod tests {
         c.set_study_styles("dvwap:1:2:3/vwap=#ff000080,2,0");
         let frame = c.render(1_800_000_000_000);
         assert!(painted(frame, Color::hex(0xff0000).with_alpha(0x80)) > 0, "the override's own alpha is painted, not opaque");
+    }
+
+    #[test]
+    fn the_daily_vwap_is_painted_behind_the_candles() {
+        let mut c = chart();
+        c.set_studies("dvwap:1:2:3");
+        c.set_study_styles("dvwap:1:2:3/vwap=#ff0000,2,0\ndvwap:1:2:3/u1.fill=#00ff0040,,0");
+        let t = Theme::default();
+        let frame = c.render(1_800_000_000_000);
+        let at = |color: Color| frame.colors.chunks(4).enumerate().filter(move |(_, c)| *c == [color.r, color.g, color.b, color.a]).map(|(i, _)| i);
+        let first_candle = at(t.bull.with_alpha(t.candle_alpha)).next().expect("candles painted");
+        assert!(at(Color::hex(0x00ff00).with_alpha(0x40)).last().expect("band painted") < first_candle, "the whole band comes before the first candle");
+        // The line's axis badge shares its colour and comes later, so only where the line starts is checked.
+        assert!(at(Color::hex(0xff0000)).next().expect("vwap painted") < first_candle, "the vwap line comes before the first candle");
     }
 
     #[test]
