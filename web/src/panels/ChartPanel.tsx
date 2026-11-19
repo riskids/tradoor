@@ -1037,6 +1037,9 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
         </Show>
         <span class="spacer" />
         <LiveBadge market={market()} live={status().live} relayed={status().relayed} price={price()} />
+        <button class="tb" aria-label="Copy a picture of the chart" data-tip="Copy a 4K picture (Alt K) — shift saves the file" onClick={(e) => capture(e.shiftKey)}>
+          <Icon name="camera" size={13} />
+        </button>
         <button class="tb" aria-label="More" data-tip="More" onPointerDown={(e) => e.stopPropagation()} onClick={() => setMoreMenu((v) => !v)}>
           <Icon name="more" size={13} />
         </button>
