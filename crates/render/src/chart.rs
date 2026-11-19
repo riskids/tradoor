@@ -1336,7 +1336,7 @@ impl Chart {
             // stack and leaves by fading where it stands.
             let fade = (age as f32 / LIQUIDATION_ENTER as f32).min((LIQUIDATION_TTL - age) as f32 / LIQUIDATION_FADE as f32).clamp(0.0, 1.0);
             // A long liquidated is forced selling, so it takes the bear colour.
-            let base = if l.long { t.bear } else { t.bull };
+            let base = if l.long { t.bear } else { t.up() };
             let alpha = (40.0 + 200.0 * fade) as u8;
             let text = format!("{} ${}", if l.long { "LONG" } else { "SHORT" }, format_turnover(l.usd));
             let width = mark + 4.0 + text.len() as f32 * glyph;
@@ -1568,7 +1568,7 @@ impl Chart {
                 let c = &self.candles[i];
                 let x = self.time.x(i as f64) as f32;
                 let color = match m.tone {
-                    Tone::Bull => t.bull,
+                    Tone::Bull => t.up(),
                     Tone::Bear => t.bear,
                     Tone::Neutral => t.text,
                 };
@@ -1592,7 +1592,7 @@ impl Chart {
                 if x < -FLOW_MAX_RADIUS || x > plot_w + FLOW_MAX_RADIUS {
                     continue;
                 }
-                let base = if mark.usd > 0.0 { t.bull } else { t.bear };
+                let base = if mark.usd > 0.0 { t.up() } else { t.bear };
                 let on = hovered == Some(i);
                 f.circle(x, y, self.flow_radius(mark), base.with_alpha(if on { 220 } else { 90 }));
                 if on {
@@ -1619,7 +1619,7 @@ impl Chart {
             }
         }
         let last = self.bar(n - 1).expect("n > 0");
-        let last_color = if last.close >= last.open { t.bull } else { t.bear };
+        let last_color = if last.close >= last.open { t.up() } else { t.bear };
         let last_y = price.scale.y(last.close) as f32;
         f.dashed_line(0.0, last_y, plot_w, last_y, 1.0, last_color, 2.0, 2.0);
 
@@ -1712,7 +1712,7 @@ impl Chart {
                 if let Some(v) = last_value(&line.values) {
                     // Candles take the colour of the last one, as the price badge does.
                     let color = match study.candles.iter().rev().flatten().next() {
-                        Some(b) => if b[3] >= b[0] { t.bull } else { t.bear },
+                        Some(b) => if b[3] >= b[0] { t.up() } else { t.bear },
                         None => self.line_color(&study.id, line, index, li),
                     };
                     badges.push(Badge { pane: pane_index, y: pane.scale.y(v) as f32, text: self.format_value(study.group, v), bg: color, fg: color.contrast_text() });
@@ -1896,7 +1896,7 @@ impl Chart {
         for (i, bar) in bars.iter().enumerate().take(i1.saturating_add(1)).skip(i0) {
             let Some([o, h, l, c]) = *bar else { continue };
             let x = f.snap(self.time.x(i as f64) as f32);
-            let color = if c >= o { t.bull } else { t.bear };
+            let color = if c >= o { t.up() } else { t.bear };
             let (yh, yl, yo, yc) = (scale.y(h) as f32, scale.y(l) as f32, scale.y(o) as f32, scale.y(c) as f32);
             let (top, bottom) = (yo.min(yc), yo.max(yc));
             f.vline(x, yh, yl, wick, color);
@@ -1913,7 +1913,7 @@ impl Chart {
             let Some(v) = values[i] else { continue };
             let y = scale.y(v) as f32;
             let x = f.snap(self.time.x(i as f64) as f32);
-            let color = if v >= 0.0 { pos.unwrap_or(self.theme.bull) } else { neg.unwrap_or(self.theme.bear) };
+            let color = if v >= 0.0 { pos.unwrap_or(self.theme.up()) } else { neg.unwrap_or(self.theme.bear) };
             f.crisp_rect(x - w / 2.0, y.min(zero), w, (y - zero).abs().max(1.0 / f.dpr), color.with_alpha(0x80));
         }
     }

@@ -47,6 +47,45 @@ export const CHART_THEME: readonly ChartThemeKey[] = [
 
 export const FONT_PX = { name: 'fontPx', value: '11' };
 
+/** Engine keys no dialog edits; only a preset sets them. */
+export const CHART_EXTRAS: readonly Omit<ThemeKey, 'label'>[] = [
+  { name: 'candleAlpha', value: '204' },
+  { name: 'volumeAlpha', value: '96' },
+  { name: 'countdownBackground', value: '#2a2f2a' },
+  { name: 'countdownText', value: '#d7ded7' },
+  { name: 'tpo', value: '#d9dcd9' },
+];
+
+/** Whole chart themes: the overrides each lays over the defaults. Applying one clears every other chart key. */
+export const THEME_PRESETS: readonly { label: string; theme: Readonly<Record<string, string>> }[] = [
+  { label: 'HTF Dark', theme: {} },
+  {
+    // The HTF layout's cream canvas: hollow up candles, grey down, black wicks and borders.
+    label: 'HTF White',
+    theme: {
+      background: '#fff9e9',
+      text: '#000000',
+      border: '#dcd8cd',
+      grid: '#fff9e9',
+      bull: '#fff9e9',
+      bear: '#5d606b',
+      wickBull: '#000000',
+      wickBear: '#000000',
+      borderBull: '#000000',
+      borderBear: '#000000',
+      volumeBull: '#26a69a',
+      volumeBear: '#ef5350',
+      labelBackground: '#131722',
+      labelText: '#ffffff',
+      candleAlpha: '255',
+      volumeAlpha: '128',
+      countdownBackground: '#5d606b',
+      countdownText: '#d6d7da',
+      tpo: '#5d606b',
+    },
+  },
+];
+
 export const UI_THEME: readonly (ThemeKey & { css: string })[] = [
   { name: 'ui.primary', css: '--primary', label: 'Accent', value: '#2962ff' },
   { name: 'ui.bg', css: '--bg', label: 'Page', value: '#0f0f0f' },

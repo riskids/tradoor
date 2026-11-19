@@ -596,7 +596,7 @@ pub fn paint(f: &mut Frame, v: &View, p: &Profiles, s: &Settings) {
                         ColorMode::HeatMap => mix(s.heat_low, s.heat_high, count / max_count),
                         ColorMode::CandleUpDown => match v.bars.get(profile.first + period) {
                             Some(b) if b.close < b.open => t.bear,
-                            _ => t.bull,
+                            _ => t.up(),
                         },
                     }
                 };
@@ -701,7 +701,7 @@ pub fn paint(f: &mut Frame, v: &View, p: &Profiles, s: &Settings) {
         if s.close_marker {
             let y = (v.y)(profile.close);
             let x = profile_right + 3.0;
-            f.triangle((x, y), (x + 5.0, y - 4.0), (x + 5.0, y + 4.0), t.bull);
+            f.triangle((x, y), (x + 5.0, y - 4.0), (x + 5.0, y + 4.0), t.up());
         }
         if s.session_names {
             let c = civil(session.session_start);
