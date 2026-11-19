@@ -8,7 +8,7 @@ Rust 1.95 with the wasm32 target, wasm-bindgen 0.2.128, wasm-opt and Deno are in
 - `cd web && deno task build && deno task size` — must pass. `size` enforces the gzip budgets in `web/package.json`.
 - A change with nothing under `crates/`, `bins/` or `migrations/` may skip `cargo test`; it still needs `build-wasm.sh`.
 - Do not run `cargo test -- --ignored`, `docker compose`, or the server, recorder and backfill binaries: the sandbox has no Postgres.
-- There is no browser. For a visual change, say under `Not run:` that nobody looked at the result.
+- UI check: after `deno task build`, run `cd web && nohup deno task preview --host 127.0.0.1 --port 4173 >/tmp/preview.log 2>&1 &`, then `node /lib-agent/shot.cjs http://127.0.0.1:4173/ <name> 1440x900 15000`. Charts draw from live exchange data. `/api` and `/data` answer 502 because no server runs, so anything that needs it (journal, alerts, accounts) cannot be checked.
 
 ## Rules
 - A merge to `main` deploys to production. Change only what the issue asks.
