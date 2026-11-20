@@ -9,6 +9,7 @@ import {
   isPosition,
   KIND_NAMES,
   parseLevels,
+  rememberStyle,
   resetDefaultStyle,
   saveDefaultStyle,
   serializeLevels,
@@ -94,6 +95,7 @@ export function DrawingSettings(props: {
   let saveJournal: (() => Promise<void>) | undefined;
   const ok = () => {
     const after = saveJournal;
+    rememberStyle(kind, { ...factoryStyle(kind), ...original.style }, style());
     void Promise.resolve(props.onCommit(patch()))
       .then(() => after?.())
       .catch(() => {});
