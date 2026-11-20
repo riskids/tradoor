@@ -5,7 +5,7 @@ import { OWNER_PATTERN, ownerId, session, switchOwner } from '../lib/owner';
 import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { Icon, type IconName } from '../lib/icons';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
-import { UI_THEME } from '../lib/theme';
+import { CHART_EXTRAS, CHART_THEME, THEME_PRESETS, UI_THEME } from '../lib/theme';
 import { formatDateTime } from '../lib/timezone';
 import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
 import { AccountCard, clock } from './Account';
@@ -240,6 +240,8 @@ function GeneralSection() {
   );
 }
 
+const PRESET_KEYS = [...CHART_THEME, ...CHART_EXTRAS].map((t) => t.name);
+
 function ColoursSection() {
   return (
     <>
@@ -247,6 +249,24 @@ function ColoursSection() {
       <p class="lead">Kept with the workspace, so they follow your account too.</p>
       <div class="set-card">
         <h3>Chart</h3>
+        <div class="set-row">
+          <span class="label">Theme</span>
+          <div class="set-actions">
+            <For each={THEME_PRESETS}>
+              {(p) => (
+                <button
+                  class="btn"
+                  classList={{ on: PRESET_KEYS.every((k) => doc.theme[k] === p.theme[k]) }}
+                  onClick={() => {
+                    for (const k of PRESET_KEYS) setThemeValue(k, p.theme[k] ?? null);
+                  }}
+                >
+                  {p.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
         <div class="set-row">
           <span class="grow dim">Candles, canvas, scales, studies and drawings — in the one dialog TradingView opens them from.</span>
           <button class="btn" onClick={() => setOverlay({ kind: 'chartSettings' })}>

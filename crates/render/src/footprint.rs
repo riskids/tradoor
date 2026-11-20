@@ -173,11 +173,11 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
             // one the background colour reads, over a faint one the text
             // colour does. Grey over both reads over neither.
             let ink = |fill: u8| if fill >= 150 { t.background } else { t.text };
-            let side = if buy >= sell { t.bull } else { t.bear };
+            let side = if buy >= sell { t.up() } else { t.bear };
             match mode {
                 Mode::Split => {
                     f.rect(x - half, top, half, drawn, t.bear.with_alpha(alpha(*sell)));
-                    f.rect(x, top, half, drawn, t.bull.with_alpha(alpha(*buy)));
+                    f.rect(x, top, half, drawn, t.up().with_alpha(alpha(*buy)));
                     if numbers {
                         f.text(x - pad, top + drawn / 2.0, short(*sell), ink(alpha(*sell)), Align::Right, Baseline::Middle, size, None, Some(view.plot));
                         f.text(x + pad, top + drawn / 2.0, short(*buy), ink(alpha(*buy)), Align::Left, Baseline::Middle, size, None, Some(view.plot));
@@ -195,7 +195,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
                         Mode::Ladder => running,
                         _ => buy - sell,
                     };
-                    let color = if mode == Mode::Total { side } else if value >= 0.0 { t.bull } else { t.bear };
+                    let color = if mode == Mode::Total { side } else if value >= 0.0 { t.up() } else { t.bear };
                     f.rect(x - half, top, width, drawn, color.with_alpha(alpha(value.abs())));
                     if numbers {
                         let text = if mode != Mode::Total && value >= 0.0 { format!("+{}", short(value)) } else { short(value) };
@@ -223,7 +223,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
                     continue;
                 }
                 if bought_into {
-                    f.stroke_rect(if mode == Mode::Split { x } else { x - half }, top, if mode == Mode::Split { half } else { width }, drawn, 1.0, t.bull);
+                    f.stroke_rect(if mode == Mode::Split { x } else { x - half }, top, if mode == Mode::Split { half } else { width }, drawn, 1.0, t.up());
                 }
                 if sold_into {
                     f.stroke_rect(x - half, top, if mode == Mode::Split { half } else { width }, drawn, 1.0, t.bear);
@@ -234,11 +234,11 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
         // Three imbalances in a row or more: a band of one-sided aggression,
         // which is what an order-flow reader is actually looking for. Marked
         // beside the column so the run reads as one thing.
-        for (side, runs) in [(t.bull, stacked(&bought_runs)), (t.bear, stacked(&sold_runs))] {
+        for (side, runs) in [(t.up(), stacked(&bought_runs)), (t.bear, stacked(&sold_runs))] {
             for (from, to) in runs {
                 let top = top_of(bar.levels[to].0);
                 let bottom = top_of(bar.levels[from].0) + drawn_at(bar.levels[from].0);
-                let at_x = if side == t.bull { x + half + 1.0 } else { x - half - 3.0 };
+                let at_x = if side == t.up() { x + half + 1.0 } else { x - half - 3.0 };
                 f.rect(at_x, top, 2.0, bottom - top, side);
             }
         }
@@ -264,7 +264,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
             let delta = bought - sold;
             f.text(x, foot, short(bought + sold), t.text.with_alpha(170), Align::Center, Baseline::Top, size, None, Some(view.plot));
             let text = if delta >= 0.0 { format!("+{}", short(delta)) } else { short(delta) };
-            f.text(x, foot + size + 2.0, text, if delta >= 0.0 { t.bull } else { t.bear }, Align::Center, Baseline::Top, size, None, Some(view.plot));
+            f.text(x, foot + size + 2.0, text, if delta >= 0.0 { t.up() } else { t.bear }, Align::Center, Baseline::Top, size, None, Some(view.plot));
         }
 
         // The line between the two sides, so a column reads as one bar.
@@ -303,7 +303,7 @@ pub fn paint(f: &mut Frame, view: &View<'_>, bars: &[(f64, &Bar)], options: Opti
                 continue;
             }
             let w = (room * ((buy + sell) / loudest) as f32).max(1.0);
-            let color = if buy >= sell { t.bull } else { t.bear };
+            let color = if buy >= sell { t.up() } else { t.bear };
             f.rect(view.plot.right() - w, top, w, drawn, color.with_alpha(90));
         }
     }

@@ -96,6 +96,12 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The colour that says "up" away from a candle's body. A hollow theme's
+    /// `bull` is the canvas itself and would vanish there, so the up border stands in.
+    pub fn up(&self) -> Color {
+        if self.bull == self.background { self.border_bull } else { self.bull }
+    }
+
     /// Set one entry by the name a workspace stores it under. Returns false for an
     /// unknown name or an unparseable value, leaving the theme unchanged.
     pub fn set(&mut self, key: &str, value: &str) -> bool {
@@ -137,6 +143,8 @@ impl Theme {
             "crosshair" => &mut self.crosshair,
             "labelBackground" => &mut self.label_background,
             "labelText" => &mut self.label_text,
+            "countdownBackground" => &mut self.countdown_background,
+            "countdownText" => &mut self.countdown_text,
             "drawing" => &mut self.drawing,
             "drawingSelected" => &mut self.drawing_selected,
             "alert" => &mut self.alert,
@@ -160,5 +168,20 @@ mod tests {
         assert_eq!(t.wick_bull, Color::hex(0x123456));
         assert!(!t.set("wickBull", "not-a-color"));
         assert!(!t.set("nonsense", "#000000"));
+    }
+
+    #[test]
+    fn a_hollow_up_candle_lends_its_border_to_everything_else_that_says_up() {
+        let mut t = Theme::default();
+        assert_eq!(t.up(), t.bull, "a filled theme keeps its bull");
+        assert!(t.set("background", "#fff9e9") && t.set("bull", "#fff9e9") && t.set("borderBull", "#000000"));
+        assert_eq!(t.up(), Color::hex(0x000000));
+    }
+
+    #[test]
+    fn the_countdown_tag_takes_its_colours_by_name() {
+        let mut t = Theme::default();
+        assert!(t.set("countdownBackground", "#5d606b") && t.set("countdownText", "#d6d7da"));
+        assert_eq!((t.countdown_background, t.countdown_text), (Color::hex(0x5d606b), Color::hex(0xd6d7da)));
     }
 }
