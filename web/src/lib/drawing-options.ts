@@ -75,6 +75,16 @@ export function saveDefaultStyle(kind: string, style: Style): void {
   writePref(TEMPLATE_KEY, JSON.stringify(all));
 }
 
+/** A drawing's colour, width or dash was changed: the next drawing of its kind
+ *  starts with it, on top of whatever default the kind already has. */
+export function rememberStyle(kind: string, before: Style, after: Style): void {
+  const changed = ['color', 'width', 'dash'].filter((key) => after[key] !== undefined && after[key] !== before[key]);
+  if (changed.length === 0) return;
+  const all = templates();
+  all[kind] = { ...all[kind], ...Object.fromEntries(changed.map((key) => [key, after[key]!])) };
+  writePref(TEMPLATE_KEY, JSON.stringify(all));
+}
+
 export function resetDefaultStyle(kind: string): void {
   const all = templates();
   delete all[kind];
