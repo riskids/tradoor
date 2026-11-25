@@ -6,7 +6,7 @@ import { createEffect, createSignal, For, lazy, Match, on, onCleanup, Show, Swit
 import { covered, dragging, mobileMenu, setDragging, setJournalOpen, setMobile, setMobileMenu, setOverlay, setTrainingOpen } from '../app/ui';
 import { useDismiss } from '../lib/dismiss';
 import { unread } from '../lib/alerts';
-import { Icon } from '../lib/icons';
+import { Icon, type IconName } from '../lib/icons';
 import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
@@ -297,6 +297,8 @@ function zoneAt(e: DragEvent, el: HTMLElement): DropZone {
   return edge === y ? 'top' : 'bottom';
 }
 
+const RAIL_ICON: Record<PanelType, IconName> = { chart: 'path', watchlist: 'list', tpo: 'vrvp', values: 'info', liquidations: 'droplet', flow: 'indicators', signals: 'send', alerts: 'alarm' };
+
 function TabsView(props: { node: TabsNode }) {
   const [zone, setZone] = createSignal<DropZone | null>(null);
   const [adding, setAdding] = createSignal(false);
@@ -323,9 +325,15 @@ function TabsView(props: { node: TabsNode }) {
   // own — TradingView shows none — so it collapses to a hairline, reachable
   // on hover or while its own menu is open.
   const solo = () => props.node.panels.length <= 1;
+  // TradingView's right panel: a group of side panels (no chart or TPO among
+  // them) shows a title bar and keeps its switcher as an icon rail on the right.
+  const rail = () => !solo() && props.node.panels.every((id) => {
+    const t = doc.panels[id]?.type;
+    return t !== undefined && t !== 'chart' && (t as string) !== 'tpo';
+  });
 
   return (
-    <div class="tabs" classList={{ focused: focused(), solo: solo() }} onPointerDown={() => focusPanel(props.node.active)}>
+    <div class="tabs" classList={{ focused: focused(), solo: solo(), sidebar: rail() }} onPointerDown={() => focusPanel(props.node.active)}>
       <div
         class="tabstrip"
         classList={{ forced: adding() }}
@@ -339,9 +347,16 @@ function TabsView(props: { node: TabsNode }) {
           drop('center');
         }}
       >
-        <div class="tablist">
-          <For each={props.node.panels}>{(id) => <Tab id={id} tabs={props.node} />}</For>
-        </div>
+        <Show
+          when={rail()}
+          fallback={
+            <div class="tablist">
+              <For each={props.node.panels}>{(id) => <Tab id={id} tabs={props.node} />}</For>
+            </div>
+          }
+        >
+          <span class="sidetitle">{active() ? panelTitle(active()!) : ''}</span>
+        </Show>
         <div class="tabtools">
           <button class="iconbtn" data-tip="Add a panel, or split this group" onPointerDown={(e) => e.stopPropagation()} onClick={() => setAdding((v) => !v)}>
             <Icon name="more" size={13} />
@@ -367,6 +382,7 @@ function TabsView(props: { node: TabsNode }) {
           </Show>
         </div>
       </div>
+      <div class="tabsbody">
       <div class="panelbody">
         <Show when={active()} keyed>
           {(panel) => <PanelView panel={panel} />}
@@ -388,7 +404,47 @@ function TabsView(props: { node: TabsNode }) {
           </div>
         </Show>
       </div>
+      <Show when={rail()}>
+        <div class="siderail">
+          <For each={props.node.panels}>{(id) => <RailButton id={id} tabs={props.node} />}</For>
+        </div>
+      </Show>
+      </div>
     </div>
+  );
+}
+
+function RailButton(props: { id: string; tabs: TabsNode }) {
+  const panel = () => doc.panels[props.id];
+  return (
+    <Show when={panel()}>
+      {(p) => (
+        <button
+          class="sidebtn"
+          classList={{ active: props.tabs.active === props.id }}
+          draggable={true}
+          data-tip={`${panelTitle(p())} — middle-click to close, drag to dock elsewhere`}
+          onDragStart={(e) => {
+            e.dataTransfer?.setData('text/plain', props.id);
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+            requestAnimationFrame(() => setDragging(props.id));
+          }}
+          onDragEnd={() => setDragging(null)}
+          onClick={() => {
+            if (props.tabs.active !== props.id) update((d) => activate(d, props.tabs.id, props.id));
+            focusPanel(props.id);
+          }}
+          onAuxClick={(e) => {
+            if (e.button === 1) update((d) => removePanel(d, props.id));
+          }}
+        >
+          <Icon name={RAIL_ICON[p().type]} size={18} />
+          <Show when={p().type === 'alerts' && unread() > 0}>
+            <span class="al-badge">{unread()}</span>
+          </Show>
+        </button>
+      )}
+    </Show>
   );
 }
 

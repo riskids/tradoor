@@ -52,6 +52,7 @@ const PATHS = {
   send: 'M21 3L10 14M21 3l-6.5 18-4.5-7-7-4.5z',
   copy: 'M9 9h11v11H9zM5 15V4h11',
   folder: 'M3 6h6l2 2h10v11H3z',
+  list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
   droplet: 'M12 3l5.5 5.5a7.8 7.8 0 1 1-11 0z',
 } as const;
 
