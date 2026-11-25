@@ -96,7 +96,6 @@ const rgba = (color: string | undefined): number => {
 };
 
 const hub = new StreamHub();
-const theme = new Map<string, string>();
 /** The reader's time zone, minutes east of UTC; charts write intraday times in it. */
 let utcOffset = 0;
 const slots = new Map<string, Slot>();
@@ -283,7 +282,6 @@ class Slot {
       schedule();
     }, { signal });
     this.engine = new ChartEngine(gl, text, feed, '1h', flat);
-    for (const [key, value] of theme) this.engine.set_theme_value(key, value);
     this.engine.set_utc_offset(utcOffset);
     // Every exchange's mark, once: a liquidation names the one it came from.
     for (const m of marks) this.engine.set_mark(m.index, m.box, m.spec);
@@ -1076,14 +1074,6 @@ function handle(msg: ToWorker): void {
     for (const slot of slots.values()) for (const m of marks) slot.engine.set_mark(m.index, m.box, m.spec);
     return;
   }
-  if (msg.t === 'theme') {
-    theme.set(msg.key, msg.value);
-    for (const slot of slots.values()) {
-      slot.engine.set_theme_value(msg.key, msg.value);
-      slot.markMeta();
-    }
-    return;
-  }
   if (msg.t === 'create') {
     try {
       const slot = new Slot(msg.id, msg.gl, msg.text, msg.feed, msg.flat === true);
@@ -1139,6 +1129,10 @@ function handle(msg: ToWorker): void {
       break;
     case 'log':
       slot.engine.set_log_scale(msg.value);
+      break;
+    case 'theme':
+      slot.engine.set_theme_value(msg.key, msg.value);
+      slot.markMeta();
       break;
     case 'tpo':
       slot.engine.set_tpo(msg.value);

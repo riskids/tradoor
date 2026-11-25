@@ -28,6 +28,7 @@ import { serializeTpo, tpoValue, withTpoValue } from '../lib/tpo-settings';
 import { isRatio, symbolOf, venueLabel } from '../lib/markets';
 import { alertState, createAlert, deleteAlert, digitsFor, editAlert, styleAlert, titleOf } from '../lib/alerts';
 import { toast } from '../lib/toasts';
+import { CHART_EXTRAS, CHART_THEME, FONT_PX } from '../lib/theme';
 import { TIMEFRAMES, tfLabel, tfLonger, tfMs, tfName } from '../lib/timeframes';
 import { remapStudyStyles, serializeStudyStyles, TPO_SPLITS, type ChartPanelState } from '../workspace/model';
 import { doc, marketOf, patchPanel, setPanelTimeframe, timeframeOf, toggleFavoriteTimeframe } from '../workspace/store';
@@ -219,6 +220,11 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   /** Candles and TPO profiles keep separate drawings, and the training chart its own. */
   const chartKind = (): ChartKind => (props.training ? 'training' : tpoShown() ? 'tpo' : 'candles');
 
+  /** The legend lies on the canvas, not the page: it takes the chart's own colours once a theme changes them. */
+  const legendColours = () => {
+    const { background, text } = props.panel.theme;
+    return { '--chart-bg': background, '--chart-text': text, '--chart-muted': text && `color-mix(in oklab, ${text} 65%, transparent)`, '--chart-dim': text && `color-mix(in oklab, ${text} 45%, transparent)` };
+  };
   const [legend, setLegend] = createSignal<Legend | null>(null);
   const [studies, setStudies] = createSignal<StudyMeta[]>([]);
   const [status, setStatus] = createSignal<ChartStatus>({ loading: true, error: null, bars: 0, source: null, live: 'off', relayed: false, exhausted: false });
@@ -572,6 +578,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
       () => post(null),
     );
   });
+  for (const t of [...CHART_THEME, ...CHART_EXTRAS, FONT_PX]) createEffect(() => send({ t: 'theme', id: sid, key: t.name, value: props.panel.theme[t.name] ?? t.value }));
   createEffect(() => send({ t: 'studies', id: sid, value: props.panel.studies }));
   createEffect(() => send({ t: 'hidden', id: sid, value: props.panel.hidden }));
   createEffect(() => send({ t: 'log', id: sid, value: props.panel.log }));
@@ -1057,7 +1064,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             <button
               onClick={() => {
                 setMoreMenu(false);
-                setOverlay({ kind: 'chartSettings' });
+                setOverlay({ kind: 'chartSettings', panelId: id });
               }}
             >
               Settings…
@@ -1477,7 +1484,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
               </div>
             )}
           </Show>
-          <div class="legend">
+          <div class="legend" style={legendColours()}>
             <div class="line">
               <span class="title">{symbolOf(market())}</span>
               <span class="dim">

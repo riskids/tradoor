@@ -79,6 +79,7 @@ function startPanel(): ChartPanelState {
     tpoSettings: {},
     studyStyles: {},
     legendShut: saved.legendShut === true,
+    theme: {},
   };
 }
 

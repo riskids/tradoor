@@ -213,6 +213,22 @@ export function setThemeValue(key: string, value: string | null): void {
   touched();
 }
 
+/** A colour of one chart; null puts it back to the default. */
+export function setPanelTheme(id: string, key: string, value: string | null): void {
+  if (!doc.panels[id]) {
+    if (detached[id]) (setDetached as (...args: unknown[]) => void)(id, 'theme', key, value ?? undefined);
+    return;
+  }
+  (setDoc as (...args: unknown[]) => void)('panels', id, 'theme', key, value ?? undefined);
+  touched();
+}
+
+/** The chart the Colours page and Chart settings change: the one in focus, else the one last used. */
+export function themeTarget(): ChartPanelState | null {
+  const p = focusedPanel();
+  return p?.type === 'chart' ? p : targetChart();
+}
+
 export function resetWorkspace(): void {
   update((d) => Object.assign(d, defaultWorkspace()));
 }
