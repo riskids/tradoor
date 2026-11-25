@@ -6,8 +6,9 @@ import { ALL_EXCHANGES, ExchangeLogo } from '../lib/exchanges';
 import { Icon, type IconName } from '../lib/icons';
 import { deviceZone, LOCAL_ZONE, offsetLabel, offsetMinutes, TIME_ZONE_KEY, timeZone } from '../lib/timezone';
 import { CHART_EXTRAS, CHART_THEME, THEME_PRESETS, UI_THEME } from '../lib/theme';
+import { symbolOf } from '../lib/markets';
 import { formatDateTime } from '../lib/timezone';
-import { doc, resetWorkspace, setThemeValue, update } from '../workspace/store';
+import { doc, marketOf, resetWorkspace, setPanelTheme, setThemeValue, themeTarget, update } from '../workspace/store';
 import { AccountCard, clock } from './Account';
 
 export function Swatch(props: { name: string; label: string; fallback: string }) {
@@ -243,12 +244,15 @@ function GeneralSection() {
 const PRESET_KEYS = [...CHART_THEME, ...CHART_EXTRAS].map((t) => t.name);
 
 function ColoursSection() {
+  const chart = themeTarget;
   return (
     <>
       <h2>Colours</h2>
-      <p class="lead">Kept with the workspace, so they follow your account too.</p>
+      <p class="lead">The page's colours are kept with the workspace, so they follow your account too. The chart theme belongs to one chart.</p>
       <div class="set-card">
         <h3>Chart</h3>
+        <Show when={chart()} fallback={<p class="dim">No chart in this workspace.</p>}>
+        <p class="dim">Applies to the chart in focus: {symbolOf(marketOf(chart()!))}.</p>
         <div class="set-row">
           <span class="label">Theme</span>
           <div class="set-actions">
@@ -256,9 +260,9 @@ function ColoursSection() {
               {(p) => (
                 <button
                   class="btn"
-                  classList={{ on: PRESET_KEYS.every((k) => doc.theme[k] === p.theme[k]) }}
+                  classList={{ on: PRESET_KEYS.every((k) => chart()!.theme[k] === p.theme[k]) }}
                   onClick={() => {
-                    for (const k of PRESET_KEYS) setThemeValue(k, p.theme[k] ?? null);
+                    for (const k of PRESET_KEYS) setPanelTheme(chart()!.id, k, p.theme[k] ?? null);
                   }}
                 >
                   {p.label}
@@ -269,10 +273,11 @@ function ColoursSection() {
         </div>
         <div class="set-row">
           <span class="grow dim">Candles, canvas, scales, studies and drawings — in the one dialog TradingView opens them from.</span>
-          <button class="btn" onClick={() => setOverlay({ kind: 'chartSettings' })}>
+          <button class="btn" onClick={() => setOverlay({ kind: 'chartSettings', panelId: chart()!.id })}>
             Open chart settings…
           </button>
         </div>
+        </Show>
       </div>
       <div class="set-card">
         <h3>Page</h3>
@@ -285,6 +290,8 @@ function ColoursSection() {
           class="btn"
           onClick={() => {
             for (const name of Object.keys(doc.theme)) setThemeValue(name, null);
+            const c = chart();
+            if (c) for (const name of Object.keys(c.theme)) setPanelTheme(c.id, name, null);
           }}
         >
           Reset all colours

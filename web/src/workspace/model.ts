@@ -90,6 +90,8 @@ export interface ChartPanelState extends PanelBase {
   studyStyles: Record<string, string>;
   /** The layers under the symbol are folded away. */
   legendShut: boolean;
+  /** This chart's own colour overrides, keyed as in `CHART_THEME`; empty, the defaults. */
+  theme: Record<string, string>;
 }
 
 export interface WatchlistPanelState extends PanelBase {
@@ -171,7 +173,7 @@ export interface WorkspaceDoc {
   root: LayoutNode;
   panels: Record<string, Panel>;
   links: Record<LinkColor, LinkState>;
-  /** Chart theme keys, and `ui.*` for the page's own colours. */
+  /** `ui.*` for the page's own colours, and the time zone. Chart colours live on each chart panel. */
   theme: Record<string, string>;
   /** The timeframes a chart's bar shows as buttons, shortest first; the rest are in its menu. */
   timeframes: string[];
@@ -225,12 +227,12 @@ export function newPanel(type: PanelType, from?: Partial<Pick<PanelBase, 'link' 
   const base = { id: uid(type), link: from?.link ?? null, market: from?.market ?? DEFAULT_MARKET, timeframe: from?.timeframe ?? DEFAULT_TIMEFRAME };
   switch (type) {
     case 'chart':
-      return { ...base, type, studies: DEFAULT_STUDIES, hidden: 'ribbon,ema200', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false };
+      return { ...base, type, studies: DEFAULT_STUDIES, hidden: 'ribbon,ema200', log: false, paneWeights: '', tpo: '', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false, theme: {} };
     case 'watchlist':
       return { ...base, type, markets: [...DEFAULT_WATCHLIST], collapsed: [], flags: {} };
     case 'tpo':
       // Profiles read cleanest bare, as Exocharts draws them: no studies under them.
-      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false };
+      return { ...base, id: uid('chart'), type: 'chart', studies: '', hidden: '', log: false, paneWeights: '', tpo: '1d', footprint: false, footprintMode: 'split', footprintUnit: 'coins', footprintTicks: 0, footprintValueArea: true, footprintStats: true, footprintProfile: true, tpoSettings: {}, studyStyles: {}, legendShut: false, theme: {} };
     case 'values':
       return { ...base, type, basis: 'volume' };
     case 'liquidations':
@@ -285,6 +287,12 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const str = (v: unknown, fallback: string): string => (typeof v === 'string' ? v : fallback);
 const isLink = (v: unknown): v is LinkColor => LINK_COLORS.includes(v as LinkColor);
 
+function readTheme(raw: unknown): Record<string, string> {
+  const theme: Record<string, string> = {};
+  if (isObj(raw)) for (const [k, v] of Object.entries(raw).slice(0, 100)) if (k.length <= 40 && typeof v === 'string' && v.length <= 40) theme[k] = v;
+  return theme;
+}
+
 function readPanel(id: string, raw: unknown): Panel | null {
   if (!isObj(raw) || !PANEL_TYPES.includes(raw.type as PanelType)) return null;
   const p = newPanel(raw.type as PanelType, {
@@ -298,6 +306,7 @@ function readPanel(id: string, raw: unknown): Panel | null {
     p.hidden = str(raw.hidden, '');
     p.log = raw.log === true;
     p.legendShut = raw.legendShut === true;
+    p.theme = readTheme(raw.theme);
     p.paneWeights = str(raw.paneWeights, '');
     // A TPO panel from before TPO was a chart style keeps its weekly split, as
     // does a chart saved while TPO was an on/off switch.
@@ -391,8 +400,13 @@ export function validate(raw: unknown): WorkspaceDoc | null {
       timeframe: isObj(l) && isTimeframe(l.timeframe) ? l.timeframe : DEFAULT_TIMEFRAME,
     };
   }
+  // Chart colours were once one set for the workspace: a chart saved before they
+  // were its own starts from that set, so nothing changes colour on upgrade.
+  const all = readTheme(raw.theme);
   const theme: Record<string, string> = {};
-  if (isObj(raw.theme)) for (const [k, v] of Object.entries(raw.theme)) if (typeof v === 'string' && v.length <= 40) theme[k] = v;
+  const legacy: Record<string, string> = {};
+  for (const [k, v] of Object.entries(all)) (k.startsWith('ui.') ? theme : legacy)[k] = v;
+  for (const [id, p] of Object.entries(panels)) if (p.type === 'chart' && !isObj((raw.panels as Record<string, unknown>)[id] && (raw.panels as Record<string, Record<string, unknown>>)[id]!.theme)) p.theme = { ...legacy };
   const savedAt = Number(raw.savedAt);
   // Kept in the list's own order; a layout from before favourites has the usual ones.
   const timeframes = Array.isArray(raw.timeframes) ? TIMEFRAMES.map((t) => t.value).filter((tf) => (raw.timeframes as unknown[]).includes(tf)) : [...FAVORITE_TIMEFRAMES];

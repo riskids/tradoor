@@ -11,7 +11,7 @@ import { deviceZone, formatClock, LOCAL_ZONE, offsetMinutes, timeZone, zoneLabel
 import { MARK_ORDER, MARKS, markSpec } from '../lib/exchange-marks';
 import { Icon } from '../lib/icons';
 import { tabTitle } from '../lib/tab-title';
-import { CHART_EXTRAS, CHART_THEME, FONT_PX, UI_THEME } from '../lib/theme';
+import { UI_THEME } from '../lib/theme';
 import { stepTimeframe, TIMEFRAMES } from '../lib/timeframes';
 import { showAlertsPanel, startAlerts, unread } from '../lib/alerts';
 import { Toasts } from '../components/Toasts';
@@ -94,7 +94,7 @@ function commands(): Command[] {
       { group: 'Chart', label: 'Show all loaded history', run: () => chartControllers.get(chart.id)?.showRange(null) },
       { group: 'Chart style', label: 'Candles', run: () => patchPanel(chart.id, { tpo: '' }) },
       { group: 'Chart style', label: 'TPO settings…', run: () => setOverlay({ kind: 'tpoSettings', panelId: chart.id }) },
-      { group: 'Chart', label: 'Chart settings…', run: () => setOverlay({ kind: 'chartSettings' }) },
+      { group: 'Chart', label: 'Chart settings…', run: () => setOverlay({ kind: 'chartSettings', panelId: chart.id }) },
       ...TPO_SPLITS.map((split) => ({ group: 'Chart style', label: `TPO — split by ${split.label.toLowerCase()}`, run: () => patchPanel(chart.id, { tpo: split.value }) })),
     );
   }
@@ -248,7 +248,6 @@ function onKeyDown(e: KeyboardEvent): void {
 function applyTheme(): void {
   // The marks travel from here so the worker does not carry their artwork.
   send({ t: 'marks', list: MARK_ORDER.map((id, index) => ({ index, box: MARKS[id].box, spec: markSpec(MARKS[id]) })) });
-  for (const t of [...CHART_THEME, ...CHART_EXTRAS]) createEffect(() => send({ t: 'theme', key: t.name, value: doc.theme[t.name] ?? t.value }));
   // The zone's offset, again every minute: daylight saving moves it under a running page.
   createEffect(() => {
     const zone = timeZone();
@@ -256,16 +255,6 @@ function applyTheme(): void {
     push();
     const timer = setInterval(push, 60_000);
     onCleanup(() => clearInterval(timer));
-  });
-  createEffect(() => send({ t: 'theme', key: FONT_PX.name, value: doc.theme[FONT_PX.name] ?? FONT_PX.value }));
-  // The legend lies on the canvas, not the page: it takes the chart's colours once a theme changes them.
-  createEffect(() => {
-    const { background, text } = doc.theme;
-    const vars = { '--chart-bg': background, '--chart-text': text, '--chart-muted': text && `color-mix(in oklab, ${text} 65%, transparent)`, '--chart-dim': text && `color-mix(in oklab, ${text} 45%, transparent)` };
-    for (const [css, value] of Object.entries(vars)) {
-      if (value) document.documentElement.style.setProperty(css, value);
-      else document.documentElement.style.removeProperty(css);
-    }
   });
   for (const t of UI_THEME) {
     createEffect(() => {
@@ -380,7 +369,10 @@ function Overlays() {
           case 'settings':
             return <Settings onClose={closeOverlay} />;
           case 'chartSettings':
-            return <ChartSettings onClose={closeOverlay} />;
+            {
+            const panel = doc.panels[o.panelId] ?? detached[o.panelId];
+            return panel?.type === 'chart' ? <ChartSettings panel={panel} onClose={closeOverlay} /> : null;
+          }
           case 'help':
             return <Help onClose={closeOverlay} />;
           case 'layouts':
