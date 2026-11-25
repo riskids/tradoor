@@ -133,6 +133,14 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .linkbtn { display: flex; flex: none; color: var(--dim); opacity: 0.55; transition: opacity 0.1s, color 0.1s; }
 .linkbtn.linked { opacity: 1; }
 .linkbtn:hover { opacity: 1; color: var(--text); }
+.tabsbody { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.tabs.sidebar .tabstrip { flex-basis: 30px; height: 30px; opacity: 1; border-bottom: 1px solid var(--border); }
+.sidetitle { align-self: center; padding: 0 10px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.siderail { display: flex; flex-direction: column; align-items: center; flex: 0 0 40px; gap: 2px; padding: 6px 0; border-left: 1px solid var(--border); background: var(--surface-2); }
+.sidebtn { position: relative; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; color: var(--muted); }
+.sidebtn:hover { color: var(--text); background: var(--surface-3); }
+.sidebtn.active { color: var(--text); background: var(--surface-3); }
+.sidebtn .al-badge { position: absolute; top: 0; right: 0; margin: 0; }
 .panelbody { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .dropcover { position: absolute; inset: 0; z-index: 30; }
 .drophint { position: absolute; pointer-events: none; background: color-mix(in oklab, var(--primary) 16%, transparent); border: 1px solid var(--primary); }
