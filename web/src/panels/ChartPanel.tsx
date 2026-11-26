@@ -1385,7 +1385,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
               setAlertMenu({ id: over.alert.id, x: Math.max(0, Math.min(p.x, box.clientWidth - 200)), y: Math.max(0, Math.min(p.y, box.clientHeight - 80)) });
               return;
             }
-            setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 120)) });
+            setMenu({ x: Math.max(0, Math.min(p.x, box.clientWidth - 220)), y: Math.max(0, Math.min(p.y, box.clientHeight - 145)) });
           }}
         >
           <Show when={DEBUG}>
@@ -1628,6 +1628,15 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
                   }}
                 >
                   Draw a level<span class="dim">tool</span>
+                </button>
+                <button
+                  disabled={drawings().length === 0}
+                  onClick={() => {
+                    setMenu(null);
+                    void clearDrawings();
+                  }}
+                >
+                  Clear all drawings
                 </button>
               </div>
             )}
