@@ -1489,8 +1489,8 @@ impl Chart {
                 }
             }
         }
-        // The daily VWAP and its bands go behind the candles, so price reads over them.
-        for (index, study) in self.visible_studies().filter(|(_, s)| s.kind == StudyKind::Dvwap) {
+        // A VWAP and its bands go behind the candles, so price reads over them.
+        for (index, study) in self.visible_studies().filter(|(_, s)| matches!(s.kind, StudyKind::Dvwap | StudyKind::Wvwap)) {
             self.paint_study_lines(f, &price.scale, index, study, i0, i1, body);
         }
         for i in (i0..=i1).filter(|_| !tpo && !foot) {
@@ -1546,7 +1546,7 @@ impl Chart {
             let Some(pane) = self.panes.iter().find(|p| p.group == study.group) else { continue };
             f.clip(Some(pane.plot));
             self.paint_study_candles(f, &pane.scale, &study.candles, i0, i1, body);
-            if study.kind != StudyKind::Dvwap {
+            if !matches!(study.kind, StudyKind::Dvwap | StudyKind::Wvwap) {
                 self.paint_study_lines(f, &pane.scale, index, study, i0, i1, body);
             }
             for seg in &study.segments {
