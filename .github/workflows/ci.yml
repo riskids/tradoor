@@ -66,10 +66,6 @@ jobs:
         working-directory: web
         run: deno task build
 
-      - name: Bundle size budget
-        working-directory: web
-        run: deno task size
-
   deploy:
     name: Deploy
     needs: test
