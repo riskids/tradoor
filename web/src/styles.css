@@ -141,6 +141,13 @@ button:has(> svg) > span, .venue-name, .sig-score .div { text-box: trim-both cap
 .sidebtn:hover { color: var(--text); background: var(--surface-3); }
 .sidebtn.active { color: var(--text); background: var(--surface-3); }
 .sidebtn .al-badge { position: absolute; top: 0; right: 0; margin: 0; }
+/* Folded: the rail alone, as wide as it is. ponytail: only beside its
+   neighbours (a row split); stacked in a column the body empties and the
+   cell keeps its height — fold the column's own cell when that is wanted. */
+.tabs.shut > .tabstrip, .tabs.shut .panelbody { display: none; }
+.tabs.shut > .tabsbody { justify-content: flex-end; }
+.split.row > .cell:has(> .tabs.shut) { flex: 0 0 40px !important; }
+.split.row > .gutter:has(+ .cell > .tabs.shut), .split.row > .cell:has(> .tabs.shut) + .gutter { pointer-events: none; }
 .panelbody { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .dropcover { position: absolute; inset: 0; z-index: 30; }
 .drophint { position: absolute; pointer-events: none; background: color-mix(in oklab, var(--primary) 16%, transparent); border: 1px solid var(--primary); }

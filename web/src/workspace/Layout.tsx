@@ -11,7 +11,7 @@ import { symbolOf } from '../lib/markets';
 import { tfLabel } from '../lib/timeframes';
 import { ChartPanel } from '../panels/ChartPanel';
 import { WatchlistPanel } from '../panels/WatchlistPanel';
-import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, removePanel, setSizes, tabsOf, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
+import { activate, addPanel, LINK_COLORS, movePanel, newPanel, PANEL_TITLE, PANEL_TYPES, railPick, removePanel, setSizes, tabsOf, type DropZone, type LayoutNode, type Panel, type PanelType, type SplitNode, type TabsNode } from './model';
 import { doc, focusedPanelId, focusPanel, marketOf, setPanelLink, targetChart, timeframeOf, update } from './store';
 
 // Side panels, fetched when a layout shows one: the chart and watchlist come first.
@@ -268,7 +268,8 @@ function SplitView(props: { node: SplitNode }) {
             <Show when={i() > 0}>
               <div class="gutter" classList={{ active: active() === i() - 1 }} onPointerDown={(e) => startDrag(i() - 1, e)} />
             </Show>
-            <div class="cell" style={{ flex: `${sizes()[i()] ?? 1} 1 0` }}>
+            {/* Scaled: grow factors summing under one leave a gap, as they would beside a cell folded to its rail. */}
+            <div class="cell" style={{ flex: `${(sizes()[i()] ?? 1) * 1000} 1 0` }}>
               <NodeView node={child} />
             </div>
           </>
@@ -331,9 +332,12 @@ function TabsView(props: { node: TabsNode }) {
     const t = doc.panels[id]?.type;
     return t !== undefined && t !== 'chart' && (t as string) !== 'tpo';
   });
+  // Folded to the rail by a click on the showing panel's icon. Only a group
+  // that has a rail can be: one that lost it shows, or nothing could open it.
+  const shut = () => rail() && props.node.hidden === true;
 
   return (
-    <div class="tabs" classList={{ focused: focused(), solo: solo(), sidebar: rail() }} onPointerDown={() => focusPanel(props.node.active)}>
+    <div class="tabs" classList={{ focused: focused(), solo: solo(), sidebar: rail(), shut: shut() }} onPointerDown={() => focusPanel(props.node.active)}>
       <div
         class="tabstrip"
         classList={{ forced: adding() }}
@@ -384,7 +388,7 @@ function TabsView(props: { node: TabsNode }) {
       </div>
       <div class="tabsbody">
       <div class="panelbody">
-        <Show when={active()} keyed>
+        <Show when={!shut() && active()} keyed>
           {(panel) => <PanelView panel={panel} />}
         </Show>
         <Show when={dragging()}>
@@ -421,9 +425,10 @@ function RailButton(props: { id: string; tabs: TabsNode }) {
       {(p) => (
         <button
           class="sidebtn"
-          classList={{ active: props.tabs.active === props.id }}
+          classList={{ active: props.tabs.active === props.id && !props.tabs.hidden }}
+          aria-expanded={props.tabs.active === props.id && !props.tabs.hidden}
           draggable={true}
-          data-tip={`${panelTitle(p())} — middle-click to close, drag to dock elsewhere`}
+          data-tip={`${panelTitle(p())} — click again to hide, middle-click to close, drag to dock elsewhere`}
           onDragStart={(e) => {
             e.dataTransfer?.setData('text/plain', props.id);
             if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
@@ -431,7 +436,7 @@ function RailButton(props: { id: string; tabs: TabsNode }) {
           }}
           onDragEnd={() => setDragging(null)}
           onClick={() => {
-            if (props.tabs.active !== props.id) update((d) => activate(d, props.tabs.id, props.id));
+            update((d) => railPick(d, props.tabs.id, props.id));
             focusPanel(props.id);
           }}
           onAuxClick={(e) => {

@@ -156,6 +156,8 @@ export interface TabsNode {
   id: string;
   panels: string[];
   active: string;
+  /** A side group folded down to its icon rail; see `railPick`. */
+  hidden?: boolean;
 }
 
 export type LayoutNode = SplitNode | TabsNode;
@@ -364,7 +366,7 @@ function readNode(raw: unknown, panels: Record<string, Panel>, placed: Set<strin
     const ids = Array.isArray(raw.panels) ? raw.panels.filter((p): p is string => typeof p === 'string' && p in panels && !placed.has(p)) : [];
     for (const id of ids) placed.add(id);
     if (ids.length === 0) return null;
-    return { kind: 'tabs', id: raw.id, panels: ids, active: typeof raw.active === 'string' && ids.includes(raw.active) ? raw.active : ids[0]! };
+    return { kind: 'tabs', id: raw.id, panels: ids, active: typeof raw.active === 'string' && ids.includes(raw.active) ? raw.active : ids[0]!, hidden: raw.hidden === true };
   }
   if (raw.kind !== 'split' || !Array.isArray(raw.children)) return null;
   const rawSizes = Array.isArray(raw.sizes) ? raw.sizes : [];
@@ -487,6 +489,7 @@ function insert(doc: WorkspaceDoc, panelId: string, targetId: string | null, zon
   if (zone === 'center') {
     target.panels.push(panelId);
     target.active = panelId;
+    target.hidden = false;
     return;
   }
   const fresh: TabsNode = { kind: 'tabs', id: uid('tabs'), panels: [panelId], active: panelId };
@@ -544,7 +547,18 @@ export function movePanel(doc: WorkspaceDoc, panelId: string, targetId: string, 
 
 export function activate(doc: WorkspaceDoc, tabsId: string, panelId: string): void {
   const node = findNode(doc.root, tabsId);
-  if (node?.kind === 'tabs' && node.panels.includes(panelId)) node.active = panelId;
+  if (node?.kind !== 'tabs' || !node.panels.includes(panelId)) return;
+  node.active = panelId;
+  // Whatever asks for a panel wants to see it: a folded group opens.
+  node.hidden = false;
+}
+
+/** A click on the icon rail: the showing panel's own icon folds the group down to the rail, or opens it again; another's shows that panel. */
+export function railPick(doc: WorkspaceDoc, tabsId: string, panelId: string): void {
+  const node = findNode(doc.root, tabsId);
+  if (node?.kind !== 'tabs' || !node.panels.includes(panelId)) return;
+  node.hidden = node.active === panelId && !node.hidden;
+  node.active = panelId;
 }
 
 export function setSizes(doc: WorkspaceDoc, splitId: string, sizes: number[]): void {

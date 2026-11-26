@@ -19,3 +19,25 @@ Deno.test('remapStudyStyles renames keys of the old study id and leaves the rest
     'ema:50plus/ema': '#0000ff,,0',
   });
 });
+
+import { activate, defaultWorkspace, railPick, validate, type SplitNode, type TabsNode } from './model.ts';
+
+Deno.test('the rail folds a side group on its showing icon, and anything asking for a panel opens it', () => {
+  const d = defaultWorkspace();
+  const side = (d.root as SplitNode).children[2] as TabsNode;
+  const [first, second] = side.panels as [string, string];
+  railPick(d, side.id, first);
+  assertEquals(side.hidden, true);
+  // Folded survives a save and a load.
+  assertEquals(((validate(JSON.parse(JSON.stringify(d)))!.root as SplitNode).children[2] as TabsNode).hidden, true);
+  railPick(d, side.id, first);
+  assertEquals(side.hidden, false);
+  railPick(d, side.id, second);
+  assertEquals([side.active, side.hidden], [second, false]);
+  railPick(d, side.id, second);
+  railPick(d, side.id, first);
+  assertEquals([side.active, side.hidden], [first, false]);
+  railPick(d, side.id, first);
+  activate(d, side.id, second);
+  assertEquals([side.active, side.hidden], [second, false]);
+});
