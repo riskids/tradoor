@@ -40,7 +40,7 @@ import {
   timeframeOf,
   update,
 } from '../workspace/store';
-import { CAPTURE_KEY, chartControllers, closeOverlay, cycleMagnet, isTypingTarget, journalOpen, MAGNET_KEY, mobileMenu, overlay, panelSteps, setJournalOpen, setOverlay, setTrainingOpen, TOOL_KEYS, TRAINING_CHART, trainingOpen } from './ui';
+import { CAPTURE_KEY, chartControllers, closeOverlay, isTypingTarget, journalOpen, MAGNET_KEY, mobileMenu, overlay, panelSteps, setJournalOpen, setMagnetHeld, setOverlay, setTrainingOpen, toggleMagnet, TOOL_KEYS, TRAINING_CHART, trainingOpen } from './ui';
 
 // Dialogs opened now and then load when first opened: nobody needs them to see a chart.
 const SymbolSearch = lazy(() => import('../components/SymbolSearch').then((m) => ({ default: m.SymbolSearch })));
@@ -167,7 +167,7 @@ function onKeyDown(e: KeyboardEvent): void {
     const code = e.code || (/^[a-z]$/i.test(e.key) ? `Key${e.key.toUpperCase()}` : '');
     if (code === MAGNET_KEY) {
       e.preventDefault();
-      cycleMagnet();
+      toggleMagnet();
       return;
     }
     const kind = TOOL_KEYS[code];
@@ -430,6 +430,9 @@ export function App() {
     }
     addEventListener('keydown', onKeyDown);
     addEventListener('contextmenu', onContextMenu);
+    // Ctrl or ⌘ held turns the magnet the other way round. A window left with
+    // the key down never hears it come up, so leaving lets go of it.
+    for (const type of ['keydown', 'keyup', 'blur'] as const) addEventListener(type, (e) => setMagnetHeld(!!((e as KeyboardEvent).ctrlKey || (e as KeyboardEvent).metaKey)));
     // An error nobody caught is said, not swallowed: in an update it also ends
     // the rest of that update, and a phone has no console to read it in.
     const told = new Set<string>();

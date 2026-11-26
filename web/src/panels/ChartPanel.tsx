@@ -4,7 +4,7 @@
  * pointer input.
  */
 import { batch, createEffect, createMemo, createSignal, For, type JSX, lazy, on, onCleanup, onMount, Show, untrack } from 'solid-js';
-import { chartControllers, covered, cycleMagnet, magnet, mobile, setMobileMenu, setOverlay, setShownPattern, shownPattern, TOOL_KEYS, type ShownPattern } from '../app/ui';
+import { chartControllers, covered, magnet, magnetMode, mobile, setMagnet, setMagnetHeld, setMobileMenu, setOverlay, setShownPattern, shownPattern, toggleMagnet, TOOL_KEYS, type ShownPattern } from '../app/ui';
 import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } from '../engine/client';
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
@@ -101,9 +101,9 @@ const toolTip = (t: { kind: string; title: string }): string => {
 };
 
 const MAGNET_TIP: Record<MagnetMode, string> = {
-  off: 'Magnet off (Alt+G) — click for a weak magnet, or hold Ctrl while drawing for one',
-  weak: 'Weak magnet (Alt+G) — anchors near a bar take its open, high, low or close; elsewhere a whole tick. Click for strong',
-  strong: 'Strong magnet (Alt+G) — anchors always take the nearest open, high, low or close. Click to turn it off',
+  off: 'Magnet off (Alt+G) — hold Ctrl or ⌘ to draw with it',
+  weak: 'Weak magnet (Alt+G) — anchors near a bar take its open, high, low or close',
+  strong: 'Strong magnet (Alt+G) — anchors always take the nearest open, high, low or close',
 };
 
 /** What each click is for, in order — on a position tool the order is the meaning. */
@@ -269,7 +269,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   useDismiss(flyout, () => setFlyout(null));
   const openFlyout = (id: string, anchor: HTMLElement) => {
     const r = anchor.getBoundingClientRect();
-    const n = GROUPS.find((g) => g.id === id)?.kinds.length ?? 0;
+    const n = GROUPS.find((g) => g.id === id)?.kinds.length ?? 2;
     setFlyout((v) => (v?.id === id ? null : { id, x: (anchor.closest('.rail') ?? anchor).getBoundingClientRect().right + 2, y: Math.max(4, Math.min(r.top, innerHeight - n * 36 - 16)) }));
   };
   createEffect(() => {
@@ -286,6 +286,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   const toolTipFor = (t: Tool) => (t.kind !== '' && offline() ? `${t.title.split(' — ')[0]} — unavailable: drawings are saved on the tradoor server (${offline()})` : toolTip(t));
 
   let box!: HTMLDivElement;
+  let magnetAnchor!: HTMLDivElement;
   let tpoButton!: HTMLButtonElement;
 
   // The panel's canvases and engine slot outlive this mount: see holdChart.
@@ -423,7 +424,9 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   const pointer = (kind: PointerKind, e: MouseEvent) => {
     const p = local(e);
     const touch = 'pointerType' in e && (e as PointerEvent).pointerType === 'touch';
-    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, touch });
+    // The key may have gone down or come up while another window had the keyboard.
+    setMagnetHeld(e.ctrlKey || e.metaKey);
+    send({ t: 'pointer', id: sid, kind, x: p.x, y: p.y, button: e.button, shift: e.shiftKey, touch });
   };
 
   // ---- hold: one finger kept still is the crosshair, as in TradingView's app.
@@ -1238,9 +1241,28 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
             }}
           </For>
           <hr />
-          <button class="magnet" classList={{ on: magnet() !== 'off', strong: magnet() === 'strong' }} data-tip={MAGNET_TIP[magnet()]} onClick={cycleMagnet}>
-            <Icon name="magnet" />
-          </button>
+          <div class="rg" ref={magnetAnchor}>
+            <button class="magnet" classList={{ on: magnet() !== 'off', strong: magnet() === 'strong' }} data-tip={MAGNET_TIP[magnet()]} onClick={toggleMagnet}>
+              <Icon name="magnet" />
+            </button>
+            <button class="rg-more" aria-label="Weak or strong magnet" aria-haspopup="menu" aria-expanded={flyout()?.id === 'magnet'} onPointerDown={(e) => e.stopPropagation()} onClick={() => openFlyout('magnet', magnetAnchor)}>
+              <Icon name="chevronRight" size={10} stroke={2.4} />
+            </button>
+          </div>
+          <Show when={flyout()?.id === 'magnet' ? flyout() : null}>
+            {(f) => (
+              <div class="rail-flyout menu" role="menu" style={{ left: `${f().x}px`, top: `${f().y}px` }} onPointerDown={(e) => e.stopPropagation()}>
+                <For each={['weak', 'strong'] as const}>
+                  {(mode) => (
+                    <button role="menuitem" classList={{ on: magnetMode() === mode }} onClick={() => (setMagnet(mode), setFlyout(null))}>
+                      <Icon name="magnet" />
+                      <span class="rf-name">{MAGNET_TIP[mode].split(' (')[0]}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            )}
+          </Show>
           <hr />
           <button disabled={(moved(), !history.canUndo)} data-tip="Undo (Ctrl Z)" onClick={undo}>
             <Icon name="undo" />
