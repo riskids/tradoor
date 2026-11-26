@@ -72,21 +72,28 @@ export const TRAINING_CHART = 'training-chart';
 /** The workspace is under one of them: unseen, its charts stop drawing and its panels are not laid out. */
 export const covered = (): boolean => journalOpen() || trainingOpen();
 
-/** Alt + this key turns the magnet through off, weak and strong. */
+/** Alt + this key turns the magnet on and off. */
 export const MAGNET_KEY = 'KeyG';
 /** Alt + this key copies a picture of the chart; with shift, saves the file. */
 export const CAPTURE_KEY = 'KeyK';
 
-/** The drawing magnet, one setting for every chart, remembered by this browser. */
-const MAGNETS: readonly MagnetMode[] = ['off', 'weak', 'strong'];
+/** The drawing magnet, as on TradingView: on or off, and weak or strong when on.
+ *  One setting for every chart, remembered by this browser. */
 const storedMagnet = readPref('magnet');
-export const [magnet, setMagnetSignal] = createSignal<MagnetMode>(MAGNETS.includes(storedMagnet as MagnetMode) ? (storedMagnet as MagnetMode) : 'off');
+const [magnetOn, setMagnetOn] = createSignal(storedMagnet === 'weak' || storedMagnet === 'strong');
+/** How hard it pulls when on: the one last picked, kept while it is off. */
+export const [magnetMode, setMagnetMode] = createSignal<Exclude<MagnetMode, 'off'>>((readPref('magnetMode') ?? storedMagnet) === 'strong' ? 'strong' : 'weak');
+/** Ctrl or ⌘ held: the magnet is the other way round for as long as it is. */
+export const [magnetHeld, setMagnetHeld] = createSignal(false);
+/** What pulls anchors now. */
+export const magnet = (): MagnetMode => (magnetOn() !== magnetHeld() ? magnetMode() : 'off');
 export function setMagnet(mode: MagnetMode): void {
-  setMagnetSignal(mode);
+  setMagnetOn(mode !== 'off');
+  if (mode !== 'off') setMagnetMode(mode);
   writePref('magnet', mode);
+  writePref('magnetMode', magnetMode());
 }
-/** Off, weak, strong, off again. */
-export const cycleMagnet = (): void => setMagnet(MAGNETS[(MAGNETS.indexOf(magnet()) + 1) % MAGNETS.length]!);
+export const toggleMagnet = (): void => setMagnet(magnetOn() ? 'off' : magnetMode());
 
 /** A pattern the Signal panel opened, drawn on the charts of its market until
  *  it is closed or kept (ChartPanel). Shown, not saved. */

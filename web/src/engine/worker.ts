@@ -817,10 +817,9 @@ class Slot {
     post({ t: 'status', id: this.id, value: next });
   }
 
-  pointer(kind: PointerKind, x: number, y: number, button: number, shift = false, ctrl = false, touch = false): void {
+  pointer(kind: PointerKind, x: number, y: number, button: number, shift = false, touch = false): void {
     const e = this.engine;
     e.set_shift(shift);
-    e.set_ctrl(ctrl);
     e.set_touch(touch);
     if (kind === 'move') e.pointer_move(x, y);
     else if (kind === 'down') e.pointer_down(x, y, button);
@@ -1186,7 +1185,7 @@ function handle(msg: ToWorker): void {
       slot.engine.show_range(msg.days ?? Number.NaN);
       break;
     case 'pointer':
-      slot.pointer(msg.kind, msg.x, msg.y, msg.button, msg.shift, msg.ctrl, msg.touch);
+      slot.pointer(msg.kind, msg.x, msg.y, msg.button, msg.shift, msg.touch);
       break;
     case 'wheel':
       slot.engine.wheel(msg.x, msg.y, msg.dx, msg.dy);
