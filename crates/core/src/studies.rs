@@ -4,7 +4,7 @@
 //! scales is how RSI ends up a flat line beside a MACD measured in dollars.
 
 use crate::indicators::{self, Series};
-use crate::time::{weekday, week_index, month_index, year_of, DAY, HOUR};
+use crate::time::{weekday, week_index, month_index, year_of, DAY, HOUR, WEEK};
 use crate::Candle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +22,7 @@ pub enum StudyKind {
     OpenInterest,
     Flow,
     Dvwap,
+    Wvwap,
     Delta,
     VolCandle,
 }
@@ -42,6 +43,7 @@ impl StudyKind {
             Self::OpenInterest => "oi",
             Self::Flow => "flow",
             Self::Dvwap => "dvwap",
+            Self::Wvwap => "wvwap",
             Self::Delta => "delta",
             Self::VolCandle => "volcandle",
         }
@@ -93,7 +95,7 @@ const fn p(name: &'static str, default: u32, min: u32, max: u32) -> StudyParam {
     StudyParam { name, default, min, max }
 }
 
-pub static STUDIES: [StudyDefinition; 15] = [
+pub static STUDIES: [StudyDefinition; 16] = [
     StudyDefinition { kind: StudyKind::Ema, name: "Exponential Moving Average", short: "EMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Average close, weighted towards recent bars." },
     StudyDefinition { kind: StudyKind::Sma, name: "Simple Moving Average", short: "SMA", group: Group::Price, params: &[p("length", 50, 2, 1000)], about: "Plain average of the last N closes — every bar in the window counts the same." },
     StudyDefinition { kind: StudyKind::Bb, name: "Bollinger Bands", short: "BB", group: Group::Price, params: &[p("length", 20, 2, 1000), p("mult", 2, 1, 10)], about: "An SMA with a band at N standard deviations. Narrow bands mark the quiet before an expansion." },
@@ -103,6 +105,7 @@ pub static STUDIES: [StudyDefinition; 15] = [
     StudyDefinition { kind: StudyKind::KeyLevels, name: "Historical Key Levels", short: "Key Levels", group: Group::Price, params: &[], about: "Weekly, monthly and yearly opens plus Monday’s high and low — the prices the week is measured against." },
     StudyDefinition { kind: StudyKind::Avwap, name: "Anchored VWAP (S/W/M/Y)", short: "Multi-VWAP", group: Group::Price, params: &[], about: "Volume-weighted average price since the session, week, month and year opened. The session line is drawn on intraday charts only." },
     StudyDefinition { kind: StudyKind::Dvwap, name: "Daily VWAP", short: "VWAP", group: Group::Price, params: &[p("s1", 1, 1, 5), p("s2", 2, 1, 5), p("s3", 3, 1, 5)], about: "Session VWAP from 00:00 UTC with bands at one, two and three standard deviations." },
+    StudyDefinition { kind: StudyKind::Wvwap, name: "Weekly VWAP", short: "Weekly VWAP", group: Group::Price, params: &[p("s1", 1, 1, 5), p("s2", 2, 1, 5), p("s3", 3, 1, 5)], about: "VWAP anchored to Monday 00:00 UTC, with bands at one, two and three standard deviations. Drawn on timeframes shorter than a week." },
     StudyDefinition { kind: StudyKind::SwingMap, name: "Range Swing Structure Map", short: "Swings", group: Group::Price, params: &[p("left", 5, 1, 100), p("right", 5, 1, 100)], about: "Zigzag of confirmed pivots tagged HH/HL/LH/LL, with each leg’s move and duration, and the averages across the window." },
     StudyDefinition {
         kind: StudyKind::Flow,
@@ -401,7 +404,8 @@ pub fn compute_study_with(spec: &StudySpec, candles: &[Candle], inputs: &StudyIn
         StudyKind::Atr => study.lines.push(StudyLine::line("atr", label, indicators::atr(candles, param(0)))),
         StudyKind::KeyLevels => (study.lines, study.segments) = key_levels(candles, inputs.days),
         StudyKind::Avwap => study.lines = anchored_vwap(candles),
-        StudyKind::Dvwap => study.lines = daily_vwap(candles, [param(0) as f64, param(1) as f64, param(2) as f64]),
+        StudyKind::Dvwap => study.lines = anchored_vwap_bands(candles, [param(0) as f64, param(1) as f64, param(2) as f64], |ms| ms.div_euclid(DAY), DAY, "#2962ff"),
+        StudyKind::Wvwap => study.lines = anchored_vwap_bands(candles, [param(0) as f64, param(1) as f64, param(2) as f64], week_index, WEEK, "#ffa726"),
         StudyKind::SwingMap => (study.lines, study.markers, study.stats) = swing_map(candles, param(0), param(1)),
         StudyKind::Delta => study.lines = volume_delta(candles),
         StudyKind::OpenInterest => {
@@ -805,18 +809,19 @@ fn anchored_vwap(candles: &[Candle]) -> Vec<StudyLine> {
     ]
 }
 
-/// Session VWAP from 00:00 UTC, with bands at `mults` standard deviations —
-/// what a reader reaches for instead of TradingView's built-in VWAP. Empty on
-/// daily+ timeframes, same as `anchored_vwap`'s session line.
-fn daily_vwap(candles: &[Candle], mults: [f64; 3]) -> Vec<StudyLine> {
+/// VWAP restarting whenever `period` changes (session day, week), with bands at
+/// `mults` standard deviations — what a reader reaches for instead of
+/// TradingView's built-in VWAP. Empty when bars are `span` or longer, same as
+/// `anchored_vwap`'s session line.
+fn anchored_vwap_bands(candles: &[Candle], mults: [f64; 3], period: fn(i64) -> i64, span: i64, color: &'static str) -> Vec<StudyLine> {
     let n = candles.len();
-    let intraday = n >= 2 && candles[1].open_time - candles[0].open_time < DAY;
+    let intraday = n >= 2 && candles[1].open_time - candles[0].open_time < span;
     let mut vwap = vec![None; n];
     let mut bands: [(Vec<Option<f64>>, Vec<Option<f64>>); 3] = std::array::from_fn(|_| (vec![None; n], vec![None; n]));
     if intraday {
         let (mut day, mut sum_pv, mut sum_v, mut sum_pv2) = (None, 0.0f64, 0.0f64, 0.0f64);
         for (i, c) in candles.iter().enumerate() {
-            let today = c.open_time.div_euclid(DAY);
+            let today = period(c.open_time);
             if day != Some(today) {
                 day = Some(today);
                 (sum_pv, sum_v, sum_pv2) = (0.0, 0.0, 0.0);
@@ -842,7 +847,7 @@ fn daily_vwap(candles: &[Candle], mults: [f64; 3]) -> Vec<StudyLine> {
     let band = |key, label: &str, values, color| StudyLine { color: Some(color), badge: false, ..StudyLine::line(key, label.to_string(), values) };
     let upper_band = |key, label: &str, values, color, fill_to| StudyLine { fill_to: Some(fill_to), ..band(key, label, values, color) };
     vec![
-        StudyLine { color: Some("#2962ff"), width: 1.5, ..StudyLine::line("vwap", "VWAP".to_string(), vwap) },
+        StudyLine { color: Some(color), width: 1.5, ..StudyLine::line("vwap", "VWAP".to_string(), vwap) },
         upper_band("u1", "+1σ", u1, "#9598a1", "l1"),
         band("l1", "-1σ", l1, "#9598a1"),
         upper_band("u2", "+2σ", u2, "#787b86", "l2"),
@@ -1138,6 +1143,21 @@ mod tests {
         // Next day resets the accumulator: vwap is just the bar's own typical price.
         assert_eq!(vwap[3], Some(300.0));
         assert_eq!(l1[3], Some(300.0), "a single-bar period has zero variance");
+    }
+
+    #[test]
+    fn weekly_vwap_resets_on_monday_and_skips_weekly_bars() {
+        let t0 = parse_iso("2026-08-03").unwrap(); // a Monday
+        let bar = |open_time, price: f64, volume| Candle { open_time, open: price, high: price, low: price, close: price, volume, quote_volume: None, taker_buy_volume: None };
+        let candles = vec![bar(t0, 100.0, 1.0), bar(t0 + DAY, 200.0, 1.0), bar(t0 + 6 * DAY, 300.0, 1.0), bar(t0 + 7 * DAY, 50.0, 4.0)];
+        let study = compute_study(&parse_studies("wvwap", 12)[0], &candles);
+        let vwap = line(&study, "vwap");
+        assert_eq!(vwap[1], Some(150.0), "the day bars of one week share a VWAP");
+        assert_eq!(vwap[2], Some(200.0));
+        assert_eq!(vwap[3], Some(50.0), "Monday resets it");
+
+        let weekly = series("2026-08-03", 4, WEEK, |_| (None, Some(100.0), Some(100.0), Some(100.0), None));
+        assert!(line(&compute_study(&parse_studies("wvwap", 12)[0], &weekly), "vwap").iter().all(Option::is_none));
     }
 
     #[test]
