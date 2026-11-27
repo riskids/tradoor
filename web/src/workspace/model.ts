@@ -49,7 +49,7 @@ export const PANEL_TITLE: Record<PanelType, string> = { chart: 'Chart', watchlis
 
 interface PanelBase {
   id: string;
-  /** Linked panels read and write their group's market and timeframe. */
+  /** Linked panels read and write their group's market; the timeframe is each panel's own. */
   link: LinkColor | null;
   market: string;
   timeframe: string;
@@ -164,7 +164,6 @@ export type LayoutNode = SplitNode | TabsNode;
 
 export interface LinkState {
   market: string;
-  timeframe: string;
 }
 
 export interface WorkspaceDoc {
@@ -263,7 +262,7 @@ export function defaultWorkspace(): WorkspaceDoc {
   const alerts = newPanel('alerts', group);
   const liquidations = newPanel('liquidations', group);
   const links = {} as Record<LinkColor, LinkState>;
-  for (const c of LINK_COLORS) links[c] = { market: DEFAULT_MARKET, timeframe: DEFAULT_TIMEFRAME };
+  for (const c of LINK_COLORS) links[c] = { market: DEFAULT_MARKET };
   return {
     v: 1,
     name: 'Default',
@@ -397,10 +396,10 @@ export function validate(raw: unknown): WorkspaceDoc | null {
   const links = {} as Record<LinkColor, LinkState>;
   for (const c of LINK_COLORS) {
     const l = isObj(raw.links) ? raw.links[c] : null;
-    links[c] = {
-      market: isObj(l) && isChartMarket(l.market) ? l.market : DEFAULT_MARKET,
-      timeframe: isObj(l) && isTimeframe(l.timeframe) ? l.timeframe : DEFAULT_TIMEFRAME,
-    };
+    links[c] = { market: isObj(l) && isChartMarket(l.market) ? l.market : DEFAULT_MARKET };
+    // A link group once held its panels' timeframe too: a panel saved then opens
+    // on the one it was showing. Written back without it, so this runs once.
+    if (isObj(l) && isTimeframe(l.timeframe)) for (const p of Object.values(panels)) if (p.link === c) p.timeframe = l.timeframe;
   }
   // Chart colours were once one set for the workspace: a chart saved before they
   // were its own starts from that set, so nothing changes colour on upgrade.

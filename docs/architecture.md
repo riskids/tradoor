@@ -194,8 +194,8 @@ instantly and offline, and on the server so it follows the reader. Whichever
 copy changed last wins. The local copy is stamped with the browser id that
 saved it (or with the session's start, once signed in): taking another browser's id (Settings) asks for their layout, so a
 copy stamped for someone else is not opened with — it would show the wrong
-workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market and
-timeframe; a watchlist that is not linked drives the last chart used. The
+workspace and, being the newer of the two, save it over the one asked for. Panels in a link group share one market; the
+timeframe is each panel's own. A watchlist that is not linked drives the last chart used. The
 timeframes starred in a chart's timeframe menu are the buttons on every chart's
 bar (`WorkspaceDoc.timeframes`, kept with the layout).
 
