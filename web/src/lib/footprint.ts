@@ -5,14 +5,18 @@
  * on BTC, a tenth on ETH. A chart showing five-minute bars wants five of those
  * minutes added together, and a chart zoomed out wants the levels added too:
  * forty rows in a bar three pixels wide is a smudge, not a reading. Both are
- * sums, which is why the fine grain is what is stored.
+ * sums, which is why the fine grain is what is stored — and why the rows are
+ * sent fine and the chart joins them as it zooms out.
  */
 import { api } from './api';
 
-/** A bar's levels: price, coins bought, coins sold — lowest price first. */
+/** A bar's levels — price, coins bought, coins sold, lowest price first — and
+ *  the most and least its delta reached from the open, at each minute's close. */
 export interface Levels {
   time: number;
   levels: [number, number, number][];
+  maxDelta: number;
+  minDelta: number;
 }
 
 /** The bars in a range, and the price one row of them covers. */
@@ -20,12 +24,13 @@ export interface Footprint {
   bars: Levels[];
   /** The same for every bar: a row must read straight across the screen. */
   grid: number;
+  /** Whether the chart may join rows as it zooms out: the reader set no row size. */
+  fitted: boolean;
 }
 
-/** Rows a bar is worth drawing at most; past this the levels are added up.
- *  Thirty of them at a chart's height is a row of some ten pixels, which is
- *  what it takes for the numbers in a cell to be read at all. */
-const MAX_ROWS = 30;
+/** Rows a typical bar is sent at most when the chart fits them to its zoom:
+ *  fine enough to split rows zoomed in, few enough to send every few seconds. */
+const MAX_FINE_ROWS = 200;
 
 /** What the reader chose: how many ticks a row covers, and in what unit. */
 export interface Settings {
@@ -45,6 +50,10 @@ export function recordedMarkets(): Promise<Map<string, number>> {
   return recorded;
 }
 
+/** Bars of an hour or more that divide a day are added up by the server from
+ *  the hours it keeps for good — months of them, where minutes go after one. */
+export const fromHours = (barMs: number): boolean => barMs >= 3_600_000 && barMs % 3_600_000 === 0 && 86_400_000 % barMs === 0;
+
 /** Minutes one request may carry; a longer range is asked for in pages. */
 const PAGE_MINUTES = 1_440;
 /** Pages one fetch will ask for: a week of minutes, which is plenty of screen. */
@@ -58,24 +67,29 @@ const MAX_PAGES = 7;
  * The server hands out a day of minutes at a time, so a longer range is asked
  * for in pages: a chart of fifteen-minute bars covers a day in a screenful.
  */
-export async function fetchFootprint(market: string, barMs: number, from: number, to: number, settings: Settings = { ticks: 0, unit: 'coins' }): Promise<Footprint> {
+export async function fetchFootprint(market: string, barMs: number, from: number, to: number, settings: Settings = { ticks: 0, unit: 'coins' }, maxPages = MAX_PAGES): Promise<Footprint> {
+  // The server's answer is the footprint as the chart takes it.
+  if (fromHours(barMs)) return api.footprintHistory(market, from, to, barMs, settings.unit, settings.ticks);
   const pages: Promise<{ tick: number; bars: { at: number; levels: [number, number, number][] }[] }>[] = [];
   const page = PAGE_MINUTES * 60_000;
-  for (let start = Math.max(from, to - MAX_PAGES * page); start < to; start += page) {
+  for (let start = Math.max(from, to - maxPages * page); start < to; start += page) {
     pages.push(api.footprint(market, start, Math.min(start + page - 1, to)));
   }
   const answers = await Promise.all(pages);
   const tick = answers.find((a) => a.tick > 0)?.tick ?? 1;
-  const bars = answers.flatMap((a) => a.bars);
+  const minutes = answers.flatMap((a) => a.bars).sort((a, b) => a.at - b.at);
   const byBar = new Map<number, Map<number, [number, number]>>();
-  for (const bar of bars) {
-    const at = Math.floor(bar.at / barMs) * barMs;
+  // The delta as the bar went, minute by minute, and the most and least it reached.
+  const swings = new Map<number, { delta: number; max: number; min: number }>();
+  for (const minute of minutes) {
+    const at = Math.floor(minute.at / barMs) * barMs;
     let levels = byBar.get(at);
     if (!levels) {
       levels = new Map();
       byBar.set(at, levels);
     }
-    for (const [price, buy, sell] of bar.levels) {
+    let delta = 0;
+    for (const [price, buy, sell] of minute.levels) {
       const step = Math.round(price / tick);
       const held = levels.get(step);
       if (held) {
@@ -84,7 +98,13 @@ export async function fetchFootprint(market: string, barMs: number, from: number
       } else {
         levels.set(step, [buy, sell]);
       }
+      delta += (buy - sell) * (settings.unit === 'usd' ? price : 1);
     }
+    const swing = swings.get(at) ?? { delta: 0, max: 0, min: 0 };
+    swing.delta += delta;
+    swing.max = Math.max(swing.max, swing.delta);
+    swing.min = Math.min(swing.min, swing.delta);
+    swings.set(at, swing);
   }
   // One grouping for the lot, taken from a bar in the middle of the pack
   // rather than the wildest one: a single violent minute in the day would
@@ -97,13 +117,16 @@ export async function fetchFootprint(market: string, barMs: number, from: number
     })
     .sort((a, b) => a - b);
   const typical = spans.length > 0 ? spans[Math.floor(spans.length * 0.8)]! : 0;
-  let by = Math.max(1, Math.round(settings.ticks) || 1);
-  while (typical / by > MAX_ROWS) by = coarser(by);
+  // A row size the reader set is theirs; left to fit, the chart joins these rows as it zooms out.
+  const fitted = !(settings.ticks > 0);
+  let by = fitted ? 1 : Math.round(settings.ticks);
+  while (fitted && typical / by > MAX_FINE_ROWS) by = coarser(by);
   return {
     grid: by * tick,
+    fitted,
     bars: [...byBar.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([time, levels]) => ({ time, levels: group(levels, tick, by, settings) })),
+      .map(([time, levels]) => ({ time, levels: group(levels, tick, by, settings), maxDelta: swings.get(time)?.max ?? 0, minDelta: swings.get(time)?.min ?? 0 })),
   };
 }
 
@@ -138,11 +161,12 @@ function coarser(by: number): number {
   return (head < 2 ? 2 : head < 5 ? 5 : 10) * power;
 }
 
-/** The flat array the engine reads: per bar, its time, its row count, its rows. */
+/** The flat array the engine reads: per bar, its time, its row count, the most
+ *  and least its delta reached, its rows. */
 export function flatten(bars: Levels[]): Float64Array {
   const flat: number[] = [];
   for (const bar of bars) {
-    flat.push(bar.time, bar.levels.length);
+    flat.push(bar.time, bar.levels.length, bar.maxDelta, bar.minDelta);
     for (const [price, buy, sell] of bar.levels) flat.push(price, buy, sell);
   }
   return Float64Array.from(flat);
