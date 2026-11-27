@@ -41,3 +41,23 @@ Deno.test('generated ids are valid and unique-looking', () => {
   }
   if (!layoutIdFor('HTF White').startsWith('htf-white-')) throw new Error('slug first');
 });
+
+import { doc, marketOf, setPanelMarket, setPanelTimeframe, timeframeOf } from './store.ts';
+
+Deno.test('a timeframe is set on one panel alone, though its link group still shares the market', () => {
+  const [a, b] = Object.values(doc.panels).filter((p) => p.type === 'chart');
+  assert(a && b && a.link && a.link === b.link, 'the default layout links its two charts');
+  const before = timeframeOf(b);
+  const next = before === '4h' ? '1h' : '4h';
+  // Every change schedules a save; nothing is to be written from a test.
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = (() => 0) as unknown as typeof setTimeout;
+  try {
+    setPanelTimeframe(a.id, next);
+    assertEquals([timeframeOf(a), timeframeOf(b)], [next, before]);
+    setPanelMarket(a.id, 'bybit-perp:ETHUSDT');
+    assertEquals(marketOf(b), 'bybit-perp:ETHUSDT');
+  } finally {
+    globalThis.setTimeout = timeout;
+  }
+});

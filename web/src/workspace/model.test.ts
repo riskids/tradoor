@@ -41,3 +41,17 @@ Deno.test('the rail folds a side group on its showing icon, and anything asking 
   activate(d, side.id, second);
   assertEquals([side.active, side.hidden], [second, false]);
 });
+
+Deno.test('a link group shares the market only: a layout saved while it held the timeframe too opens as it showed', () => {
+  const d = defaultWorkspace();
+  const [a, b] = Object.values(d.panels).filter((p) => p.type === 'chart');
+  assertEquals([a!.link, b!.link], ['green', 'green']);
+  b!.link = null;
+  b!.timeframe = '15m';
+  const old = { ...d, links: { ...d.links, green: { market: d.links.green.market, timeframe: '4h' } } };
+  const read = validate(JSON.parse(JSON.stringify(old)))!;
+  assertEquals(read.panels[a!.id]!.timeframe, '4h', 'a linked panel showed its group’s');
+  assertEquals(read.panels[b!.id]!.timeframe, '15m', 'an unlinked one its own');
+  assertEquals(read.links.green, { market: d.links.green.market });
+  assertEquals(validate(JSON.parse(JSON.stringify(read)))!.panels[a!.id]!.timeframe, '4h');
+});

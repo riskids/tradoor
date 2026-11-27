@@ -80,7 +80,8 @@ export function targetChart(): ChartPanelState | null {
 }
 
 export const marketOf = (p: Panel): string => (p.link ? doc.links[p.link].market : p.market);
-export const timeframeOf = (p: Panel): string => (p.link ? doc.links[p.link].timeframe : p.timeframe);
+/** A panel's timeframe is its own: a link group shares the market only. */
+export const timeframeOf = (p: Panel): string => p.timeframe;
 
 // ---------------------------------------------------------------- changes
 
@@ -169,11 +170,8 @@ export function setPanelTimeframe(id: string, timeframe: string): void {
     if (detached[id].timeframe !== timeframe) setDetached(id, 'timeframe', timeframe);
     return;
   }
-  if (!p || timeframeOf(p) === timeframe) return;
-  batch(() => {
-    if (p.link) setDoc('links', p.link, 'timeframe', timeframe);
-    setDoc('panels', id, 'timeframe', timeframe);
-  });
+  if (!p || p.timeframe === timeframe) return;
+  setDoc('panels', id, 'timeframe', timeframe);
   touched();
 }
 
@@ -185,18 +183,13 @@ export function toggleFavoriteTimeframe(timeframe: string): void {
   });
 }
 
-/** Joining a group adopts the group's market and timeframe. */
+/** Joining a group adopts the group's market; the timeframe stays the panel's own. */
 export function setPanelLink(id: string, color: LinkColor | null): void {
   const p = doc.panels[id];
   if (!p) return;
   batch(() => {
-    if (color) {
-      setDoc('panels', id, 'market', doc.links[color].market);
-      setDoc('panels', id, 'timeframe', doc.links[color].timeframe);
-    } else if (p.link) {
-      setDoc('panels', id, 'market', doc.links[p.link].market);
-      setDoc('panels', id, 'timeframe', doc.links[p.link].timeframe);
-    }
+    if (color) setDoc('panels', id, 'market', doc.links[color].market);
+    else if (p.link) setDoc('panels', id, 'market', doc.links[p.link].market);
     setDoc('panels', id, 'link', color);
   });
   touched();
