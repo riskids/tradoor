@@ -4,6 +4,8 @@
 //! by interpolating over the candle times, which is what keeps a line drawn
 //! across a weekend touching the same two wicks — a fixed bar duration cannot.
 
+use crate::drawings::DrawingKind;
+
 pub type Pt = (f32, f32);
 
 /// Where `time` sits on the logical axis. Past either end the nearest gap is
@@ -77,26 +79,28 @@ pub fn distance_to_rect(p: Pt, a: Pt, b: Pt) -> f32 {
 /// A few pixels of slack at a ray's or fib's starting edge.
 const HANDLE_SLACK: f32 = 4.0;
 
-pub fn distance_to_drawing(kind: &str, points: &[Pt], cursor: Pt, fib_levels: &[f64]) -> f32 {
+pub fn distance_to_drawing(kind: DrawingKind, points: &[Pt], cursor: Pt, fib_levels: &[f64]) -> f32 {
     let Some(&a) = points.first() else { return f32::INFINITY };
     match kind {
-        "horizontal" => return (cursor.1 - a.1).abs(),
-        "ray" => return if cursor.0 >= a.0 - HANDLE_SLACK { (cursor.1 - a.1).abs() } else { f32::INFINITY },
-        "text" => return (cursor.0 - a.0).hypot(cursor.1 - a.1),
-        "path" | "brush" => return points.windows(2).map(|w| distance_to_segment(cursor, w[0], w[1])).fold(f32::INFINITY, f32::min),
+        DrawingKind::Horizontal => return (cursor.1 - a.1).abs(),
+        DrawingKind::Vertical => return (cursor.0 - a.0).abs(),
+        DrawingKind::Cross => return (cursor.0 - a.0).abs().min((cursor.1 - a.1).abs()),
+        DrawingKind::Ray => return if cursor.0 >= a.0 - HANDLE_SLACK { (cursor.1 - a.1).abs() } else { f32::INFINITY },
+        DrawingKind::Text => return (cursor.0 - a.0).hypot(cursor.1 - a.1),
+        DrawingKind::Path | DrawingKind::Brush => return points.windows(2).map(|w| distance_to_segment(cursor, w[0], w[1])).fold(f32::INFINITY, f32::min),
         _ => {}
     }
     let Some(&b) = points.get(1) else { return f32::INFINITY };
     match kind {
-        "rect" | "measure" => distance_to_rect(cursor, a, b),
-        "fib" => {
+        DrawingKind::Rect | DrawingKind::Measure => distance_to_rect(cursor, a, b),
+        DrawingKind::Fib => {
             let left = a.0.min(b.0);
             if cursor.0 < left - HANDLE_SLACK {
                 return f32::INFINITY;
             }
             fib_levels.iter().map(|level| (cursor.1 - (a.1 + (b.1 - a.1) * *level as f32)).abs()).fold(f32::INFINITY, f32::min)
         }
-        "long" | "short" => match points.get(2) {
+        DrawingKind::Long | DrawingKind::Short => match points.get(2) {
             Some(&c) => distance_to_rect(cursor, a, b).min(distance_to_rect(cursor, a, c)),
             None => distance_to_rect(cursor, a, b),
         },
@@ -217,9 +221,9 @@ mod tests {
         assert_eq!(distance_to_segment((20.0, 0.0), (0.0, 0.0), (10.0, 0.0)), 10.0);
         assert_eq!(distance_to_rect((50.0, 25.0), (0.0, 0.0), (100.0, 50.0)), 25.0);
         assert_eq!(distance_to_rect((50.0, -4.0), (100.0, 50.0), (0.0, 0.0)), 4.0);
-        assert_eq!(distance_to_drawing("horizontal", &[(10.0, 100.0)], (9999.0, 103.0), &[]), 3.0);
-        assert_eq!(distance_to_drawing("trendline", &[], (0.0, 0.0), &[]), f32::INFINITY);
-        assert_eq!(distance_to_drawing("rect", &[(0.0, 0.0), (100.0, 0.0)], (50.0, 10.0), &[]), 10.0);
+        assert_eq!(distance_to_drawing(DrawingKind::Horizontal, &[(10.0, 100.0)], (9999.0, 103.0), &[]), 3.0);
+        assert_eq!(distance_to_drawing(DrawingKind::Trendline, &[], (0.0, 0.0), &[]), f32::INFINITY);
+        assert_eq!(distance_to_drawing(DrawingKind::Rect, &[(0.0, 0.0), (100.0, 0.0)], (50.0, 10.0), &[]), 10.0);
     }
 
     #[test]

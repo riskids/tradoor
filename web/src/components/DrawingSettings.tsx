@@ -31,7 +31,7 @@ export interface DrawingPatch {
 
 type Tab = 'inputs' | 'style' | 'text' | 'coordinates' | 'visibility';
 
-const LINE_KINDS = new Set(['trendline', 'ray', 'horizontal', 'path', 'brush']);
+const LINE_KINDS = new Set(['trendline', 'ray', 'horizontal', 'vertical', 'cross', 'path', 'brush']);
 
 export function DrawingSettings(props: {
   drawing: Drawing;
@@ -282,12 +282,13 @@ export function DrawingSettings(props: {
               <ExtendRow flag={flag} set={set} />
               <Check label="Middle point" checked={flag('middle')} onChange={(v) => set('middle', v)} />
             </Show>
-            <Show when={kind === 'trendline' || kind === 'ray' || kind === 'horizontal'}>
+            <Show when={kind === 'trendline' || kind === 'ray' || kind === 'horizontal' || kind === 'cross'}>
               <Check label="Price labels" checked={flag('priceLabels')} onChange={(v) => set('priceLabels', v)} />
             </Show>
             <Show when={kind === 'trendline'}>
               <div class="dsection">Info</div>
               <Check label="Stats — price change, percent and bars" checked={flag('stats')} onChange={(v) => set('stats', v)} />
+              <Check label="Angle" checked={flag('angle')} onChange={(v) => set('angle', v)} />
             </Show>
           </Show>
         </Show>

@@ -47,6 +47,7 @@ export const panelSteps = new Map<string, (step: number) => boolean>();
 export const TOOL_KEYS: Record<string, string> = {
   KeyT: 'trendline',
   KeyH: 'horizontal',
+  KeyX: 'cross',
   KeyJ: 'ray',
   KeyR: 'rect',
   KeyC: 'channel',
