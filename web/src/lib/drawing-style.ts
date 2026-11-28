@@ -9,8 +9,22 @@ import { readJson } from './prefs';
 
 export type Style = Record<string, string | number | boolean>;
 
+/** Tools that are another kind drawn a set way: a ray is a trendline carried on
+ *  past its second end. Saved as that kind, so its settings are that kind's. */
+export const PRESETS: Record<string, { kind: string; style: Style }> = {
+  trendray: { kind: 'trendline', style: { extendRight: true } },
+  extended: { kind: 'trendline', style: { extendLeft: true, extendRight: true } },
+  infoline: { kind: 'trendline', style: { stats: true, priceLabels: true } },
+  angle: { kind: 'trendline', style: { angle: true } },
+};
+
+/** The kind the engine draws for a tool. */
+export const engineKind = (tool: string): string => PRESETS[tool]?.kind ?? tool;
+
 /** What a fresh drawing of each kind looks like before anyone changes it. */
 export function factoryStyle(kind: string): Style {
+  const preset = PRESETS[kind];
+  if (preset) return { ...factoryStyle(preset.kind), ...preset.style };
   switch (kind) {
     case 'long':
     case 'short':
@@ -27,6 +41,8 @@ export function factoryStyle(kind: string): Style {
     case 'trendline':
     case 'ray':
     case 'horizontal':
+    case 'vertical':
+    case 'cross':
       return { color: '#2962ff', width: 1.5 };
     case 'text':
       return { textColor: '#2962ff', textSize: 14 };

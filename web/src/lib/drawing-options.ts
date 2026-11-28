@@ -18,6 +18,8 @@ export const KIND_NAMES: Record<string, string> = {
   brush: 'Brush',
   trendline: 'Trendline',
   horizontal: 'Horizontal line',
+  vertical: 'Vertical line',
+  cross: 'Crossline',
   ray: 'Horizontal ray',
   rect: 'Rectangle',
   fib: 'Fib retracement',

@@ -3883,6 +3883,29 @@ mod tests {
     }
 
     #[test]
+    fn a_trend_angle_reads_its_angle_on_screen() {
+        let mut c = chart();
+        let a = c.anchor_at(200.0, 300.0).unwrap();
+        let b = c.anchor_at(300.0, 200.0).unwrap();
+        let mut d = DrawingShape::new(Some(8), DrawingKind::Trendline, vec![a, b]);
+        d.style = DrawingStyle::from_pairs([("angle", "1")]);
+        c.set_drawings(vec![d]);
+        let texts: Vec<String> = c.render(0).texts.iter().map(|t| t.text.clone()).filter(|t| t.ends_with('°')).collect();
+        assert_eq!(texts, vec!["45.0°".to_string()]);
+    }
+
+    #[test]
+    fn a_vertical_line_and_a_crossline_are_caught_along_their_lines() {
+        let mut c = chart();
+        let p = c.anchor_at(300.0, 200.0).unwrap();
+        c.set_drawings(vec![DrawingShape::new(Some(1), DrawingKind::Vertical, vec![p]), DrawingShape::new(Some(2), DrawingKind::Cross, vec![c.anchor_at(500.0, 120.0).unwrap()])]);
+        assert_eq!(c.drawing_at(301.0, 420.0), Some(1), "anywhere down the vertical");
+        assert_eq!(c.drawing_at(100.0, 121.0), Some(2), "along the crossline's level");
+        assert_eq!(c.drawing_at(499.0, 400.0), Some(2), "and its time");
+        assert_eq!(c.drawing_at(400.0, 300.0), None);
+    }
+
+    #[test]
     fn an_alert_line_is_found_under_the_pointer_and_dragged_to_a_new_price() {
         let mut c = chart();
         let level = c.anchor_at(300.0, 200.0).unwrap().price;

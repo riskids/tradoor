@@ -9,7 +9,7 @@ import { call, debugClient, heardAt, holdChart, lastPrice, releaseChart, send } 
 import type { ChartEvent, ChartStatus, DrawingPoint, Legend, LiveStatus, MagnetMode, PointerKind, StudyMeta, TpoHover } from '../engine/protocol';
 import { api, catalog, errorText, type AlertStyle, type ChartKind, type Drawing, type Product } from '../lib/api';
 import type { DrawingPatch } from '../components/DrawingSettings';
-import { defaultStyle, visibleOn, type Style } from '../lib/drawing-style';
+import { defaultStyle, engineKind, visibleOn, type Style } from '../lib/drawing-style';
 import { before, DrawingHistory, type DrawingChange, type DrawingRef, type Step } from '../lib/drawing-history';
 import { captureChart } from '../lib/capture';
 import { demoRate, forceFlatRenderer } from '../lib/demo';
@@ -46,7 +46,13 @@ const TOOLS: { kind: string; icon: IconName; title: string }[] = [
   { kind: 'path', icon: 'path', title: 'Path — click each turn, then Enter or double-click to finish' },
   { kind: 'trendline', icon: 'trendline', title: 'Trendline — click the two ends; anchored to time and price' },
   { kind: 'horizontal', icon: 'horizontal', title: 'Horizontal level — one click, drawn edge to edge' },
-  { kind: 'ray', icon: 'ray', title: 'Ray — one click; the level starts where you put it' },
+  { kind: 'trendray', icon: 'trendray', title: 'Ray — click two points; the line runs on past the second' },
+  { kind: 'infoline', icon: 'infoline', title: 'Info line — click the two ends; shows the move, percent and bars' },
+  { kind: 'extended', icon: 'extended', title: 'Extended line — click two points; the line runs edge to edge' },
+  { kind: 'angle', icon: 'angle', title: 'Trend angle — click the two ends; shows its angle on screen' },
+  { kind: 'ray', icon: 'ray', title: 'Horizontal ray — one click; the level runs on from where you put it' },
+  { kind: 'vertical', icon: 'vertical', title: 'Vertical line — one click, drawn top to bottom' },
+  { kind: 'cross', icon: 'cross', title: 'Crossline — one click; a level and a time through the point' },
   { kind: 'rect', icon: 'rect', title: 'Zone — click opposite corners' },
   { kind: 'channel', icon: 'channel', title: 'Parallel channel — click the two ends of one line, then where the parallel line runs' },
   { kind: 'fib', icon: 'fib', title: 'Fib retracement — click the 100% end first, then the 0% end' },
@@ -65,7 +71,7 @@ const TOOL_BY_KIND = new Map(TOOLS.map((t) => [t.kind, t]));
  *  a group with several tools also opens a flyout listing them. */
 const GROUPS: { id: string; kinds: string[] }[] = [
   { id: 'cursor', kinds: [''] },
-  { id: 'lines', kinds: ['trendline', 'ray', 'horizontal', 'channel'] },
+  { id: 'lines', kinds: ['trendline', 'trendray', 'infoline', 'extended', 'angle', 'horizontal', 'ray', 'vertical', 'cross', 'channel'] },
   { id: 'fib', kinds: ['fib'] },
   { id: 'measure', kinds: ['long', 'short', 'measure', 'vrvp'] },
   { id: 'shapes', kinds: ['rect', 'brush', 'path'] },
@@ -116,7 +122,13 @@ const TOOL_STEPS: Record<string, string> = {
   brush: 'Brush: drag across the chart to draw',
   trendline: 'Trendline: click the first point, then the second · right-click or esc cancels',
   horizontal: 'Level: click the price',
-  ray: 'Ray: click where the level starts',
+  ray: 'Horizontal ray: click where the level starts',
+  vertical: 'Vertical line: click the time',
+  cross: 'Crossline: click the point',
+  trendray: 'Ray: click the first point, then one it runs through · right-click or esc cancels',
+  infoline: 'Info line: click the first point, then the second · right-click or esc cancels',
+  extended: 'Extended line: click two points on it · right-click or esc cancels',
+  angle: 'Trend angle: click the first point, then the second · right-click or esc cancels',
   rect: 'Zone: click one corner, then the opposite corner · right-click or esc cancels',
   fib: 'Fib: click the 100% end — where the move started — then the 0% end · right-click or esc cancels',
   text: 'Note: click where the note goes',
@@ -609,7 +621,7 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
   const tpoSet = (key: string, value: string) => patchPanel(id, { tpoSettings: withTpoValue(props.panel.tpoSettings, key, value) });
   const tpoOn = (key: string) => tpoValue(props.panel.tpoSettings, key) === '1';
   createEffect(() => send({ t: 'paneWeights', id: sid, value: props.panel.paneWeights }));
-  createEffect(() => send({ t: 'tool', id: sid, value: tool(), style: tool() ? defaultStyle(tool()) : {} }));
+  createEffect(() => send({ t: 'tool', id: sid, value: engineKind(tool()), style: tool() ? defaultStyle(tool()) : {} }));
   createEffect(() => send({ t: 'magnet', id: sid, value: magnet() }));
   createEffect(() => send({ t: 'selected', id: sid, value: selected() }));
   // Every timeframe shows the market's drawings, bar those hidden on this one,
@@ -740,7 +752,8 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
     }
   }
 
-  const createDrawing = (kind: string, points: DrawingPoint[], label?: string) => saveDrawing({ kind, points, label, style: defaultStyle(kind) });
+  /** `look`: the tool whose style it starts with — a preset's, when one drew it. */
+  const createDrawing = (kind: string, points: DrawingPoint[], label?: string, look = kind) => saveDrawing({ kind, points, label, style: defaultStyle(look) });
 
   /** `previous`: what the change replaces, when the list already shows it (a dialog's preview). */
   async function changeDrawing(drawingId: number, patch: DrawingChange, record = true, previous?: DrawingChange): Promise<void> {
@@ -853,7 +866,8 @@ export function ChartPanel(props: { panel: ChartPanelState; training?: TrainingC
       case 'drawingCreated': {
         const points = e.points;
         if (e.kind === 'text') setOverlay({ kind: 'note', save: (label) => void createDrawing('text', points, label) });
-        else void createDrawing(e.kind, points);
+        // A preset (a ray, an extended line) is saved as its kind with the preset's look.
+        else void createDrawing(e.kind, points, undefined, engineKind(tool()) === e.kind ? tool() : e.kind);
         break;
       }
       case 'selection':
