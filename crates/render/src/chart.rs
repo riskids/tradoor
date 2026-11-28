@@ -24,6 +24,8 @@ const TIME_AXIS_HEIGHT: f32 = 22.0;
 const MIN_AXIS_WIDTH: f32 = 56.0;
 const MIN_PANE_HEIGHT: f32 = 40.0;
 const SEPARATOR_GRAB: f32 = 4.0;
+/// A finger takes the footprint table's top edge from further off.
+const TABLE_EDGE_TOUCH: f32 = 12.0;
 /// A chart opens on this many bars: all of them at once makes every candle a
 /// hairline, which shows the trend and nothing about any setup.
 const DEFAULT_VISIBLE_BARS: f64 = 150.0;
@@ -90,6 +92,8 @@ pub enum Event {
     /// The view is near the oldest bar held.
     NeedHistory { before: i64 },
     PaneWeightsChanged(String),
+    /// The footprint's table was dragged: how tall a row of it now stands.
+    FootprintTableChanged(f32),
     /// Every pane follows the bars on screen again, or one stopped doing so.
     AutoScaleChanged(bool),
     /// A price alert's line was dragged to a new price.
@@ -170,9 +174,24 @@ pub struct Legend {
     pub alert: Option<(i64, f32)>,
     /// The flow mark under the pointer: which one, and where it sits.
     pub flow: Option<(usize, f32, f32)>,
-    /// The footprint cell under the pointer: which bar, which level, and the
-    /// middle of the row, for the page to hang its reading on.
-    pub footprint: Option<(usize, usize, f32, f32)>,
+    /// The footprint cell under the pointer, as the screen groups it, for the
+    /// page to hang its reading on.
+    pub footprint: Option<FootprintCell>,
+    /// The TPO profile under the pointer, for the page's menu on it.
+    pub tpo: Option<tpo::Hover>,
+}
+
+/// One footprint row under the pointer: its bar, the prices it covers, what
+/// was bought and sold there, and where it sits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FootprintCell {
+    pub time: i64,
+    pub price: f64,
+    pub step: f64,
+    pub buy: f64,
+    pub sell: f64,
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,6 +238,8 @@ enum Drag {
     PriceAxis { pane: usize, last_y: f32 },
     TimeAxis { last_x: f32 },
     Separator { upper: usize, last_y: f32 },
+    /// The footprint table's top edge, held `grab` below or above where it stands.
+    Table { grab: f32 },
     Brush { last: (f32, f32) },
     /// Moving a whole drawing, or one of its anchors.
     Shape { id: i64, last: (f32, f32), moved: bool },
@@ -253,9 +274,18 @@ struct Liquidation {
     at: i64,
 }
 
-/// Sessions a TPO chart opens on — the current one and the ones before it, to
-/// be read against one another.
-const TPO_OPENING_SESSIONS: usize = 8;
+/// The most profiles a TPO chart opens on — the current one and the ones before
+/// it, to be read against one another; fewer when square blocks would not fit.
+const TPO_OPENING_SESSIONS: usize = 14;
+/// The price pane's room above TPO profiles — clear of the legend, as a footprint
+/// keeps — and below them, as a share of its height.
+const TPO_MARGINS: (f64, f64) = (0.1, 0.05);
+/// Profiles shown before the price pane is laid out to fit them square.
+const TPO_FALLBACK_SESSIONS: usize = 8;
+/// The fewest profiles a TPO chart opens on: a week, as MMT holds a daily chart.
+const TPO_FEWEST_SESSIONS: usize = 6;
+/// The fewest columns of room right of the last profile.
+const TPO_RIGHT_COLUMNS: f64 = 6.0;
 /// A TPO chart zooms out much further than candles: a week of 15-minute
 /// brackets is 672 bars, and a profile is read by its shape, not its bars.
 const TPO_MIN_SPACING: f64 = 0.05;
@@ -286,18 +316,25 @@ pub struct Chart {
     liquidations: Vec<Liquidation>,
     /// Added to a time before it is written on the axis: the reader's time zone.
     utc_offset: i64,
-    /// `Some(split)` draws TPO profiles, split by it, in place of candles.
-    tpo: Option<ChartTimeframe>,
+    /// `Some(period)` draws TPO profiles, one a period, in place of candles.
+    tpo: Option<tpo::Period>,
     tpo_settings: tpo::Settings,
+    /// Profiles expanded, merged and split by hand.
+    tpo_edits: tpo::Edits,
     tpo_profiles: Option<tpo::Profiles>,
     /// Volume by price inside each bar, as the page fetched it, oldest first.
     footprint: Vec<footprint::Bar>,
-    /// The price one footprint row covers, the same for every bar on screen.
+    /// The finest price a footprint row covers, the same for every bar on screen.
     footprint_grid: f64,
+    /// Whether the rows are fitted to the zoom, grouping the grid as it needs;
+    /// otherwise each covers the grid as the reader set it.
+    footprint_fitted: bool,
     /// Whether those columns stand in for the candles.
     footprint_shown: bool,
     /// How a level reads, and what else a column carries.
     footprint_options: footprint::Options,
+    /// How tall a row of the footprint's table stands.
+    footprint_table_row: f32,
     precision: usize,
     precision_override: Option<usize>,
     engine: EngineSeries,
@@ -371,11 +408,14 @@ impl Chart {
             utc_offset: 0,
             tpo: None,
             tpo_settings: tpo::Settings::default(),
+            tpo_edits: tpo::Edits::default(),
             tpo_profiles: None,
             footprint: Vec::new(),
             footprint_grid: 0.0,
+            footprint_fitted: true,
             footprint_shown: false,
             footprint_options: footprint::Options::default(),
+            footprint_table_row: footprint::TABLE_ROW,
             precision: 2,
             precision_override: None,
             engine: engine_series(&[]),
@@ -481,6 +521,9 @@ impl Chart {
             self.live = None;
             self.placed.clear();
             self.draft = None;
+            // The old bars' footprint would stand between the new candles until
+            // the page's fetch for these lands.
+            self.footprint.clear();
             self.touch();
         }
     }
@@ -505,6 +548,8 @@ impl Chart {
         self.studies = self.compute_studies(&self.study_specs);
         if self.candles.is_empty() {
             self.view_ready = false;
+            // Another market on its way: the last one's footprint is not its.
+            self.footprint.clear();
         }
         self.touch();
     }
@@ -665,9 +710,9 @@ impl Chart {
     /// choice is kept across timeframes, but only takes effect while the session
     /// is longer than the bars: a 1D chart has no brackets to stack into a day.
     pub fn set_tpo(&mut self, raw: &str) {
-        let session = ChartTimeframe::parse(raw);
-        if session != self.tpo {
-            self.tpo = session;
+        let period = tpo::Period::parse(raw);
+        if period != self.tpo {
+            self.tpo = period;
             self.tpo_profiles = None;
             // Profiles and candles are read at different distances: open each afresh.
             self.view_ready = false;
@@ -675,12 +720,12 @@ impl Chart {
         }
     }
 
-    /// The split profiles are drawn by now, if any.
-    pub fn tpo(&self) -> Option<ChartTimeframe> {
-        self.tpo.filter(|s| *s > self.timeframe)
+    /// The period profiles are drawn by now, if any.
+    pub fn tpo(&self) -> Option<tpo::Period> {
+        self.tpo.filter(|p| p.fits(self.timeframe))
     }
 
-    /// TPO options as `key=value;key=value`, over Exocharts' defaults.
+    /// TPO options as `key=value;key=value`, over MMT's defaults.
     pub fn set_tpo_settings(&mut self, raw: &str) {
         let settings = tpo::Settings::parse(raw);
         if settings != self.tpo_settings {
@@ -704,6 +749,15 @@ impl Chart {
         }
         if styles != self.study_styles {
             self.study_styles = styles;
+            self.touch();
+        }
+    }
+
+    /// Profiles expanded, merged and split by hand, as `e=t,t;m=t;s=t`.
+    pub fn set_tpo_edits(&mut self, raw: &str) {
+        let edits = tpo::Edits::parse(raw);
+        if edits != self.tpo_edits {
+            self.tpo_edits = edits;
             self.touch();
         }
     }
@@ -740,24 +794,60 @@ impl Chart {
 
     /// Volume by price inside each bar: what the page fetched of what the
     /// server recorded, its minutes folded into the bars on screen.
-    pub fn set_footprint(&mut self, bars: Vec<footprint::Bar>, grid: f64) {
-        if self.footprint != bars || self.footprint_grid != grid {
+    pub fn set_footprint(&mut self, bars: Vec<footprint::Bar>, grid: f64, fitted: bool) {
+        if self.footprint != bars || self.footprint_grid != grid || self.footprint_fitted != fitted {
             self.footprint = bars;
             self.footprint_grid = grid;
+            self.footprint_fitted = fitted;
             self.touch();
         }
     }
 
-    /// Whether those columns are drawn at all: a chart style, as TPO is.
+    /// Whether footprint columns stand in for the candles now.
+    fn footprint_drawn(&self) -> bool {
+        self.tpo().is_none() && self.footprint_shown && !self.footprint.is_empty()
+    }
+
+    /// How tall the footprint's table stands on a plot `plot_h` tall: nothing with it off.
+    fn footprint_table(&self, plot_h: f32) -> f32 {
+        if self.footprint_options.stats { footprint::table_height(self.footprint_table_row, plot_h) } else { 0.0 }
+    }
+
+    /// Where the footprint's table starts, when one is drawn.
+    fn table_top(&self) -> Option<f32> {
+        let pane = self.panes.first()?;
+        (self.footprint_drawn() && self.footprint_options.stats).then(|| pane.plot.bottom() - self.footprint_table(pane.plot.h))
+    }
+
+    /// Whether `y` is on the top edge of the footprint's table, which drags.
+    fn on_table_edge(&self, y: f32) -> bool {
+        let grab = if self.touch_input { TABLE_EDGE_TOUCH } else { SEPARATOR_GRAB };
+        self.table_top().is_some_and(|top| (y - top).abs() <= grab)
+    }
+
+    /// The price one footprint row covers on this pane as it is zoomed: read at
+    /// the middle of the plot, so every bar and the pointer agree on it.
+    fn footprint_step(&self, pane: &PaneView) -> f64 {
+        let y = |p: f64| pane.scale.y(p) as f32;
+        let middle = pane.scale.price(f64::from(pane.plot.y + pane.plot.h / 2.0));
+        footprint::row_step(&y, middle, self.footprint_grid, self.footprint_fitted)
+    }
+
+    /// Whether those columns are drawn at all: a chart style, as TPO is. Turned
+    /// on, the bars widen to where a cell can carry its number, the newest held
+    /// where it is: a footprint zoomed out is stripes nobody can read.
     pub fn set_footprint_shown(&mut self, shown: bool) {
         if self.footprint_shown != shown {
             self.footprint_shown = shown;
+            if shown && self.view_ready && self.time.width > 0.0 && self.time.bar_spacing < footprint::READABLE_SPACING {
+                self.time.zoom_at(self.time.width, footprint::READABLE_SPACING / self.time.bar_spacing);
+            }
             self.touch();
         }
     }
 
     /// How a level reads — `split`, `delta`, `total`, `cluster`, `ladder` —
-    /// and what else a column carries, as `mode;va;stats;profile`.
+    /// and what else a column carries, as `mode;va;stats;profile;tableRow`.
     pub fn set_footprint_options(&mut self, raw: &str) {
         let mut parts = raw.split(';');
         let on = |part: Option<&str>| part != Some("0");
@@ -767,8 +857,10 @@ impl Chart {
             stats: on(parts.next()),
             profile: on(parts.next()),
         };
-        if self.footprint_options != options {
+        let row = parts.next().and_then(|v| v.parse().ok()).map_or(footprint::TABLE_ROW, footprint::table_row);
+        if self.footprint_options != options || self.footprint_table_row != row {
             self.footprint_options = options;
+            self.footprint_table_row = row;
             self.touch();
         }
     }
@@ -784,26 +876,28 @@ impl Chart {
     /// The footprint cell under (x, y): its bar, its level, and where the row
     /// sits — so a reader can put the pointer on a cell and be told what made
     /// it, which is the whole use of the numbers being too small to print.
-    pub fn footprint_at(&self, x: f32, y: f32) -> Option<(usize, usize, f32, f32)> {
-        if !self.footprint_shown || self.footprint.is_empty() {
+    pub fn footprint_at(&self, x: f32, y: f32) -> Option<FootprintCell> {
+        if !self.footprint_drawn() {
             return None;
         }
         let pane = self.panes.first()?;
         if x < 0.0 || x >= pane.plot.w || y < pane.plot.y || y > pane.plot.bottom() {
             return None;
         }
-        let half = (self.time.bar_spacing as f32 * 0.86).max(2.0) / 2.0;
+        if self.table_top().is_some_and(|top| y >= top) {
+            return None;
+        }
+        let step = self.footprint_step(pane);
         let price = pane.scale.price(f64::from(y));
-        for (index, bar) in self.footprint.iter().enumerate() {
+        for bar in &self.footprint {
             let Some(logical) = time_to_logical(&self.times, bar.time as f64) else { continue };
-            let bx = self.time.x(logical) as f32;
-            if (x - bx).abs() > half {
+            let s = footprint::slot(self.time.x(logical) as f32, self.time.bar_spacing as f32);
+            if x < s.left || x > s.left + s.width {
                 continue;
             }
-            let step = footprint::level_step(bar);
-            let level = bar.levels.iter().position(|(p, _, _)| price >= *p && price < *p + step)?;
-            let row_y = pane.scale.y(bar.levels[level].0 + step / 2.0) as f32;
-            return Some((index, level, bx, row_y));
+            let rows = footprint::grouped(bar, step);
+            let &(at, buy, sell) = rows.levels.iter().find(|(p, _, _)| price >= *p && price < *p + step)?;
+            return Some(FootprintCell { time: bar.time, price: at, step, buy, sell, x: s.cells + s.cells_width, y: pane.scale.y(at + step / 2.0) as f32 });
         }
         None
     }
@@ -1154,12 +1248,28 @@ impl Chart {
             let h = if i + 1 == groups.len() { avail - y } else { ((f64::from(avail) * self.weight(*g) / total) as f32).max(MIN_PANE_HEIGHT) };
             let state = self.pane_state[g];
             let mode = if *g == Group::Price && self.log_scale { ScaleMode::Log } else { ScaleMode::Normal };
-            panes.push(PaneView { group: *g, plot: Rect { x: 0.0, y, w: plot_w, h: h.max(1.0) }, scale: PriceScale::new(mode, f64::from(y), f64::from(h.max(1.0)), state.margins) });
+            let mut margins = state.margins;
+            if *g == Group::Price && self.tpo().is_some() {
+                // Profiles are read by their shape: every pixel of height is another row.
+                margins = (margins.0.min(TPO_MARGINS.0), margins.1.min(TPO_MARGINS.1));
+            }
+            if *g == Group::Price && self.footprint_drawn() {
+                // Every pixel of height is another row a bar can be read in.
+                margins.0 = margins.0.min(0.1);
+                // The footprint's table stands along the price pane's foot: the bars keep above it,
+                // with a row's room besides, since a bar's lowest row reaches down past its low.
+                if self.footprint_options.stats {
+                    margins.1 = margins.1.max(f64::from(self.footprint_table(h.max(1.0)) + 24.0) / f64::from(h.max(1.0)));
+                }
+            }
+            panes.push(PaneView { group: *g, plot: Rect { x: 0.0, y, w: plot_w, h: h.max(1.0) }, scale: PriceScale::new(mode, f64::from(y), f64::from(h.max(1.0)), margins) });
             y += h;
         }
 
         self.time.width = f64::from(plot_w);
         self.time.bars = self.total_bars();
+        let warp = self.tpo_profiles.as_ref().filter(|_| self.tpo().is_some()).map(|p| p.warp.clone()).unwrap_or_default();
+        self.time.set_warp(warp);
         let short = self.timeframe.source().interval.ms().is_some_and(|ms| ms * i64::from(self.timeframe.source().group) <= SHORT_BAR_MS);
         self.time.min_spacing = if self.tpo().is_some() {
             TPO_MIN_SPACING
@@ -1170,7 +1280,8 @@ impl Chart {
         };
         // Zoomed out past a floor raised since — a wider plot, a shorter timeframe — it holds.
         self.time.bar_spacing = self.time.bar_spacing.max(self.time.min_spacing);
-        if !self.view_ready && self.time.bars > 0 {
+        let opening = !self.view_ready && self.time.bars > 0;
+        if opening {
             let (bars, margin) = self.opening_bars();
             self.time.show_last(bars, margin);
             self.view_ready = true;
@@ -1186,18 +1297,66 @@ impl Chart {
             self.time.clamp();
         }
 
+        // A TPO chart opens on square blocks, as MMT's do: the fewest of the newest
+        // profiles — a week's worth or more — whose prices fit at a row as tall as
+        // a column is wide.
+        if let (true, Some(profiles)) = (opening && self.tpo().is_some(), self.tpo_profiles.as_ref()) {
+            let tall = panes[0].scale.height * (1.0 - panes[0].scale.margins.0 - panes[0].scale.margins.1);
+            let margin = self.opening_bars().1;
+            let (mut hi, mut lo, mut columns) = (f64::NEG_INFINITY, f64::INFINITY, margin);
+            let mut best: Option<(f64, usize)> = None;
+            for (n, p) in profiles.list.iter().rev().enumerate().take(TPO_OPENING_SESSIONS) {
+                hi = hi.max(p.session.high);
+                lo = lo.min(p.session.low);
+                columns += p.columns;
+                if n + 1 < TPO_FEWEST_SESSIONS.min(profiles.list.len()) {
+                    continue;
+                }
+                // How much taller than the pane the prices are, at square rows.
+                let spacing = self.time.width / columns;
+                let over = (hi - lo) / (tall * profiles.row_size / spacing);
+                if best.is_none_or(|(b, _)| over < b) {
+                    best = Some((over, p.first));
+                }
+                if over <= 1.0 {
+                    break;
+                }
+            }
+            if let Some((_, first)) = best {
+                self.time.show_last((self.time.bars - first) as f64, margin);
+            }
+        }
+        self.fit_panes(&mut panes);
+        self.panes = panes;
+    }
+
+    /// Each pane's price range: its own if set by hand, else what is on screen.
+    fn fit_panes(&self, panes: &mut [PaneView]) {
         let (i0, i1) = self.visible_indices(0.0);
-        for pane in &mut panes {
+        for pane in panes {
             let state = self.pane_state[&pane.group];
             match (state.auto, state.manual) {
                 (false, Some(range)) => pane.scale.range = range,
                 _ => {
-                    let (lo, hi) = self.pane_extent(pane.group, i0, i1);
+                    let (mut lo, mut hi) = self.pane_extent(pane.group, i0, i1);
+                    // TPO blocks stay square: the range is never so tight that a row
+                    // would stand taller than a column is wide.
+                    if let Some(span) = self.tpo_square_span(pane).filter(|span| hi - lo < *span) {
+                        let mid = (lo + hi) / 2.0;
+                        (lo, hi) = (mid - span / 2.0, mid + span / 2.0);
+                    }
                     pane.scale.fit(lo, hi);
                 }
             }
         }
-        self.panes = panes;
+    }
+
+    /// The price span that makes a TPO row as tall as a column is wide, on the price pane.
+    fn tpo_square_span(&self, pane: &PaneView) -> Option<f64> {
+        let profiles = self.tpo_profiles.as_ref().filter(|_| self.tpo().is_some())?;
+        let scale = &pane.scale;
+        let tall = scale.height * (1.0 - scale.margins.0 - scale.margins.1);
+        (pane.group == Group::Price && scale.mode == ScaleMode::Normal && self.time.bar_spacing > 0.0).then(|| tall * profiles.row_size / self.time.bar_spacing)
     }
 
     /// Bar indices overlapping the plot, widened by `extra` bars each side.
@@ -1237,10 +1396,13 @@ impl Chart {
                     take(b.low);
                 }
             }
-            if !self.hidden.contains("ema200") {
+            // As TPO profiles and footprint columns do not draw the averages, the range
+            // does not hold them either: an EMA 200 far off squeezed every row there was.
+            let averages = self.tpo().is_none() && !self.footprint_drawn();
+            if averages && !self.hidden.contains("ema200") {
                 series(&self.engine.ema200, &mut take);
             }
-            if !self.hidden.contains("ribbon") {
+            if averages && !self.hidden.contains("ribbon") {
                 series(&self.engine.ema12, &mut take);
                 series(&self.engine.ema25, &mut take);
             }
@@ -1268,12 +1430,13 @@ impl Chart {
         let mut frame = std::mem::take(&mut self.frame);
         frame.begin(self.width, self.height, self.dpr, self.theme.background);
         if self.width >= 40.0 && self.height >= 60.0 {
+            // Profiles first: the time scale is warped to their widths.
+            self.refresh_tpo();
             self.layout();
             if self.total_bars() == 0 {
                 let message = self.message.clone().unwrap_or_else(|| "Loading…".to_string());
                 frame.text(self.width / 2.0, self.height / 2.0, message, self.theme.text, Align::Center, Baseline::Middle, self.theme.font_px, None, None);
             } else {
-                self.refresh_tpo();
                 self.paint(&mut frame, now);
                 self.request_history_if_near_start();
                 // The market just left, held until the next one's candles land.
@@ -1350,23 +1513,22 @@ impl Chart {
     /// Bars the chart opens on, and the room right of the last: a screenful of
     /// candles, or the last few TPO sessions with space for the current one to grow.
     fn opening_bars(&self) -> (f64, f64) {
-        let n = self.total_bars();
-        let (Some(session), Some(last)) = (self.tpo(), n.checked_sub(1).and_then(|i| self.bar(i))) else { return (DEFAULT_VISIBLE_BARS, RIGHT_MARGIN_BARS) };
-        let current = session.align(last.time);
-        let mut start = current;
-        for _ in 1..TPO_OPENING_SESSIONS {
-            start = session.align(start - 1);
+        if self.footprint_shown && self.tpo().is_none() && self.time.width > 0.0 {
+            return ((self.time.width / footprint::READABLE_SPACING).max(3.0), RIGHT_MARGIN_BARS);
         }
-        let bars = (0..n).rev().take_while(|i| self.bar(*i).is_some_and(|b| b.time >= start)).count().max(1) as f64;
-        let bar_ms = self.timeframe.source().interval.ms().map_or(1.0, |ms| (ms * i64::from(self.timeframe.source().group)) as f64);
-        // Half a session beyond the last bar, as a TPO chart is usually held.
-        (bars, ((session.end(current) - current) as f64 / bar_ms * 0.5).max(RIGHT_MARGIN_BARS))
+        let n = self.total_bars();
+        let (Some(_), Some(profiles)) = (self.tpo(), self.tpo_profiles.as_ref()) else { return (DEFAULT_VISIBLE_BARS, RIGHT_MARGIN_BARS) };
+        let from = profiles.list.len().saturating_sub(TPO_FALLBACK_SESSIONS);
+        let first = profiles.list.get(from).map_or(0, |p| p.first);
+        // Room for the current profile to widen, and for its lines to be read.
+        let room = profiles.list.last().map_or(0.0, |p| p.widest as f64 * 0.5).max(TPO_RIGHT_COLUMNS);
+        ((n - first).max(1) as f64, room)
     }
 
     /// Profiles for every split in the loaded bars, rebuilt only when a bar or
     /// an option they are built from changes.
     fn refresh_tpo(&mut self) {
-        let Some(split) = self.tpo() else {
+        let Some(period) = self.tpo() else {
             self.tpo_profiles = None;
             return;
         };
@@ -1374,12 +1536,24 @@ impl Chart {
             .filter_map(|i| self.bar(i))
             .map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None, taker_buy_volume: None })
             .collect();
-        if self.tpo_profiles.as_ref().is_some_and(|p| p.fresh(split, &bars, &self.tpo_settings)) {
+        if self.tpo_profiles.as_ref().is_some_and(|p| p.fresh(period, &bars, &self.footprint, &self.tpo_settings, &self.tpo_edits)) {
             return;
         }
-        let tick = 10f64.powi(-(self.precision() as i32));
-        let bar_ms = self.timeframe.source().interval.ms().map_or(1.0, |ms| (ms * i64::from(self.timeframe.source().group)) as f64);
-        self.tpo_profiles = tpo::build(&bars, split, tick, bar_ms, &self.tpo_settings);
+        let tick = tpo::infer_tick(&bars, self.precision());
+        self.tpo_profiles = tpo::build(&bars, period, tick, &self.footprint, &self.tpo_settings, &self.tpo_edits);
+    }
+
+    /// The profile under the pointer, by position, while the pointer is over the price pane.
+    fn tpo_hovered(&self) -> Option<(usize, usize)> {
+        let (x, y) = self.crosshair?;
+        let pane = self.panes.first()?;
+        let profiles = self.tpo_profiles.as_ref().filter(|_| self.tpo().is_some())?;
+        if !(x >= 0.0 && x < pane.plot.w && y >= pane.plot.y && y <= pane.plot.bottom()) {
+            return None;
+        }
+        let bar = self.time.logical(f64::from(x)).round();
+        let bar = (bar >= 0.0).then_some(bar as usize)?;
+        profiles.at_bar(bar).map(|k| (k, bar))
     }
 
     /// The tradoor mark, bottom left of the price pane, drawn on the icon's own
@@ -1453,13 +1627,15 @@ impl Chart {
         // the mark over the volume — the bars sit where it does and would bury it
         f.clip(Some(price.plot));
         let tpo = self.tpo().is_some() && self.tpo_profiles.is_some();
-        let foot = !tpo && self.footprint_shown && !self.footprint.is_empty();
+        let foot = !tpo && self.footprint_drawn();
+        let mut tpo_tags = Vec::new();
         if let (true, Some(profiles)) = (tpo, self.tpo_profiles.as_ref()) {
             let bars: Vec<Candle> = (0..n).filter_map(|i| self.bar(i)).map(|b| Candle { open_time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, quote_volume: None, taker_buy_volume: None }).collect();
-            let x = |l: f64| self.time.x(l) as f32;
+            let edge_x = |e: f64| self.time.edge_x(e) as f32;
             let y = |p: f64| price.scale.y(p) as f32;
-            let view = tpo::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, precision: self.precision(), x: &x, y: &y, bars: &bars };
-            tpo::paint(f, &view, profiles, &self.tpo_settings);
+            let hovered = self.tpo_hovered().filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).map(|(k, _)| k);
+            let view = tpo::View { plot: price.plot, column: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, edge_x: &edge_x, y: &y, bars: &bars, hovered };
+            tpo_tags = tpo::paint(f, &view, profiles, &self.tpo_settings);
         }
         if !tpo && !foot && !self.hidden.contains("ribbon") {
             for run in &self.ribbon {
@@ -1528,14 +1704,33 @@ impl Chart {
             }
         }
         if foot {
+            // A thin candle at the left of every slot, the cells beside it: a
+            // bar the server never recorded still says where it went.
+            for i in i0..=i1 {
+                let Some(b) = self.bar(i) else { continue };
+                let s = footprint::slot(self.time.x(i as f64) as f32, self.time.bar_spacing as f32);
+                if s.candle_width <= 0.0 {
+                    continue;
+                }
+                let sc = &price.scale;
+                let color = if b.close >= b.open { t.bull } else { t.bear };
+                let (yh, yl, yo, yc) = (sc.y(b.high) as f32, sc.y(b.low) as f32, sc.y(b.open) as f32, sc.y(b.close) as f32);
+                let x = f.snap(s.candle);
+                f.vline(x, yh, yl, 1.0, color);
+                f.crisp_rect(x - s.candle_width / 2.0, yo.min(yc), s.candle_width, (yo - yc).abs().max(1.0), color);
+            }
             let x = |l: f64| self.time.x(l) as f32;
             let y = |p: f64| price.scale.y(p) as f32;
-            let view = footprint::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, char_width: self.char_width, theme: t, x: &x, y: &y };
+            let view = footprint::View { plot: price.plot, bar_spacing: self.time.bar_spacing as f32, table: self.footprint_table(price.plot.h), char_width: self.char_width, theme: t, x: &x, y: &y };
             // Each column at the place its own time sits, so a minute the
             // server never recorded leaves a gap rather than shifting the rest.
             let placed: Vec<(f64, &footprint::Bar)> =
                 self.footprint.iter().filter_map(|bar| time_to_logical(&self.times, bar.time as f64).map(|l| (l, bar))).collect();
-            footprint::paint(f, &view, &placed, self.footprint_options, self.footprint_grid);
+            footprint::paint(f, &view, &placed, self.footprint_options, self.footprint_step(&price));
+            // Its top edge lights up when it is about to be taken, or is held.
+            if let Some(top) = self.table_top().filter(|_| matches!(self.drag, Drag::Table { .. }) || self.crosshair.is_some_and(|(x, y)| x < price.plot.w && self.tool.is_none() && self.on_table_edge(y))) {
+                f.hline(price.plot.x, price.plot.right(), top, 1.0, t.text.with_alpha(170));
+            }
         }
         if !tpo && !foot && !self.hidden.contains("ema200") {
             self.paint_series(f, &price.scale, &self.engine.ema200, i0, i1, t.ema200, 1.0, LineStyle::Solid);
@@ -1656,7 +1851,7 @@ impl Chart {
         }
 
         // ---- crosshair
-        let hover = self.crosshair.filter(|(x, y)| *x >= 0.0 && *x < plot_w && *y >= 0.0 && *y < avail && !matches!(self.drag, Drag::Separator { .. }));
+        let hover = self.crosshair.filter(|(x, y)| *x >= 0.0 && *x < plot_w && *y >= 0.0 && *y < avail && !matches!(self.drag, Drag::Separator { .. } | Drag::Table { .. }));
         let hover_slot = hover.and_then(|(x, _)| self.slot_at(x));
         f.clip(None);
         if let (Some((_, cy)), Some(slot)) = (hover, hover_slot) {
@@ -1691,6 +1886,9 @@ impl Chart {
         if self.timeframe.source().interval.ms().is_some() || self.timeframe.source().interval == Interval::Mo1 {
             let close_at = self.timeframe.end(self.timeframe.align(now));
             badges.push(Badge { pane: 0, y: last_y + badge_h, text: format_countdown(close_at - now), bg: t.countdown_background, fg: t.countdown_text });
+        }
+        for tag in &tpo_tags {
+            badges.push(Badge { pane: 0, y: price.scale.y(tag.price) as f32, text: format_price(tag.price, Some(p)), bg: tag.color.with_alpha(255), fg: tag.color.with_alpha(255).contrast_text() });
         }
         for a in &self.alerts {
             let bg = a.color.unwrap_or(t.alert).with_alpha(255);
@@ -1781,7 +1979,25 @@ impl Chart {
             (self.time.x(slot as f64) as f32, text, w)
         });
         let mut candidates = Vec::new();
-        for i in i0..=i1 {
+        // Under profiles, each one's day where it starts.
+        if let (true, Some(profiles), Some(period)) = (tpo, self.tpo_profiles.as_ref(), self.tpo()) {
+            let gap = self.char_width * 11.0;
+            let mut last_right = f32::NEG_INFINITY;
+            for profile in &profiles.list {
+                let x = self.time.edge_x(profile.first as f64) as f32;
+                let text = tpo::axis_label(period, self.shown_time(profile.start));
+                let w = text.len() as f32 * self.char_width;
+                if x < -w || x > plot_w || x < last_right + self.char_width * 2.0 {
+                    continue;
+                }
+                if cross_label.as_ref().is_some_and(|(cx, _, cw)| (x + w / 2.0 - cx).abs() < (w + cw) / 2.0) {
+                    continue;
+                }
+                last_right = x + w.max(gap);
+                f.text(x, avail + TIME_AXIS_HEIGHT / 2.0, text, t.text, Align::Left, Baseline::Middle, font, None, Some(time_axis));
+            }
+        }
+        for i in (i0..=i1).filter(|_| !tpo) {
             let Some(b) = self.bar(i) else { continue };
             let x = self.time.x(i as f64) as f32;
             if (0.0..plot_w).contains(&x) {
@@ -2007,6 +2223,10 @@ impl Chart {
             alert: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.alert_handle_at(x, y)),
             flow: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.flow_at(x, y)),
             footprint: self.crosshair.filter(|_| self.tool.is_none() && matches!(self.drag, Drag::None)).and_then(|(x, y)| self.footprint_at(x, y)),
+            tpo: self
+                .tpo_hovered()
+                .filter(|_| self.tool.is_none())
+                .and_then(|(k, bar)| tpo::hover(self.tpo_profiles.as_ref()?, &self.tpo_settings, k, self.bar(bar).map(|b| (bar, b.time)))),
         }
     }
 
@@ -2223,9 +2443,10 @@ impl Chart {
             Drag::Held => Cursor::Crosshair,
             Drag::PriceAxis { .. } => Cursor::NsResize,
             Drag::TimeAxis { .. } => Cursor::ColResize,
-            Drag::Separator { .. } => Cursor::RowResize,
+            Drag::Separator { .. } | Drag::Table { .. } => Cursor::RowResize,
             _ => match self.zone(x, y) {
                 Zone::Separator(_) => Cursor::RowResize,
+                Zone::Plot(0) if self.on_table_edge(y) => Cursor::RowResize,
                 Zone::PriceAxis(0) if self.alert_badge_at(x, y).is_some_and(|id| self.selected_alert != Some(id)) && !self.touch_input => Cursor::Pointer,
                 Zone::PriceAxis(_) => Cursor::NsResize,
                 Zone::TimeAxis => Cursor::ColResize,
@@ -2287,6 +2508,12 @@ impl Chart {
                 self.drag = Drag::Separator { upper, last_y: y };
             }
             // The crosshair, set above, is all a held finger moves.
+            Drag::Table { grab } => {
+                if let Some(pane) = self.panes.first() {
+                    self.footprint_table_row = footprint::table_row_for(pane.plot.bottom() - (y - grab), pane.plot.h);
+                    self.touch();
+                }
+            }
             Drag::Held => {}
             Drag::Alert { id, .. } => {
                 if let Some(pane) = self.panes.first() {
@@ -2349,6 +2576,7 @@ impl Chart {
         let grab_alerts = !self.touch_input;
         self.drag = match self.zone(x, y) {
             Zone::Separator(i) if free => Drag::Separator { upper: i, last_y: y },
+            Zone::Plot(0) if free && self.on_table_edge(y) => Drag::Table { grab: y - self.table_top().unwrap_or(y) },
             // An alert's badge on the axis picks the alert, and moves it once
             // picked; the bare axis scales.
             Zone::PriceAxis(0) if free => match self.alert_badge_at(x, y).filter(|_| grab_alerts) {
@@ -2470,6 +2698,7 @@ impl Chart {
                 }
             }
             Drag::Separator { .. } => self.events.push(Event::PaneWeightsChanged(self.pane_weights())),
+            Drag::Table { .. } => self.events.push(Event::FootprintTableChanged(self.footprint_table_row)),
             _ => {}
         }
         self.cursor = self.cursor_for(x, y);
@@ -2958,12 +3187,13 @@ mod tests {
         assert!(painted(c.render(1_800_000_000_000), candle) > 0, "candles first");
 
         c.set_tpo("1d");
-        assert_eq!(c.tpo(), Some(ChartTimeframe::D1));
+        assert_eq!(c.tpo(), Some(tpo::Period::Day));
         let frame = c.render(1_800_000_000_000);
         assert_eq!(painted(frame, candle), 0, "no candle bodies under the profiles");
-        assert!(painted(frame, t.tpo_poc) > 0, "the point of control is the orange row");
+        assert!(painted(frame, t.tpo_poc) > 0, "the point of control's line carries on to the next profile, in the theme's colour");
         let labels: Vec<&str> = frame.texts.iter().map(|t| t.text.as_str()).collect();
-        assert!(labels.iter().any(|l| l.starts_with("VAH ")) && labels.iter().any(|l| l.starts_with("VAL ")), "value area high and low are labelled");
+        assert!(["POC", "VAH", "VAL"].iter().all(|name| labels.contains(name)), "levels are named as MMT names them: {labels:?}");
+        assert!(labels.iter().any(|l| l.len() == 9 && l.contains('/')), "each profile's day under it, like Fri 13/02");
 
         let cache = c.tpo_profiles.as_ref().expect("profiles were built");
         // 500 hourly bars are 21 days: the first and last partial, all of them drawn.
@@ -2971,6 +3201,11 @@ mod tests {
         for profile in &cache.list {
             let brackets: usize = profile.session.rows.iter().map(|r| r.periods.len()).max().unwrap_or(0);
             assert!(brackets <= 24, "a day holds at most 24 hourly brackets in a row, not {brackets}");
+        }
+        // Side by side: each profile starts where the one before it ends its columns.
+        for pair in cache.list.windows(2) {
+            let (a, b) = (c.time.edge_x(pair[0].first as f64), c.time.edge_x(pair[1].first as f64));
+            assert!((b - a - pair[0].columns * c.time.bar_spacing).abs() < 1e-6, "{a} then {b}");
         }
 
         c.set_tpo("");
@@ -2985,13 +3220,58 @@ mod tests {
         c.set_tpo("nonsense");
         assert_eq!(c.tpo(), None);
         c.set_tpo("1w");
-        assert_eq!(c.tpo(), Some(ChartTimeframe::W1));
+        assert_eq!(c.tpo(), Some(tpo::Period::Week));
 
         // Kept across a timeframe it cannot be drawn on, and back when it can.
         c.set_timeframe(ChartTimeframe::W1);
         assert_eq!(c.tpo(), None, "a weekly chart has no brackets to stack into a week");
         c.set_timeframe(ChartTimeframe::H1);
-        assert_eq!(c.tpo(), Some(ChartTimeframe::W1));
+        assert_eq!(c.tpo(), Some(tpo::Period::Week));
+
+        // A session is hours long: hourly brackets at the longest.
+        c.set_tpo("london");
+        assert_eq!(c.tpo(), Some(tpo::Period::London));
+        c.set_timeframe(ChartTimeframe::H4);
+        assert_eq!(c.tpo(), None);
+    }
+
+    #[test]
+    fn a_tpo_chart_opens_on_square_blocks_and_keeps_them_while_auto_scaled() {
+        let mut c = chart();
+        c.set_tpo("1d");
+        c.render(1_800_000_000_000);
+        let row = c.tpo_profiles.as_ref().unwrap().row_size;
+        let scale = c.panes[0].scale;
+        let tall = (scale.y(1_000.0) - scale.y(1_000.0 + row)).abs();
+        let wide = c.time.bar_spacing;
+        assert!(tall <= wide * 1.001, "a row no taller than a column is wide: {tall} × {wide}");
+        // Zoomed in, the range opens up with it, so rows grow as columns do.
+        c.wheel(c.time.width as f32 / 2.0, 100.0, 0.0, -120.0);
+        c.render(1_800_000_000_000);
+        let scale = c.panes[0].scale;
+        assert!((scale.y(1_000.0) - scale.y(1_000.0 + row)).abs() <= c.time.bar_spacing * 1.001);
+    }
+
+    #[test]
+    fn hovering_a_profile_names_it_for_the_page_and_boxes_it() {
+        let mut c = chart();
+        c.set_tpo("1d");
+        c.render(1_800_000_000_000);
+        let profiles = c.tpo_profiles.as_ref().unwrap();
+        let k = profiles.list.len() - 2;
+        let (first, start) = (profiles.list[k].first, profiles.list[k].start);
+        let x = c.time.edge_x(first as f64) as f32 + 2.0;
+        let y = c.panes[0].scale.y(profiles.list[k].session.poc) as f32;
+        c.pointer_move(x, y);
+        let hover = c.legend().tpo.expect("a profile under the pointer");
+        assert_eq!((hover.start, hover.expanded, hover.merged), (start, false, false));
+        assert!(hover.prev.is_some() && hover.next.is_some());
+        assert_eq!(hover.prices[0].0, "POC");
+
+        c.set_tpo_edits(&format!("e={start}"));
+        c.render(1_800_000_000_000);
+        let profile = &c.tpo_profiles.as_ref().unwrap().list[k];
+        assert!(profile.expanded && profile.columns >= profile.session.periods.len() as f64, "expanded, a column a bracket");
     }
 
     #[test]
@@ -3007,6 +3287,15 @@ mod tests {
         // The live hour opens a bracket in the current day, or starts the next day.
         assert!(session.periods.len() == before + 1 || session.periods.len() == 1, "the forming bracket is part of the profile");
         assert_eq!(*session.periods.last().unwrap(), last.open_time + HOUR);
+    }
+
+    #[test]
+    fn a_new_timeframe_drops_the_old_bars_footprint() {
+        let mut c = chart();
+        let bar = footprint::Bar { time: c.candles()[10].open_time, levels: vec![(100.0, 1.0, 2.0)], ..footprint::Bar::default() };
+        c.set_footprint(vec![bar], 1.0, true);
+        c.set_timeframe(ChartTimeframe::H4);
+        assert!(c.footprint.is_empty(), "an hour's columns would stand between four-hour candles");
     }
 
     #[test]
@@ -3776,22 +4065,46 @@ mod tests {
     #[test]
     fn the_footprint_cell_under_the_pointer_is_the_one_the_price_falls_in() {
         let mut c = chart();
-        let bar = c.candles()[400];
-        let levels = vec![(bar.low, 1.0, 2.0), (bar.low + 0.5, 3.0, 0.5), (bar.low + 1.0, 0.25, 4.0)];
-        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels }], 0.5);
+        // A recent bar: turned on, the footprint widens the bars and keeps the newest in view.
+        let i = c.candles().len() - 3;
+        let bar = c.candles()[i];
+        // Levels on the grid, as the server records them: whole multiples of a row.
+        let base = (bar.low / 0.5).floor() * 0.5;
+        let levels = vec![(base, 1.0, 2.0), (base + 0.5, 3.0, 0.5), (base + 1.0, 0.25, 4.0)];
+        // Rows as the reader set them, half a dollar each, so the test knows where they are.
+        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels, ..Default::default() }], 0.5, false);
+        c.set_footprint_options("delta;1;0;1");
         c.render(1_800_000_000_000);
         assert_eq!(c.footprint_at(10.0, 10.0), None, "nothing is drawn until the style is chosen");
 
         c.set_footprint_shown(true);
         c.render(1_800_000_000_000);
+        assert!(c.time.bar_spacing >= footprint::READABLE_SPACING - 0.01, "the bars widened to where a cell can be read: {}", c.time.bar_spacing);
         let pane = c.panes[0];
-        let x = c.time.x(400.0) as f32;
+        let x = c.time.x(i as f64) as f32;
         // The middle of the lowest row, and the middle of the one above it.
-        let low = pane.scale.y(c.candles()[400].low + 0.25) as f32;
-        let up = pane.scale.y(c.candles()[400].low + 0.75) as f32;
-        assert_eq!(c.footprint_at(x, low).map(|(b, l, _, _)| (b, l)), Some((0, 0)));
-        assert_eq!(c.footprint_at(x, up).map(|(b, l, _, _)| (b, l)), Some((0, 1)));
-        assert_eq!(c.footprint_at(x + 400.0, low), None, "and a bar away from it is not it");
+        let low = pane.scale.y(base + 0.25) as f32;
+        let up = pane.scale.y(base + 0.75) as f32;
+        assert_eq!(c.footprint_at(x, low).map(|cell| (cell.buy, cell.sell)), Some((1.0, 2.0)));
+        assert_eq!(c.footprint_at(x, up).map(|cell| (cell.buy, cell.sell)), Some((3.0, 0.5)));
+        assert_eq!(c.footprint_at(x - 400.0, low), None, "and a bar away from it is not it");
+    }
+
+    #[test]
+    fn fitted_footprint_rows_join_as_the_chart_zooms_out() {
+        let mut c = chart();
+        let bar = c.candles()[400];
+        let levels: Vec<(f64, f64, f64)> = (0..40).map(|i| (bar.low + f64::from(i) * 0.01, 1.0, 1.0)).collect();
+        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels, ..Default::default() }], 0.01, true);
+        c.set_footprint_shown(true);
+        c.render(1_800_000_000_000);
+        let pane = c.panes[0];
+        let step = c.footprint_step(&pane);
+        let middle = pane.scale.price(f64::from(pane.plot.y + pane.plot.h / 2.0));
+        let tall = (pane.scale.y(middle) - pane.scale.y(middle + step)).abs();
+        assert!(tall >= 16.0, "a row stands tall enough for its number: {tall}px for {step}");
+        let finer = step / 2.0;
+        assert!(step <= 0.01 || (pane.scale.y(middle) - pane.scale.y(middle + finer)).abs() < 16.0 * 1.01, "and is the finest round grouping that does");
     }
 
     #[test]
@@ -3893,5 +4206,54 @@ mod tests {
         c.render(1_800_000_000_000);
         assert!((c.panes[1].plot.h - (before + 40.0)).abs() < 2.0);
         assert!(c.take_events().iter().any(|e| matches!(e, Event::PaneWeightsChanged(_))));
+    }
+
+    #[test]
+    fn the_footprint_table_is_as_tall_as_its_top_edge_is_dragged() {
+        let mut c = chart();
+        let i = c.candles().len() - 2;
+        let bar = c.candles()[i];
+        c.set_footprint(vec![footprint::Bar { time: bar.open_time, levels: vec![(bar.low, 1.0, 2.0)], ..Default::default() }], 0.5, false);
+        c.set_footprint_options("delta;1;1;1");
+        c.set_footprint_shown(true);
+        c.render(1_800_000_000_000);
+        let pane = c.panes[0];
+        let top = c.table_top().expect("a table");
+        assert_eq!(pane.plot.bottom() - top, footprint::table_height(footprint::TABLE_ROW, pane.plot.h));
+
+        c.pointer_down(300.0, top, 0);
+        c.pointer_move(300.0, top - 30.0);
+        c.pointer_up(300.0, top - 30.0);
+        c.render(1_800_000_000_000);
+        let taller = c.table_top().expect("a table");
+        assert!((top - taller - 30.0).abs() < 0.01, "the edge follows the pointer: {top} to {taller}");
+        let row = c.take_events().iter().find_map(|e| if let Event::FootprintTableChanged(row) = e { Some(*row) } else { None }).expect("the page is told");
+        assert_eq!(row, c.footprint_table_row);
+
+        // What the page saved comes back as it left, and a chart saved before this has the default.
+        c.set_footprint_options(&format!("delta;1;1;1;{row}"));
+        assert_eq!(c.footprint_table_row, row);
+        c.set_footprint_options("delta;1;1;1");
+        assert_eq!(c.footprint_table_row, footprint::TABLE_ROW);
+
+        // It stops at half the plot, however far it is pulled.
+        c.render(1_800_000_000_000);
+        let top = c.table_top().expect("a table");
+        c.pointer_down(300.0, top, 0);
+        c.pointer_move(300.0, pane.plot.y);
+        c.pointer_up(300.0, pane.plot.y);
+        c.render(1_800_000_000_000);
+        assert!(pane.plot.bottom() - c.table_top().expect("a table") <= pane.plot.h * 0.5 + 0.01);
+
+        // A press well clear of the edge is a press on the chart.
+        let top = c.table_top().expect("a table");
+        c.pointer_down(300.0, top - 60.0, 0);
+        assert!(!matches!(c.drag, Drag::Table { .. }));
+        c.pointer_up(300.0, top - 60.0);
+
+        // With a drawing tool armed the edge is chart too: the tool's next point goes there.
+        c.set_tool(Some(DrawingKind::Horizontal));
+        c.pointer_down(300.0, top, 0);
+        assert!(!matches!(c.drag, Drag::Table { .. }));
     }
 }

@@ -172,7 +172,7 @@ impl ChartEngine {
         self.chart.set_hidden(raw);
     }
 
-    /// TPO options as `key=value;key=value`, named as Exocharts names them.
+    /// TPO options as `key=value;key=value`, named as MMT names them.
     pub fn set_tpo_settings(&mut self, raw: &str) {
         self.chart.set_tpo_settings(raw);
     }
@@ -182,12 +182,18 @@ impl ChartEngine {
         self.chart.set_study_styles(raw);
     }
 
+    /// Profiles expanded, merged and split by hand, as `e=t,t;m=t;s=t`.
+    pub fn set_tpo_edits(&mut self, raw: &str) {
+        self.chart.set_tpo_edits(raw);
+    }
+
     /// The reader's time zone, as minutes east of UTC.
     pub fn set_utc_offset(&mut self, minutes: i32) {
         self.chart.set_utc_offset(minutes);
     }
 
-    /// `1d`, `1w` or `1M` draws that session as TPO profiles; empty, candles.
+    /// `1d`, `1w`, `1M`, `asia`, `london`, `ny`, `intraday` or `custom` draws
+    /// TPO profiles of that period; empty, candles.
     pub fn set_tpo(&mut self, raw: &str) {
         self.chart.set_tpo(raw);
     }
@@ -401,6 +407,10 @@ impl ChartEngine {
                         set(&o, "type", "paneWeights");
                         set(&o, "value", value);
                     }
+                    Event::FootprintTableChanged(row) => {
+                        set(&o, "type", "footprintTable");
+                        set(&o, "value", f64::from(row));
+                    }
                     Event::AlertMoved { id, price } => {
                         set(&o, "type", "alertMoved");
                         set(&o, "id", id as f64);
@@ -460,15 +470,40 @@ impl ChartEngine {
             None => set(&o, "flow", JsValue::NULL),
         }
         match l.footprint {
-            Some((bar, level, x, y)) => {
+            Some(cell) => {
                 let c = obj();
-                set(&c, "bar", bar as f64);
-                set(&c, "level", level as f64);
-                set(&c, "x", f64::from(x));
-                set(&c, "y", f64::from(y));
+                set(&c, "time", cell.time as f64);
+                set(&c, "price", cell.price);
+                set(&c, "step", cell.step);
+                set(&c, "buy", cell.buy);
+                set(&c, "sell", cell.sell);
+                set(&c, "x", f64::from(cell.x));
+                set(&c, "y", f64::from(cell.y));
                 set(&o, "footprint", c);
             }
             None => set(&o, "footprint", JsValue::NULL),
+        }
+        match l.tpo {
+            Some(h) => {
+                let t = obj();
+                set(&t, "start", h.start as f64);
+                set(&t, "end", h.end as f64);
+                set(&t, "prev", opt(h.prev.map(|v| v as f64)));
+                set(&t, "next", opt(h.next.map(|v| v as f64)));
+                set(&t, "expanded", h.expanded);
+                set(&t, "merged", h.merged);
+                set(&t, "splitAt", opt(h.split_at.map(|v| v as f64)));
+                let prices = Array::new();
+                for (name, price) in h.prices {
+                    let pair = Array::new();
+                    pair.push(&JsValue::from(name));
+                    pair.push(&JsValue::from(price));
+                    prices.push(&pair);
+                }
+                set(&t, "prices", prices);
+                set(&o, "tpo", t);
+            }
+            None => set(&o, "tpo", JsValue::NULL),
         }
         o.into()
     }
@@ -490,15 +525,18 @@ impl ChartEngine {
     }
 
     /// Volume by price, flat: for each bar, its time, how many levels follow,
-    /// then each level as price, coins bought, coins sold. One array rather
-    /// than a tree of objects, because a busy screen is fifty thousand numbers.
-    pub fn set_footprint(&mut self, flat: &[f64], grid: f64) {
+    /// the most and least its delta reached, then each level as price, coins
+    /// bought, coins sold. One array rather than a tree of objects, because a
+    /// busy screen is fifty thousand numbers. `fitted`: the rows join as the
+    /// chart zooms out, rather than each covering `grid` as the reader set it.
+    pub fn set_footprint(&mut self, flat: &[f64], grid: f64, fitted: bool) {
         let mut bars = Vec::new();
         let mut i = 0usize;
-        while i + 1 < flat.len() {
+        while i + 3 < flat.len() {
             let time = flat[i] as i64;
             let count = flat[i + 1].max(0.0) as usize;
-            i += 2;
+            let (max_delta, min_delta) = (finite_or_zero(flat[i + 2]), finite_or_zero(flat[i + 3]));
+            i += 4;
             let end = (i + count * 3).min(flat.len());
             let levels = flat[i..end]
                 .chunks_exact(3)
@@ -507,17 +545,17 @@ impl ChartEngine {
                 .collect::<Vec<_>>();
             i = end;
             if !levels.is_empty() {
-                bars.push(tradoor_render::footprint::Bar { time, levels });
+                bars.push(tradoor_render::footprint::Bar { time, levels, max_delta, min_delta });
             }
         }
-        self.chart.set_footprint(bars, grid);
+        self.chart.set_footprint(bars, grid, fitted);
     }
 
     pub fn set_footprint_shown(&mut self, shown: bool) {
         self.chart.set_footprint_shown(shown);
     }
 
-    /// `mode;valueArea;stats;profile` — the mode by name, the rest 0 or 1.
+    /// `mode;valueArea;stats;profile;tableRow` — the mode by name, then 0 or 1, then a row's height.
     pub fn set_footprint_options(&mut self, raw: &str) {
         self.chart.set_footprint_options(raw);
     }
@@ -779,6 +817,11 @@ pub fn indicator_values(
 /// Alert levels off the flat array the page sends: `[id, price, rgba, dash,
 /// width, …]` — `rgba` as `0xrrggbbaa`, 0 for the theme's colour; `dash` 1
 /// solid, 2 dashed, 3 dotted, 0 for dashed; `width` 0 for a pixel.
+/// A figure off the wire, or nothing where it is not a number.
+fn finite_or_zero(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
 fn alert_lines(flat: &[f64]) -> Vec<tradoor_render::chart::AlertLine> {
     flat.chunks_exact(5)
         .filter(|c| c[1].is_finite() && c[1] > 0.0)

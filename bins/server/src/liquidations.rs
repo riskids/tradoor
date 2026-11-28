@@ -730,6 +730,43 @@ async fn totals(client: &tokio_postgres::Client, ticker: &str, now: i64) -> Resu
     Ok(rows.iter().map(|r| WindowTotal { window: r.get(0), long_usd: r.get(1), short_usd: r.get(2), longs: r.get(3), shorts: r.get(4) }).collect())
 }
 
+/// One reading of a ticker's stats as sent: plain, and compressed once for
+/// everyone rather than by the compression layer for each.
+#[derive(Clone)]
+pub(crate) struct Answer {
+    pub(crate) at: Instant,
+    plain: axum::body::Bytes,
+    gzip: axum::body::Bytes,
+    brotli: axum::body::Bytes,
+}
+
+impl Answer {
+    pub(crate) fn new(plain: Vec<u8>) -> Self {
+        use std::io::Write;
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+        let gzip = gz.write_all(&plain).and_then(|()| gz.finish()).unwrap_or_default();
+        let mut brotli = Vec::new();
+        let params = brotli::enc::BrotliEncoderParams { quality: 6, lgwin: 22, ..Default::default() };
+        let _ = brotli::BrotliCompress(&mut std::io::Cursor::new(&plain), &mut brotli, &params);
+        Self { at: Instant::now(), plain: plain.into(), gzip: gzip.into(), brotli: brotli.into() }
+    }
+
+    /// The best the asker takes: brotli, gzip, or as it is.
+    pub(crate) fn send(self, headers: &axum::http::HeaderMap) -> axum::response::Response {
+        use axum::http::header;
+        use axum::response::IntoResponse;
+        let takes = |e: &str| headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|x| x.trim().starts_with(e)));
+        let kept = [(header::CONTENT_TYPE, "application/json"), (header::VARY, "accept-encoding")];
+        if takes("br") && !self.brotli.is_empty() {
+            (kept, [(header::CONTENT_ENCODING, "br")], self.brotli).into_response()
+        } else if takes("gzip") && !self.gzip.is_empty() {
+            (kept, [(header::CONTENT_ENCODING, "gzip")], self.gzip).into_response()
+        } else {
+            (kept, self.plain).into_response()
+        }
+    }
+}
+
 /// `GET /api/liquidations/{ticker}`: the 1H, 4H, 12H and 24H totals across
 /// every exchange, how each exchange's connection is, and the latest hits.
 pub async fn stats(State(state): State<AppState>, Path(ticker): Path<String>) -> ApiResult<Json<Value>> {

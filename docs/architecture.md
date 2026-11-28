@@ -489,14 +489,16 @@ bytes where a row per level would be forty rows and ten times the bytes.
 The chart folds those minutes into its own bars and groups them onto ONE price
 grid for the screen, since a row that does not line up with its neighbour has
 nothing to compare against. A level reads as Split (the two sides apart),
-Delta, Total, Cluster (a bar as long as the level was busy) or Ladder (the
-delta added up from the foot of the bar); the candle stays underneath. A side
+Delta, Total, Cluster (a bar as long as the level was busy, with its volume
+where it fits) or Ladder (the delta added up from the foot of the bar); the
+candle stays underneath. Every number is written in black or white, whichever
+stands out more from the colour its cell actually shows. A side
 that took two and a half times what the other side took one level away — the
 diagonal, since a buyer lifts the offer where a seller hits the bid beneath it
 — is ringed, and three in a row are marked as one run. Each bar outlines the
 rows holding seventy per cent of its volume and rings the one that traded most;
 its volume and delta are written under it, and every visible bar summed by
-price is drawn against the right edge.
+price is drawn against the right edge, each row with what traded there.
 
 Price alerts are rows per browser id, like drawings (`/api/alerts`); the
 browser watches the prices, each alert market's daily candle stream, and fires
@@ -554,24 +556,33 @@ one market at a glance: its day against the 14-day ATR, returns from 7 days to
 a year, RSI, StochRSI and EMA trend on 15m to 1W, the prior day's, week's and
 month's highs and lows with the prior session's value area, sorted around
 price, and for a perpetual the server's open interest and liquidation totals. TPO is a way of
-drawing a chart rather than a panel of its own: each candle of the chosen
-timeframe becomes a profile. The chart loads a smaller timeframe for its
-brackets — 1m under 15m, 5m under 4h, 30m under a day or a week — and the engine
-stacks them into their candle's profile, pushed left against the candle's open
-on the same time and price axes, so drawings, zoom and the crosshair work on it
-as on candles. Rows are one grid across profiles; blocks share one width, the
-widest that keeps the fullest profile inside its own candle, so profiles
-compare by size.
+drawing a chart rather than a panel of its own: the chart's candles are the
+brackets and the period says how long a profile runs — a UTC day, week or
+month, Asia, London or New York (on their own summer time), Intraday (the three
+of them each day) or sessions of one's own. As MMT lays them out, profiles stand
+side by side, each as wide as its widest row and a few columns apart, not at
+their time: the time scale is warped, a run of bars squeezed into the columns
+its profile takes, so drawings, the crosshair and studies still sit on their
+own times. A chart opens on square blocks — the fewest of the newest profiles,
+a week or more, whose prices fit at a row as tall as a column is wide — and
+while it is auto-scaled the price range never closes in past that square.
+Rows are one grid across profiles, in ticks of the price step read off the
+prices themselves; on auto, about forty to a median day.
 
-TPO options follow Exocharts' settings — Main, Colors, POC & VA, IB & Stats,
-Single prints & Tails — under its names and defaults. A chart stores only what
-differs from the defaults, and the engine is sent them as `key=value;…`.
-Everything a profile is read by is built once per bar change in
-`tradoor-render::tpo`: rows, volume per row (a bracket's volume spread over the
-rows it spans), value area by time or volume, initial balance over the first N
-brackets, single prints and tails as runs of one-bracket rows, and for each level
-the first later bar that traded back to it, which is where a naked level ends.
-Delta colouring and overlays are not offered: candles carry no taker side.
+TPO options follow MMT's tabs — General, Session, Point of Control, Value Area,
+Single Prints, Poor High Low, Initial Balance, Volume Profile — under its names.
+A chart stores only what differs from the defaults, and the engine is sent them
+as `key=value;…`; colours left at their default follow the theme, which gives a
+value area, an outside-value and a point-of-control colour, the rest worked out
+from those and the candles'. Everything a profile is read by is built once per
+bar change in `tradoor-render::tpo`: rows, volume per row (a bracket's volume
+spread over the rows it spans), buying and selling per row where the footprint
+recorded every bracket, the value area, initial balance, single prints inside
+the profile, poor highs and lows (an extreme two brackets share), and for each
+level the first later bar that traded back to it, which is where a naked level
+ends. A profile can be expanded to a column a bracket at its time, merged with a
+neighbour, or split — back into its sessions, or at a bracket — from its own
+menu; the chart keeps those edits by profile start, as `e=…;m=…;s=…`.
 
 Times are written in the reader's zone — their device's by default, or UTC or any
 named zone from Settings, kept with the workspace. The page resolves the zone to

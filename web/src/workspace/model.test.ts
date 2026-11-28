@@ -55,3 +55,18 @@ Deno.test('a link group shares the market only: a layout saved while it held the
   assertEquals(read.links.green, { market: d.links.green.market });
   assertEquals(validate(JSON.parse(JSON.stringify(read)))!.panels[a!.id]!.timeframe, '4h');
 });
+
+import type { ChartPanelState } from './model.ts';
+
+Deno.test('the height dragged on a footprint table comes back with the layout, if it is one the chart can draw', () => {
+  const row = (saved: unknown) => {
+    const doc = defaultWorkspace();
+    const chart = Object.values(doc.panels).find((p) => p.type === 'chart')!;
+    const back = validate(JSON.parse(JSON.stringify({ ...doc, panels: { ...doc.panels, [chart.id]: { ...chart, footprintStatsRow: saved } } })))!;
+    return (back.panels[chart.id] as ChartPanelState).footprintStatsRow;
+  };
+  assertEquals(row(34), 34);
+  assertEquals(row(undefined), undefined, 'a chart saved before there was one has none');
+  assertEquals(row(500), undefined);
+  assertEquals(row('tall'), undefined);
+});

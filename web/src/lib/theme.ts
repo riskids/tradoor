@@ -32,6 +32,9 @@ export const CHART_THEME: readonly ChartThemeKey[] = [
   { name: 'ribbonFast', label: 'Ribbon, bullish', value: '#2962ff', group: 'studies' },
   { name: 'ribbonSlow', label: 'Ribbon, bearish', value: '#ef5350', group: 'studies' },
   { name: 'ema200', label: 'EMA 200', value: '#ff9800', group: 'studies' },
+  { name: 'tpo', label: 'TPO value area', value: '#5f9f3a', group: 'studies' },
+  { name: 'tpoOutside', label: 'TPO outside value', value: '#858c86', group: 'studies' },
+  { name: 'tpoPoc', label: 'TPO point of control', value: '#e6f5d3', group: 'studies' },
   { name: 'crosshair', label: 'Crosshair', value: '#9598a1', group: 'canvas' },
   { name: 'labelBackground', label: 'Axis labels', value: '#ffffff', group: 'scales' },
   { name: 'labelText', label: 'Axis label text', value: '#131722', group: 'scales' },
@@ -53,7 +56,6 @@ export const CHART_EXTRAS: readonly Omit<ThemeKey, 'label'>[] = [
   { name: 'volumeAlpha', value: '96' },
   { name: 'countdownBackground', value: '#2a2f2a' },
   { name: 'countdownText', value: '#d7ded7' },
-  { name: 'tpo', value: '#d9dcd9' },
 ];
 
 /** Whole chart themes: the overrides each lays over the defaults. Applying one clears every other chart key. */
@@ -82,6 +84,8 @@ export const THEME_PRESETS: readonly { label: string; theme: Readonly<Record<str
       countdownBackground: '#5d606b',
       countdownText: '#d6d7da',
       tpo: '#5d606b',
+      tpoOutside: '#b2b5be',
+      tpoPoc: '#131722',
     },
   },
 ];
